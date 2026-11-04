@@ -4,6 +4,7 @@ import logging
 from . import bitbucket
 from .config import Settings
 from .models import Identity, SessionCreate, Visibility
+from .review import PullRequestReviews
 from .sessions import SessionService
 
 log = logging.getLogger(__name__)
@@ -16,6 +17,7 @@ class PullRequestSessions:
         self.settings = settings
         self.service = service
         self.store = service.store
+        self.reviews = PullRequestReviews(settings, service)
 
     def owner(self) -> Identity:
         sub = self.settings.bitbucket_session_owner
@@ -44,7 +46,6 @@ class PullRequestSessions:
             name=f"{pr['repo']} #{pr['id']}: {pr['title']}"[:100],
             description=f"{pr['author']}: {pr['source_branch']} → {pr['destination_branch']}\n{pr['url']}",
             visibility=Visibility.PUBLIC,
-            env={"OPENCODE_CONFIG_CONTENT": json.dumps(self.settings.review_opencode_config)},
             labels={
                 "source": "bitbucket",
                 "repository": full_name,
@@ -54,6 +55,8 @@ class PullRequestSessions:
             },
         )
         record = self.service.create(self.owner(), data)
+        config = self.reviews.opencode_config(record) if self.settings.review_enabled else self.settings.review_opencode_config
+        self.store.update(record.id, {"env": {"OPENCODE_CONFIG_CONTENT": json.dumps(config)}})
         self.store.record_pull_request(pr["repo"], pr["id"], record.id)
         log.info("Created session %s for %s#%s", record.id, full_name, pr["id"])
         return record.id

@@ -4,18 +4,21 @@ from pathlib import Path
 from . import bitbucket, opencode
 from .config import Settings
 from .models import SessionRecord
+from .review_post import PostPlan, ReviewSubmission, plan_post
 from .sessions import REVIEW_CONVERSATION_LABEL, SessionService
 from .storage import session_subpath
 
 REVIEW_DIR = ".review"
+REVIEW_TOOL = "submit_review"
+MCP_SERVER_NAME = "review"
 
 DEFAULT_GUIDELINES = """# Review guidelines
 
 Review the change for correctness, security, and consistency with the conventions already used in the
 repository. Report only issues you verified in the diff or the repository.
 
-Output: a short summary, a verdict (APPROVE, APPROVE WITH NITS, REQUEST CHANGES), and findings with
-severity (blocker, major, minor, nit), file path, problem and concrete fix.
+Findings need a severity (blocker, major, minor, question, nit), the file path and line, the problem and the
+concrete fix.
 """
 
 PROMPT = """You are reviewing Bitbucket pull request #{id} "{title}" in {workspace}/{repo}.
@@ -27,7 +30,19 @@ PROMPT = """You are reviewing Bitbucket pull request #{id} "{title}" in {workspa
 Read the guidelines first, then the diff. Inspect the repository for the context the guidelines ask for
 (for example existing bindings or linting data). Do not modify, create or delete any files.
 
-Reply with the complete review in the output format the guidelines require."""
+When you are done, submit the review by calling the `{tool}` tool exactly once:
+- `verdict`: APPROVE, APPROVE_WITH_NITS or REQUEST_CHANGES
+- `summary`: what the PR changes, in one or two sentences
+- `findings`: one entry per issue, with `path` and `line` pointing at the line in the NEW version of the file
+  that the diff touches (leave both empty for PR-level remarks)
+- `checked`: the checklist items you verified as OK
+
+The tool validates the review; if it reports an error, fix the arguments and call it again. Do not post
+anything to Bitbucket yourself: the workflow decides what gets posted. After the tool accepts the review,
+reply with a short confirmation."""
+
+NUDGE = """You have not submitted the review yet. Call the `{tool}` tool now with your verdict, summary, findings
+and checked items."""
 
 
 class ReviewQuotaExceeded(Exception):
@@ -75,12 +90,12 @@ class PullRequestReviews:
             f"```json\n{json.dumps(pr, indent=2)}\n```\n"
         )
 
-    def start(self, session_id: str, pr: dict) -> str:
+    def start(self, session_id: str, pr: dict, model: str) -> str:
         record = self._record(session_id)
         base_url = self.service.backend.service_url(session_id)
-        conversation = opencode.create_session(base_url, record.secret_key, f"Code review PR #{pr['id']}")
-        prompt = PROMPT.format(review_dir=REVIEW_DIR, **pr)
-        opencode.prompt_async(base_url, record.secret_key, conversation, self.settings.review_model, prompt)
+        conversation = opencode.create_session(base_url, record.secret_key, f"Code review PR #{pr['id']} ({model})")
+        prompt = PROMPT.format(review_dir=REVIEW_DIR, tool=REVIEW_TOOL, **pr)
+        opencode.prompt_async(base_url, record.secret_key, conversation, model, prompt)
         self.service.store.update(session_id, {"labels": {**record.labels, REVIEW_CONVERSATION_LABEL: conversation}})
         return conversation
 
@@ -89,12 +104,69 @@ class PullRequestReviews:
         base_url = self.service.backend.service_url(session_id)
         status = opencode.session_statuses(base_url, record.secret_key).get(conversation)
         if status and status.get("action", {}).get("reason") == "free_tier_limit":
-            raise ReviewQuotaExceeded(f"{self.settings.review_model}: {status.get('message')}")
+            raise ReviewQuotaExceeded(status.get("message") or "Model quota exhausted")
         if status and status.get("type") != "idle":
             return None
         return opencode.last_reply(base_url, record.secret_key, conversation)
 
-    def save(self, session_id: str, review: str) -> None:
-        (self._workspace(session_id) / REVIEW_DIR / "review.md").write_text(review + "\n")
+    def nudge(self, session_id: str, conversation: str, model: str) -> None:
         record = self._record(session_id)
-        self.service.store.update(session_id, {"labels": {**record.labels, "review": "done"}})
+        base_url = self.service.backend.service_url(session_id)
+        opencode.prompt_async(base_url, record.secret_key, conversation, model, NUDGE.format(tool=REVIEW_TOOL))
+
+    def abort(self, session_id: str, conversation: str) -> None:
+        record = self._record(session_id)
+        opencode.abort(self.service.backend.service_url(session_id), record.secret_key, conversation)
+
+    def opencode_config(self, record: SessionRecord) -> dict:
+        return {
+            **self.settings.review_opencode_config,
+            "mcp": {
+                MCP_SERVER_NAME: {
+                    "type": "remote",
+                    "url": f"{self.settings.manager_service_url}/mcp/",
+                    "headers": {"X-Review-Session": record.id, "X-Review-Key": record.secret_key},
+                    "oauth": False,
+                    "enabled": True,
+                }
+            },
+        }
+
+    def save(self, session_id: str, review: ReviewSubmission) -> None:
+        review_dir = self._workspace(session_id) / REVIEW_DIR
+        (review_dir / "review.json").write_text(review.model_dump_json(indent=2))
+        record = self._record(session_id)
+        self.service.store.update(session_id, {"labels": {**record.labels, "review": review.verdict.lower()}})
+
+    def plan(self, session_id: str, review: ReviewSubmission) -> PostPlan:
+        review_dir = self._workspace(session_id) / REVIEW_DIR
+        diff = (review_dir / "pr.diff").read_text()
+        record = self._record(session_id)
+        plan = plan_post(
+            review,
+            diff,
+            self.settings.review_post_mode,
+            self.settings.review_max_comments,
+            self.service.entry_url(record),
+        )
+        (review_dir / "post-plan.json").write_text(plan.model_dump_json(indent=2))
+        return plan
+
+    def post(self, session_id: str, pr: dict, plan: PostPlan) -> int:
+        posted = self.service.store.posted_review_comments(session_id)
+        count = 0
+        for comment in plan.comments:
+            if comment.key in posted:
+                continue
+            comment_id = bitbucket.post_comment(
+                self.settings.bitbucket_token,
+                pr["workspace"],
+                pr["repo"],
+                pr["id"],
+                comment.content,
+                comment.path,
+                comment.line,
+            )
+            self.service.store.record_review_comment(session_id, comment.key, comment_id)
+            count += 1
+        return count

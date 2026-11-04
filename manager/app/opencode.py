@@ -55,6 +55,11 @@ def prompt_async(base_url: str, password: str, session_id: str, model: str, text
         http.post(f"/session/{session_id}/prompt_async", json=body).raise_for_status()
 
 
+def abort(base_url: str, password: str, session_id: str) -> None:
+    with _client(base_url, password) as http:
+        http.post(f"/session/{session_id}/abort").raise_for_status()
+
+
 def last_reply(base_url: str, password: str, session_id: str) -> str | None:
     with _client(base_url, password) as http:
         response = http.get(f"/session/{session_id}/message")

@@ -58,11 +58,25 @@ How it runs:
    - creates the session;
    - shallow-clones the PR branch into the workspace (the token is removed from the git remote afterwards);
    - writes `.review/pr.diff`, `.review/pull-request.md` and `.review/guidelines.md` (the repo's baseline, or a generic default);
-   - starts the container and prompts OpenCode with `MANAGER_REVIEW_MODEL` (default: a free OpenCode model);
+   - starts the container and prompts OpenCode with the first model in `MANAGER_REVIEW_MODELS` (JSON list; falls back to the next one when a model is out of quota);
    - waits until the review finishes, then saves it to `.review/review.md` and labels the session `review=done`.
 
    Opening the session shows the review conversation.
 4. If a free model's quota is exhausted, the workflow fails fast with a clear error instead of waiting.
+
+**The agent never posts to Bitbucket.** It hands the review to the workflow by calling the `submit_review` tool. This is an MCP server mounted at `/mcp` on the manager. Each review session is configured to use it, with a per-session key in a header.
+
+The tool validates a typed review (verdict, summary, findings with severity/path/line/title/body/suggestion, and checked items) and signals the PR's workflow. If the agent finishes without calling it, the workflow prompts it again, up to twice. The workflow then:
+
+- saves `.review/review.json`;
+- plans the comments: one summary comment plus inline comments, highest severity first, at most `MANAGER_REVIEW_MAX_COMMENTS` (default 30) in total. A finding only becomes inline when its line is part of the PR diff; everything else is folded into the summary;
+- writes the plan to `.review/post-plan.json`;
+- posts it, depending on `MANAGER_REVIEW_POST_MODE`:
+  - `off`: nothing;
+  - `dry-run` (default): the plan only;
+  - `auto`: posts the comments.
+
+Every posted comment is recorded, so a retried post never duplicates comments.
 
 The first poll records the PRs that are already open as a baseline and creates no sessions for them; set `MANAGER_BITBUCKET_BACKFILL=true` to change that. Seen PRs are stored in the manager database, so a PR gets at most one session, even across restarts. To trigger a poll right away:
 

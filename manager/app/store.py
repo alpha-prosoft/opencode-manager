@@ -23,6 +23,13 @@ CREATE TABLE IF NOT EXISTS sessions (
     stopped_at TEXT
 );
 CREATE INDEX IF NOT EXISTS sessions_sub ON sessions (sub);
+CREATE TABLE IF NOT EXISTS review_comments (
+    session_id TEXT NOT NULL,
+    key TEXT NOT NULL,
+    comment_id INTEGER NOT NULL,
+    posted_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, key)
+);
 CREATE TABLE IF NOT EXISTS pull_requests (
     repo TEXT NOT NULL,
     pr_id INTEGER NOT NULL,
@@ -122,6 +129,18 @@ class SessionStore:
                 "SELECT session_id FROM pull_requests WHERE repo = ? AND pr_id = ?", (repo, pr_id)
             ).fetchone()
         return row["session_id"] if row else None
+
+    def posted_review_comments(self, session_id: str) -> set[str]:
+        with self._connect() as db:
+            rows = db.execute("SELECT key FROM review_comments WHERE session_id = ?", (session_id,)).fetchall()
+        return {row["key"] for row in rows}
+
+    def record_review_comment(self, session_id: str, key: str, comment_id: int) -> None:
+        with self._connect() as db:
+            db.execute(
+                "INSERT INTO review_comments (session_id, key, comment_id, posted_at) VALUES (?, ?, ?, ?)",
+                (session_id, key, comment_id, datetime.now(UTC).isoformat()),
+            )
 
     def record_pull_request(self, repo: str, pr_id: int, session_id: str | None) -> None:
         with self._connect() as db:

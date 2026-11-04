@@ -56,8 +56,15 @@ class Settings(BaseSettings):
     bitbucket_backfill: bool = False
 
     review_enabled: bool = True
-    review_model: str = "opencode/deepseek-v4.1-flash-free"
+    review_models: list[str] = [
+        "opencode/deepseek-v4.1-flash-free",
+        "opencode/glm-5.3-flash-free",
+        "opencode/mimo-v2.6-flash-free",
+        "opencode/nemotron-3.5-lightning-free",
+    ]
     review_guidelines_dir: str = "/config/review"
+    review_post_mode: Literal["off", "dry-run", "auto"] = "dry-run"
+    review_max_comments: int = 30
     review_opencode_config: dict = {
         "permission": {
             "read": "allow",

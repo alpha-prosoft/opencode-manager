@@ -6,8 +6,10 @@ from temporalio.exceptions import ApplicationError
 from ..config import Settings
 from ..pull_requests import PullRequestSessions
 from ..review import PullRequestReviews, ReviewQuotaExceeded
+from ..review_post import PostPlan, ReviewSubmission
 
 REVIEW_POLL_SECONDS = 10
+QUOTA_EXCEEDED = "ReviewQuotaExceeded"
 from ..sessions import SessionService
 
 
@@ -81,13 +83,17 @@ class ReviewActivities:
     def review_enabled(self) -> bool:
         return self.settings.review_enabled
 
+    @activity.defn(name="review_models")
+    def review_models(self) -> list[str]:
+        return self.settings.review_models
+
     @activity.defn(name="prepare_review_workspace")
     def prepare_review_workspace(self, session_id: str, pull_request: dict) -> None:
         self.reviews.prepare_workspace(session_id, pull_request)
 
     @activity.defn(name="start_review")
-    def start_review(self, session_id: str, pull_request: dict) -> str:
-        return self.reviews.start(session_id, pull_request)
+    def start_review(self, session_id: str, pull_request: dict, model: str) -> str:
+        return self.reviews.start(session_id, pull_request, model)
 
     @activity.defn(name="wait_for_review")
     def wait_for_review(self, session_id: str, conversation: str) -> str:
@@ -95,21 +101,42 @@ class ReviewActivities:
             try:
                 review = self.reviews.result(session_id, conversation)
             except ReviewQuotaExceeded as error:
-                raise ApplicationError(str(error), non_retryable=True) from error
+                raise ApplicationError(str(error), type=QUOTA_EXCEEDED, non_retryable=True) from error
             if review is not None:
                 return review
             activity.heartbeat()
             time.sleep(REVIEW_POLL_SECONDS)
 
+    @activity.defn(name="nudge_review")
+    def nudge_review(self, session_id: str, conversation: str, model: str) -> None:
+        self.reviews.nudge(session_id, conversation, model)
+
+    @activity.defn(name="abort_review")
+    def abort_review(self, session_id: str, conversation: str) -> None:
+        self.reviews.abort(session_id, conversation)
+
     @activity.defn(name="save_review")
-    def save_review(self, session_id: str, review: str) -> None:
-        self.reviews.save(session_id, review)
+    def save_review(self, session_id: str, review: dict) -> None:
+        self.reviews.save(session_id, ReviewSubmission.model_validate(review))
+
+    @activity.defn(name="plan_review_post")
+    def plan_review_post(self, session_id: str, review: dict) -> dict:
+        return self.reviews.plan(session_id, ReviewSubmission.model_validate(review)).model_dump()
+
+    @activity.defn(name="post_review")
+    def post_review(self, session_id: str, pull_request: dict, plan: dict) -> int:
+        return self.reviews.post(session_id, pull_request, PostPlan.model_validate(plan))
 
     def all(self) -> list:
         return [
             self.review_enabled,
+            self.review_models,
+            self.abort_review,
             self.prepare_review_workspace,
             self.start_review,
             self.wait_for_review,
+            self.nudge_review,
             self.save_review,
+            self.plan_review_post,
+            self.post_review,
         ]

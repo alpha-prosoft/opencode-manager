@@ -53,6 +53,18 @@ def pull_request_diff(token: str, workspace: str, repo: str, pr_id: int) -> str:
     return response.text
 
 
+def post_comment(
+    token: str, workspace: str, repo: str, pr_id: int, content: str, path: str | None = None, line: int | None = None
+) -> int:
+    body: dict = {"content": {"raw": content}}
+    if path and line:
+        body["inline"] = {"path": path, "to": line}
+    url = f"{API}/repositories/{workspace}/{repo}/pullrequests/{pr_id}/comments"
+    response = httpx.post(url, headers={"Authorization": f"Bearer {token}"}, json=body, timeout=30)
+    response.raise_for_status()
+    return response.json()["id"]
+
+
 def clone_branch(token: str, workspace: str, repo: str, branch: str, target: Path) -> None:
     public_url = f"https://bitbucket.org/{workspace}/{repo}.git"
     authenticated_url = public_url.replace("https://", f"https://{GIT_USER}:{token}@")

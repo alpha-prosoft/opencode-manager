@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse
 
 from .backends import create_backend
 from .config import get_settings
+from . import review_tool
 from .routes import api, gateway
 from .routing import FORWARD_AUTH_PATH, create_route_provider
 from .sessions import SessionService
@@ -47,6 +48,8 @@ async def lifespan(app: FastAPI):
     engine = TemporalEngine(settings, service, await connect(settings))
     app.state.sessions = service
     app.state.engine = engine
+    review_tool.state.service = service
+    review_tool.state.engine = engine
 
     tasks = [
         asyncio.create_task(prepare_backend(service), name="prepare-backend"),
@@ -54,7 +57,8 @@ async def lifespan(app: FastAPI):
     ]
     for task in tasks:
         task.add_done_callback(log_failure)
-    yield
+    async with review_tool.server.session_manager.run():
+        yield
     await engine.shutdown()
     for task in tasks:
         task.cancel()
@@ -80,6 +84,7 @@ async def wake_session_hosts(request: Request, call_next):
 
 app.include_router(api.router)
 app.include_router(gateway.router)
+app.mount("/mcp", review_tool.mcp_app())
 
 
 @app.get("/healthz", include_in_schema=False)

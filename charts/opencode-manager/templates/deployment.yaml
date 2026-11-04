@@ -97,8 +97,14 @@ spec:
             {{- end }}
             - name: MANAGER_REVIEW_ENABLED
               value: {{ .Values.review.enabled | quote }}
-            - name: MANAGER_REVIEW_MODEL
-              value: {{ .Values.review.model | quote }}
+            - name: MANAGER_REVIEW_MODELS
+              value: {{ .Values.review.models | toJson | quote }}
+            - name: MANAGER_REVIEW_POST_MODE
+              value: {{ .Values.review.postMode | quote }}
+            - name: MANAGER_REVIEW_MAX_COMMENTS
+              value: {{ .Values.review.maxComments | quote }}
+            - name: MANAGER_MANAGER_SERVICE_URL
+              value: http://{{ include "opencode-manager.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:8000
             - name: MANAGER_AUTH_MODE
               value: {{ .Values.auth.mode | quote }}
             - name: MANAGER_AUTH_TTL_HOURS
