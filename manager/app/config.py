@@ -47,11 +47,22 @@ class Settings(BaseSettings):
     reap_interval_seconds: int = 300
     idle_grace_seconds: int = 300
 
+    bitbucket_token: str | None = None
+    bitbucket_workspace: str | None = None
+    bitbucket_repos: list[str] = []
+    bitbucket_poll_minutes: int = 15
+    bitbucket_session_owner: str = "bitbucket"
+    bitbucket_backfill: bool = False
+
     docker_network: str = "opencode-net"
     docker_shared_volume: str = "opencode-shared"
 
     k8s_namespace: str = "default"
     k8s_shared_pvc: str = "opencode-shared"
+
+    @property
+    def bitbucket_enabled(self) -> bool:
+        return bool(self.bitbucket_token and self.bitbucket_workspace and self.bitbucket_repos)
 
     def session_host(self, session_id: str) -> str:
         return f"{session_id}.{self.domain}"

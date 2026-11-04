@@ -1,4 +1,4 @@
-export type SessionStatus = "running" | "starting" | "stopped" | "missing" | "error";
+export type SessionStatus = "running" | "starting" | "stopped" | "error";
 export type Visibility = "private" | "public";
 
 export interface SessionAttributes {

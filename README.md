@@ -32,6 +32,24 @@ SESSION_ENV='{"ANTHROPIC_API_KEY":"..."}' docker compose up -d
 
 Without keys, sessions can still use OpenCode's free models.
 
+### Bitbucket pull request sessions
+
+The manager polls Bitbucket Cloud for new pull requests and creates a **public** session for each one. The session is owned by the `bitbucket` user and labelled with the repository, PR number, branch and commit. To enable it, give compose the token:
+
+```bash
+docker compose --env-file /path/to/secrets.env up -d   # provides BITBUCKET_TOKEN
+```
+
+`--env-file` only feeds variable substitution, so only `BITBUCKET_TOKEN` reaches the manager. The defaults are workspace `example-workspace`, repos `["example-repo"]`, and a 15-minute interval. Override them with `BITBUCKET_WORKSPACE`, `BITBUCKET_REPOS` (JSON list) and `BITBUCKET_POLL_MINUTES`.
+
+The Temporal schedule `poll-bitbucket` runs `PollPullRequestsWorkflow`. It starts one `PullRequestSessionWorkflow` (ID `pr-session-<repo>-<id>`) per new PR.
+
+The first poll records the PRs that are already open as a baseline and creates no sessions for them; set `BITBUCKET_BACKFILL=true` to change that. Seen PRs are stored in the manager database, so a PR gets at most one session, even across restarts. To trigger a poll right away:
+
+```bash
+docker compose exec temporal temporal schedule trigger --schedule-id poll-bitbucket
+```
+
 ## Deploy on Kubernetes (Helm)
 
 Prerequisite: the Gateway API CRDs.
@@ -51,6 +69,9 @@ To use an existing Gateway or Temporal, set `traefik.enabled=false` / `temporal.
 
 Put provider API keys in a Secret whose `session-env.json` key holds a JSON
 object, and set `session.envSecret.name`.
+
+For pull request sessions, create a Secret with the token and set
+`bitbucket.tokenSecret.name`, `bitbucket.workspace` and `bitbucket.repos`.
 
 The shared session volume (`sharedStorage`) needs `ReadWriteMany` when session pods can land on different nodes.
 

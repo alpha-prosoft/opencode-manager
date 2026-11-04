@@ -78,6 +78,23 @@ spec:
               value: {{ .Values.reaper.intervalSeconds | quote }}
             - name: MANAGER_IDLE_GRACE_SECONDS
               value: {{ .Values.reaper.idleGraceSeconds | quote }}
+            {{- if and .Values.bitbucket.tokenSecret.name .Values.bitbucket.workspace .Values.bitbucket.repos }}
+            - name: MANAGER_BITBUCKET_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.bitbucket.tokenSecret.name }}
+                  key: {{ .Values.bitbucket.tokenSecret.key }}
+            - name: MANAGER_BITBUCKET_WORKSPACE
+              value: {{ .Values.bitbucket.workspace | quote }}
+            - name: MANAGER_BITBUCKET_REPOS
+              value: {{ .Values.bitbucket.repos | toJson | quote }}
+            - name: MANAGER_BITBUCKET_POLL_MINUTES
+              value: {{ .Values.bitbucket.pollMinutes | quote }}
+            - name: MANAGER_BITBUCKET_SESSION_OWNER
+              value: {{ .Values.bitbucket.sessionOwner | quote }}
+            - name: MANAGER_BITBUCKET_BACKFILL
+              value: {{ .Values.bitbucket.backfill | quote }}
+            {{- end }}
             - name: MANAGER_AUTH_MODE
               value: {{ .Values.auth.mode | quote }}
             - name: MANAGER_AUTH_TTL_HOURS

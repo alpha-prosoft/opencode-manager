@@ -5,7 +5,6 @@ const COLORS: Record<SessionStatus, ChipProps["color"]> = {
   running: "success",
   starting: "info",
   stopped: "default",
-  missing: "warning",
   error: "error",
 };
 

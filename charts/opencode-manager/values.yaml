@@ -34,6 +34,19 @@ reaper:
   intervalSeconds: 300
   idleGraceSeconds: 300
 
+# Polls Bitbucket Cloud for new pull requests and creates a public session per PR.
+# Enabled when tokenSecret.name, workspace and repos are set. PRs already open on the
+# first poll are recorded as a baseline unless backfill is true.
+bitbucket:
+  workspace: ""
+  repos: []
+  pollMinutes: 15
+  sessionOwner: bitbucket
+  backfill: false
+  tokenSecret:
+    name: ""
+    key: token
+
 # One volume shared by all sessions; each session uses the sessions/<id> subpath.
 # Session pods can land on any node, so this needs ReadWriteMany storage.
 sharedStorage:

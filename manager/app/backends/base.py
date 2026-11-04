@@ -55,4 +55,4 @@ class ContainerBackend(ABC):
     def service_url(self, session_id: str) -> str: ...
 
     def status(self, session_id: str) -> SessionStatus:
-        return self.statuses().get(session_id, SessionStatus.MISSING)
+        return self.statuses().get(session_id, SessionStatus.STOPPED)

@@ -8,7 +8,6 @@ class SessionStatus(StrEnum):
     RUNNING = "running"
     STARTING = "starting"
     STOPPED = "stopped"
-    MISSING = "missing"
     ERROR = "error"
 
 

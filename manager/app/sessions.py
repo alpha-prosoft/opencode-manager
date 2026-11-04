@@ -65,7 +65,7 @@ class SessionService:
         return Session(
             **data,
             secret_key=record.secret_key,
-            status=statuses.get(record.id, SessionStatus.MISSING),
+            status=statuses.get(record.id, SessionStatus.STOPPED),
             url=self.session_url(record),
             open_url=self.entry_path(record),
             is_owner=is_owner,

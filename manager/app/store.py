@@ -23,6 +23,13 @@ CREATE TABLE IF NOT EXISTS sessions (
     stopped_at TEXT
 );
 CREATE INDEX IF NOT EXISTS sessions_sub ON sessions (sub);
+CREATE TABLE IF NOT EXISTS pull_requests (
+    repo TEXT NOT NULL,
+    pr_id INTEGER NOT NULL,
+    session_id TEXT,
+    seen_at TEXT NOT NULL,
+    PRIMARY KEY (repo, pr_id)
+);
 """
 
 JSON_COLUMNS = ("labels", "env")
@@ -103,3 +110,23 @@ class SessionStore:
     def delete(self, session_id: str) -> None:
         with self._connect() as db:
             db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+
+    def seen_pull_requests(self, repo: str) -> set[int]:
+        with self._connect() as db:
+            rows = db.execute("SELECT pr_id FROM pull_requests WHERE repo = ?", (repo,)).fetchall()
+        return {row["pr_id"] for row in rows}
+
+    def pull_request_session(self, repo: str, pr_id: int) -> str | None:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT session_id FROM pull_requests WHERE repo = ? AND pr_id = ?", (repo, pr_id)
+            ).fetchone()
+        return row["session_id"] if row else None
+
+    def record_pull_request(self, repo: str, pr_id: int, session_id: str | None) -> None:
+        with self._connect() as db:
+            db.execute(
+                "INSERT INTO pull_requests (repo, pr_id, session_id, seen_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT (repo, pr_id) DO UPDATE SET session_id = excluded.session_id",
+                (repo, pr_id, session_id, datetime.now(UTC).isoformat()),
+            )

@@ -1,6 +1,8 @@
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
+from ..config import Settings
+from ..pull_requests import PullRequestSessions
 from ..sessions import SessionService
 
 
@@ -42,3 +44,24 @@ class SessionActivities:
             self.list_running_sessions,
             self.stop_session_if_done,
         ]
+
+
+class PullRequestActivities:
+    def __init__(self, settings: Settings, pull_requests: PullRequestSessions):
+        self.settings = settings
+        self.pull_requests = pull_requests
+
+    @activity.defn(name="bitbucket_repositories")
+    def bitbucket_repositories(self) -> list[str]:
+        return self.settings.bitbucket_repos
+
+    @activity.defn(name="list_new_pull_requests")
+    def list_new_pull_requests(self, repo: str) -> list[dict]:
+        return self.pull_requests.new_pull_requests(repo)
+
+    @activity.defn(name="ensure_pull_request_session")
+    def ensure_pull_request_session(self, pull_request: dict) -> str:
+        return self.pull_requests.ensure_session(pull_request)
+
+    def all(self) -> list:
+        return [self.bitbucket_repositories, self.list_new_pull_requests, self.ensure_pull_request_session]
