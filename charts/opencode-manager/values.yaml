@@ -21,15 +21,20 @@ auth:
     existingSecret: ""
     key: jwt-secret
 
-openwebui:
-  image: ghcr.io/open-webui/open-webui:main
+session:
+  image: ghcr.io/anomalyco/opencode:1.19.5
+  # Environment for every session, e.g. provider API keys. Prefer envSecret for credentials:
+  # a Secret whose `key` holds a JSON object of environment variables.
   env: {}
+  envSecret:
+    name: ""
+    key: session-env.json
 
 reaper:
   intervalSeconds: 300
   idleGraceSeconds: 300
 
-# One volume shared by all sessions (sessions/<id> subpaths plus a shared model cache).
+# One volume shared by all sessions; each session uses the sessions/<id> subpath.
 # Session pods can land on any node, so this needs ReadWriteMany storage.
 sharedStorage:
   size: 50Gi

@@ -20,10 +20,10 @@ class Settings(BaseSettings):
     traefik_entrypoint: str = "web"
     manager_service_url: str = "http://manager:8000"
 
-    gateway_name: str = "owui"
+    gateway_name: str = "traefik-gateway"
     gateway_namespace: str | None = None
     gateway_section_name: str | None = None
-    forward_auth_middleware: str = "owui-forward-auth"
+    forward_auth_middleware: str = "opencode-forward-auth"
 
     auth_mode: Literal["dev", "jwt"] = "dev"
     dev_sub: str = "dev-user"
@@ -35,23 +35,23 @@ class Settings(BaseSettings):
     jwt_cookie: str = "access_token"
     email_domain: str = "users.local"
 
-    openwebui_image: str = "ghcr.io/open-webui/open-webui:main"
-    openwebui_port: int = 8080
-    openwebui_env: dict[str, str] = {}
+    session_image: str = "ghcr.io/anomalyco/opencode:1.19.5"
+    session_port: int = 4096
+    session_env: dict[str, str] = {}
 
     shared_mount_path: str = "/shared"
 
     temporal_address: str = "temporal:7233"
     temporal_namespace: str = "default"
-    temporal_task_queue: str = "owui-manager"
+    temporal_task_queue: str = "opencode-manager"
     reap_interval_seconds: int = 300
     idle_grace_seconds: int = 300
 
-    docker_network: str = "owui-net"
-    docker_shared_volume: str = "owui-shared"
+    docker_network: str = "opencode-net"
+    docker_shared_volume: str = "opencode-shared"
 
     k8s_namespace: str = "default"
-    k8s_shared_pvc: str = "owui-shared"
+    k8s_shared_pvc: str = "opencode-shared"
 
     def session_host(self, session_id: str) -> str:
         return f"{session_id}.{self.domain}"

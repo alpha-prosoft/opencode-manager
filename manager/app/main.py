@@ -63,7 +63,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Open WebUI Session Manager",
+    title="OpenCode Session Manager",
     lifespan=lifespan,
     docs_url="/api/docs",
     openapi_url="/api/openapi.json",

@@ -20,7 +20,7 @@ export default function App() {
             to="/"
             sx={{ flexGrow: 1, color: "inherit", textDecoration: "none" }}
           >
-            Open WebUI Sessions
+            OpenCode Sessions
           </Typography>
           {identity && <Typography variant="body2">{identity.email}</Typography>}
         </Toolbar>

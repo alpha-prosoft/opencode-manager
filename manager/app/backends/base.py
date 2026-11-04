@@ -2,22 +2,17 @@ from abc import ABC, abstractmethod
 
 from ..config import Settings
 from ..models import SessionRecord, SessionStatus
-from ..storage import MODEL_CACHE_DIR, session_subpath
+from ..storage import session_subpath
 
-DATA_DIR = "/app/backend/data"
-LABEL_SESSION = "owui-manager/session"
-LABEL_SUB = "owui-manager/sub"
+SESSION_DIR = "/session"
+HOME_DIR = f"{SESSION_DIR}/home"
+WORKSPACE_DIR = f"{SESSION_DIR}/workspace"
+LABEL_SESSION = "opencode-manager/session"
+LABEL_SUB = "opencode-manager/sub"
 
 
 def resource_name(session_id: str) -> str:
-    return f"owui-{session_id}"
-
-
-def shared_mounts(session_id: str) -> dict[str, str]:
-    return {
-        DATA_DIR: session_subpath(session_id),
-        f"{DATA_DIR}/{MODEL_CACHE_DIR}": MODEL_CACHE_DIR,
-    }
+    return f"opencode-{session_id}"
 
 
 class ContainerBackend(ABC):
@@ -26,15 +21,17 @@ class ContainerBackend(ABC):
 
     def instance_env(self, record: SessionRecord) -> dict[str, str]:
         return {
-            **self.settings.openwebui_env,
+            **self.settings.session_env,
             **record.env,
-            "PORT": str(self.settings.openwebui_port),
-            "WEBUI_URL": self.settings.public_url(self.settings.session_host(record.id)),
-            "WEBUI_SECRET_KEY": record.secret_key,
-            "WEBUI_AUTH_TRUSTED_EMAIL_HEADER": "X-Forwarded-Email",
-            "WEBUI_AUTH_TRUSTED_NAME_HEADER": "X-Forwarded-Name",
-            "DATA_DIR": DATA_DIR,
+            "HOME": HOME_DIR,
+            "OPENCODE_SERVER_PASSWORD": record.secret_key,
         }
+
+    def command(self) -> list[str]:
+        return ["web", "--hostname", "0.0.0.0", "--port", str(self.settings.session_port)]
+
+    def mount(self, session_id: str) -> tuple[str, str]:
+        return SESSION_DIR, session_subpath(session_id)
 
     def prepare(self) -> None:
         pass

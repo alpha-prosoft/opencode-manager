@@ -1,6 +1,6 @@
 apiVersion: v2
 name: opencode-manager
-description: Per-user Open WebUI sessions managed by a FastAPI manager, routed through Traefik and the Gateway API
+description: Per-user OpenCode web sessions managed by a FastAPI manager, routed through Traefik and the Gateway API
 type: application
 version: 0.1.0
 appVersion: "0.1.0"

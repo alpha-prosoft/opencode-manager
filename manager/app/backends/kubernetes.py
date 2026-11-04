@@ -2,7 +2,8 @@ from kubernetes import client, config
 from kubernetes.client.exceptions import ApiException
 
 from ..models import SessionRecord, SessionStatus
-from .base import LABEL_SESSION, LABEL_SUB, ContainerBackend, resource_name, shared_mounts
+from ..opencode import basic_auth
+from .base import LABEL_SESSION, LABEL_SUB, WORKSPACE_DIR, ContainerBackend, resource_name
 
 
 def load_kube_config() -> None:
@@ -40,23 +41,27 @@ class KubernetesBackend(ContainerBackend):
             metadata=self._metadata(record),
             spec=client.V1ServiceSpec(
                 selector={LABEL_SESSION: record.id},
-                ports=[client.V1ServicePort(name="http", port=self.settings.openwebui_port)],
+                ports=[client.V1ServicePort(name="http", port=self.settings.session_port)],
             ),
         )
 
     def _deployment(self, record: SessionRecord) -> client.V1Deployment:
-        port = self.settings.openwebui_port
+        port = self.settings.session_port
+        target, subpath = self.mount(record.id)
         container = client.V1Container(
-            name="openwebui",
+            name="opencode",
             image=record.image,
+            args=self.command(),
+            working_dir=WORKSPACE_DIR,
             env=[client.V1EnvVar(name=k, value=v) for k, v in self.instance_env(record).items()],
             ports=[client.V1ContainerPort(container_port=port)],
-            volume_mounts=[
-                client.V1VolumeMount(name="shared", mount_path=target, sub_path=subpath)
-                for target, subpath in shared_mounts(record.id).items()
-            ],
+            volume_mounts=[client.V1VolumeMount(name="shared", mount_path=target, sub_path=subpath)],
             readiness_probe=client.V1Probe(
-                http_get=client.V1HTTPGetAction(path="/health", port=port),
+                http_get=client.V1HTTPGetAction(
+                    path="/global/health",
+                    port=port,
+                    http_headers=[client.V1HTTPHeader(name="Authorization", value=basic_auth(record.secret_key))],
+                ),
                 period_seconds=5,
             ),
         )
@@ -127,4 +132,4 @@ class KubernetesBackend(ContainerBackend):
 
     def service_url(self, session_id: str) -> str:
         name = resource_name(session_id)
-        return f"http://{name}.{self.namespace}.svc.cluster.local:{self.settings.openwebui_port}"
+        return f"http://{name}.{self.namespace}.svc.cluster.local:{self.settings.session_port}"

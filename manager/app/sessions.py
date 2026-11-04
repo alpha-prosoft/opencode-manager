@@ -5,7 +5,7 @@ import time
 from collections import defaultdict
 from datetime import UTC, datetime
 
-from . import openwebui
+from . import opencode
 from .backends import ContainerBackend
 from .config import Settings
 from .models import Identity, Session, SessionCreate, SessionRecord, SessionStatus
@@ -72,7 +72,7 @@ class SessionService:
             id=secrets.token_hex(8),
             sub=identity.sub,
             email=identity.email,
-            image=self.settings.openwebui_image,
+            image=self.settings.session_image,
             secret_key=secrets.token_urlsafe(32),
             created_at=now,
             last_activity_at=now,
@@ -102,7 +102,7 @@ class SessionService:
     def is_ready(self, record: SessionRecord) -> bool:
         if self.is_known_ready(record.id):
             return True
-        if openwebui.is_healthy(self.backend.service_url(record.id)):
+        if opencode.is_healthy(self.backend.service_url(record.id), record.secret_key):
             self._ready.add(record.id)
             return True
         return False
@@ -138,5 +138,5 @@ class SessionService:
         idle = (datetime.now(UTC) - record.last_activity_at).total_seconds()
         if idle < self.settings.idle_grace_seconds:
             return False
-        tasks = openwebui.count_active_tasks(self.backend.service_url(record.id), record.email)
-        return tasks == 0
+        busy = opencode.count_busy_sessions(self.backend.service_url(record.id), record.secret_key)
+        return busy == 0

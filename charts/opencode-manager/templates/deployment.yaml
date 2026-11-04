@@ -63,10 +63,17 @@ spec:
               value: {{ .Values.temporalConnection.address | quote }}
             - name: MANAGER_TEMPORAL_NAMESPACE
               value: {{ .Values.temporalConnection.namespace | quote }}
-            - name: MANAGER_OPENWEBUI_IMAGE
-              value: {{ .Values.openwebui.image | quote }}
-            - name: MANAGER_OPENWEBUI_ENV
-              value: {{ .Values.openwebui.env | toJson | quote }}
+            - name: MANAGER_SESSION_IMAGE
+              value: {{ .Values.session.image | quote }}
+            - name: MANAGER_SESSION_ENV
+              {{- if .Values.session.envSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.session.envSecret.name }}
+                  key: {{ .Values.session.envSecret.key }}
+              {{- else }}
+              value: {{ .Values.session.env | toJson | quote }}
+              {{- end }}
             - name: MANAGER_REAP_INTERVAL_SECONDS
               value: {{ .Values.reaper.intervalSeconds | quote }}
             - name: MANAGER_IDLE_GRACE_SECONDS

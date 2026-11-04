@@ -5,7 +5,7 @@ from docker.errors import ImageNotFound, NotFound
 from docker.types import Mount
 
 from ..models import SessionRecord, SessionStatus
-from .base import LABEL_SESSION, LABEL_SUB, ContainerBackend, resource_name, shared_mounts
+from .base import LABEL_SESSION, LABEL_SUB, WORKSPACE_DIR, ContainerBackend, resource_name
 
 log = logging.getLogger(__name__)
 
@@ -33,22 +33,21 @@ class DockerBackend(ContainerBackend):
             self.client.images.pull(image)
 
     def prepare(self) -> None:
-        self._ensure_image(self.settings.openwebui_image)
+        self._ensure_image(self.settings.session_image)
 
     def _create(self, record: SessionRecord) -> None:
         self._ensure_image(record.image)
-        mounts = [
-            Mount(target=target, source=self.settings.docker_shared_volume, subpath=subpath)
-            for target, subpath in shared_mounts(record.id).items()
-        ]
+        target, subpath = self.mount(record.id)
         self.client.containers.create(
             image=record.image,
             name=resource_name(record.id),
             hostname=resource_name(record.id),
+            command=self.command(),
+            working_dir=WORKSPACE_DIR,
             environment=self.instance_env(record),
             labels={LABEL_SESSION: record.id, LABEL_SUB: record.sub},
             network=self.settings.docker_network,
-            mounts=mounts,
+            mounts=[Mount(target=target, source=self.settings.docker_shared_volume, subpath=subpath)],
         )
 
     def start(self, record: SessionRecord) -> None:
@@ -73,15 +72,11 @@ class DockerBackend(ContainerBackend):
             pass
 
     def statuses(self) -> dict[str, SessionStatus]:
-        containers = self.client.containers.list(all=True, filters={"label": LABEL_SESSION})
-        return {c.labels[LABEL_SESSION]: self._status(c) for c in containers}
-
-    @staticmethod
-    def _status(container) -> SessionStatus:
-        health = container.attrs.get("State", {}).get("Health", {}).get("Status")
-        if container.status == "running" and health == "starting":
-            return SessionStatus.STARTING
-        return STATE_TO_STATUS.get(container.status, SessionStatus.ERROR)
+        containers = self.client.containers.list(all=True, sparse=True, filters={"label": LABEL_SESSION})
+        return {
+            c.attrs["Labels"][LABEL_SESSION]: STATE_TO_STATUS.get(c.status, SessionStatus.ERROR)
+            for c in containers
+        }
 
     def service_url(self, session_id: str) -> str:
-        return f"http://{resource_name(session_id)}:{self.settings.openwebui_port}"
+        return f"http://{resource_name(session_id)}:{self.settings.session_port}"

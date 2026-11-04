@@ -8,8 +8,7 @@ spec:
   forwardAuth:
     address: http://{{ include "opencode-manager.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:8000/api/gateway/auth
     authResponseHeaders:
-      - X-Forwarded-Email
-      - X-Forwarded-Name
+      - Authorization
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute

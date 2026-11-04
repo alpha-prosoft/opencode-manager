@@ -14,7 +14,7 @@ services:
     volumes:
       - traefik-dynamic:/traefik/dynamic:ro
     networks:
-      - owui-net
+      - opencode-net
     depends_on:
       - manager
     restart: unless-stopped
@@ -27,7 +27,7 @@ services:
     volumes:
       - temporal-data:/home/temporal
     networks:
-      - owui-net
+      - opencode-net
     restart: unless-stopped
 
   manager:
@@ -37,34 +37,34 @@ services:
       MANAGER_ROUTER: traefik-file
       MANAGER_DOMAIN: ${MANAGER_DOMAIN:-localhost}
       MANAGER_PUBLIC_PORT: ${MANAGER_PUBLIC_PORT:-8080}
-      MANAGER_DOCKER_NETWORK: owui-net
-      MANAGER_DOCKER_SHARED_VOLUME: owui-shared
+      MANAGER_DOCKER_NETWORK: opencode-net
+      MANAGER_DOCKER_SHARED_VOLUME: opencode-shared
       MANAGER_TEMPORAL_ADDRESS: temporal:7233
       MANAGER_AUTH_MODE: ${MANAGER_AUTH_MODE:-dev}
       MANAGER_JWT_JWKS_URL: ${MANAGER_JWT_JWKS_URL:-}
       MANAGER_JWT_SECRET: ${MANAGER_JWT_SECRET:-}
-      MANAGER_OPENWEBUI_IMAGE: ${OPENWEBUI_IMAGE:-ghcr.io/open-webui/open-webui:main}
-      MANAGER_OPENWEBUI_ENV: ${OPENWEBUI_ENV:-{}}
+      MANAGER_SESSION_IMAGE: ${SESSION_IMAGE:-ghcr.io/anomalyco/opencode:1.19.5}
+      MANAGER_SESSION_ENV: ${SESSION_ENV:-{}}
       MANAGER_REAP_INTERVAL_SECONDS: ${MANAGER_REAP_INTERVAL_SECONDS:-300}
       MANAGER_IDLE_GRACE_SECONDS: ${MANAGER_IDLE_GRACE_SECONDS:-300}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - traefik-dynamic:/traefik/dynamic
       - manager-data:/data
-      - owui-shared:/shared
+      - opencode-shared:/shared
     networks:
-      - owui-net
+      - opencode-net
     depends_on:
       - temporal
     restart: unless-stopped
 
 networks:
-  owui-net:
-    name: owui-net
+  opencode-net:
+    name: opencode-net
 
 volumes:
   traefik-dynamic:
   manager-data:
   temporal-data:
-  owui-shared:
-    name: owui-shared
+  opencode-shared:
+    name: opencode-shared

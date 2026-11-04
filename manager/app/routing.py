@@ -13,7 +13,7 @@ from .config import Settings
 from .models import SessionRecord
 
 FORWARD_AUTH_PATH = "/api/gateway/auth"
-FORWARD_AUTH_HEADERS = ["X-Forwarded-Email", "X-Forwarded-Name"]
+FORWARD_AUTH_HEADERS = ["Authorization"]
 
 
 class NoAliasDumper(yaml.SafeDumper):
@@ -142,7 +142,7 @@ class GatewayApiRoutes(RouteProvider):
                             }
                         ],
                         "backendRefs": [
-                            {"name": resource_name(session.id), "port": self.settings.openwebui_port}
+                            {"name": resource_name(session.id), "port": self.settings.session_port}
                         ],
                     }
                 ],

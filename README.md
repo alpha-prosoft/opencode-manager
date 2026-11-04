@@ -1,8 +1,8 @@
 # opencode-manager
 
-Runs one Open WebUI container per user session behind Traefik. A FastAPI
-manager (with a React/MUI UI) owns the session lifecycle, and Temporal runs
-session starts and the idle reaper.
+Runs one [OpenCode](https://opencode.ai) web container (`opencode web`) per
+user session behind Traefik. A FastAPI manager (with a React/MUI UI) owns the
+session lifecycle, and Temporal runs session starts and the idle reaper.
 
 ```
 browser ──► traefik ──► Host(domain)            → manager (UI + /api)
@@ -10,7 +10,7 @@ browser ──► traefik ──► Host(domain)            → manager (UI + /a
                    └──► Host(*.domain) fallback → manager wakes a stopped session
 ```
 
-Open WebUI cannot run under a sub-path, so each session gets its own subdomain.
+OpenCode cannot run under a sub-path, so each session gets its own subdomain.
 `/sessions/{sub}/{id}` on the manager checks ownership and redirects to it.
 
 ## Run locally (Docker Compose)
@@ -24,11 +24,13 @@ docker compose up -d --build
 - Traefik dashboard: http://localhost:9090
 - Temporal UI: http://localhost:8233
 
-Extra Open WebUI settings for every session, as JSON:
+Environment for every session (e.g. provider API keys), as JSON:
 
 ```bash
-OPENWEBUI_ENV='{"OLLAMA_BASE_URL":"http://host.docker.internal:11434"}' docker compose up -d
+SESSION_ENV='{"ANTHROPIC_API_KEY":"..."}' docker compose up -d
 ```
+
+Without keys, sessions can still use OpenCode's free models.
 
 ## Deploy on Kubernetes (Helm)
 
@@ -37,7 +39,7 @@ Prerequisite: the Gateway API CRDs.
 ```bash
 kubectl apply --server-side -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.7.0/standard-install.yaml
 helm dependency build charts/opencode-manager
-helm install om charts/opencode-manager -n owui --create-namespace --set domain=opencode.example.com
+helm install om charts/opencode-manager -n opencode --create-namespace --set domain=opencode.example.com
 ```
 
 The chart installs:
@@ -47,6 +49,9 @@ The chart installs:
 
 To use an existing Gateway or Temporal, set `traefik.enabled=false` / `temporal.enabled=false` and configure `gateway.*` / `temporalConnection.*`.
 
+Put provider API keys in a Secret whose `session-env.json` key holds a JSON
+object, and set `session.envSecret.name`.
+
 The shared session volume (`sharedStorage`) needs `ReadWriteMany` when session pods can land on different nodes.
 
 ## How it works
@@ -55,17 +60,17 @@ The shared session volume (`sharedStorage`) needs `ReadWriteMany` when session p
 |---|---|---|
 | Containers (`MANAGER_BACKEND`) | Docker socket | Deployment and Service per session; scaled to 0 when stopped |
 | Routing (`MANAGER_ROUTER`) | Traefik file provider (`traefik-file`) | Gateway API HTTPRoute per session (`gateway-api`), with a Traefik Middleware via `ExtensionRef` |
-| Storage | `owui-shared` volume, mounted with volume subpaths | one PVC, mounted with `subPath` |
+| Storage | `opencode-shared` volume, mounted with a volume subpath | one PVC, mounted with `subPath` |
 
-- **Shared storage**: every session uses `sessions/<id>` on the shared volume.
-  `cache/embedding/models` is shared, so the embedding model is downloaded only once.
+- **Shared storage**: every session mounts `sessions/<id>` from the shared volume as `/session`.
+  It contains `home/` (`HOME`, which holds OpenCode's config and state) and `workspace/` (the working directory).
 - **ForwardAuth** (`/api/gateway/auth`):
   - checks the caller owns the session;
   - starts the session if it's stopped and shows a "starting" page until it is healthy;
-  - passes `X-Forwarded-Email`, which Open WebUI's trusted-header auth uses to log the user in.
+  - injects `Authorization: Basic …` for the session's random `OPENCODE_SERVER_PASSWORD`, so containers reject any request that doesn't come through the gateway.
 - **Temporal**:
   - `StartSessionWorkflow` (workflow ID `start-session-<id>`, so concurrent starts are deduplicated) starts the container and waits until it is ready.
-  - The `reap-sessions` schedule runs `ReapSessionsWorkflow` every `MANAGER_REAP_INTERVAL_SECONDS`. It stops a session that has been idle for `MANAGER_IDLE_GRACE_SECONDS` and has no running Open WebUI tasks (`GET /api/tasks`).
+  - The `reap-sessions` schedule runs `ReapSessionsWorkflow` every `MANAGER_REAP_INTERVAL_SECONDS`. It stops a session that has been idle for `MANAGER_IDLE_GRACE_SECONDS` and has no busy OpenCode sessions (`GET /session/status`).
 
 ## Auth
 

@@ -85,7 +85,7 @@ export default function CreateSessionDialog({ open, onClose, onCreated }: Props)
             />
             <TextField
               label="Environment"
-              helperText="Extra Open WebUI env vars, one KEY=value per line"
+              helperText="Extra environment for OpenCode (e.g. ANTHROPIC_API_KEY), one KEY=value per line"
               value={env}
               onChange={(e) => setEnv(e.target.value)}
               multiline
