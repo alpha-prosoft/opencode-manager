@@ -25,9 +25,9 @@ class Settings(BaseSettings):
     gateway_section_name: str | None = None
     forward_auth_middleware: str = "opencode-forward-auth"
 
-    auth_mode: Literal["dev", "jwt"] = "dev"
-    dev_sub: str = "dev-user"
-    dev_email: str = "dev@example.com"
+    auth_mode: Literal["login", "jwt"] = "login"
+    auth_ttl_hours: int = 12
+    secret_key: str | None = None
     jwt_secret: str | None = None
     jwt_jwks_url: str | None = None
     jwt_audience: str | None = None

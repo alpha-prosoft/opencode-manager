@@ -6,7 +6,9 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  FormControlLabel,
   Stack,
+  Switch,
   TextField,
 } from "@mui/material";
 import { api, type Session } from "../api";
@@ -35,6 +37,7 @@ export default function CreateSessionDialog({ open, onClose, onCreated }: Props)
   const [description, setDescription] = useState("");
   const [labels, setLabels] = useState("");
   const [env, setEnv] = useState("");
+  const [isPublic, setIsPublic] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -46,6 +49,7 @@ export default function CreateSessionDialog({ open, onClose, onCreated }: Props)
       const session = await api.createSession({
         name,
         description,
+        visibility: isPublic ? "public" : "private",
         labels: parsePairs(labels),
         env: parsePairs(env),
       });
@@ -53,6 +57,7 @@ export default function CreateSessionDialog({ open, onClose, onCreated }: Props)
       setDescription("");
       setLabels("");
       setEnv("");
+      setIsPublic(false);
       onCreated(session);
     } catch (e) {
       setError((e as Error).message);
@@ -74,6 +79,10 @@ export default function CreateSessionDialog({ open, onClose, onCreated }: Props)
               onChange={(e) => setDescription(e.target.value)}
               multiline
               minRows={2}
+            />
+            <FormControlLabel
+              control={<Switch checked={isPublic} onChange={(e) => setIsPublic(e.target.checked)} />}
+              label="Public: every logged-in user can see and open this session"
             />
             <TextField
               label="Labels"

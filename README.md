@@ -72,17 +72,31 @@ The shared session volume (`sharedStorage`) needs `ReadWriteMany` when session p
   - `StartSessionWorkflow` (workflow ID `start-session-<id>`, so concurrent starts are deduplicated) starts the container and waits until it is ready.
   - The `reap-sessions` schedule runs `ReapSessionsWorkflow` every `MANAGER_REAP_INTERVAL_SECONDS`. It stops a session that has been idle for `MANAGER_IDLE_GRACE_SECONDS` and has no busy OpenCode sessions (`GET /session/status`).
 
-## Auth
+## Auth and visibility
 
-- `MANAGER_AUTH_MODE=dev`: everyone is `MANAGER_DEV_SUB`.
-- `MANAGER_AUTH_MODE=jwt`: reads a JWT from `Authorization: Bearer` or the `access_token` cookie. It is verified with `MANAGER_JWT_JWKS_URL` or `MANAGER_JWT_SECRET`. The cookie must be scoped to the parent domain so that session subdomains receive it.
+- `MANAGER_AUTH_MODE=login` (default): username-only login, with no password for now. The manager signs a JWT into an HttpOnly `oc_auth` cookie.
+- `MANAGER_AUTH_MODE=jwt`: identity comes from an external IdP token (`Authorization: Bearer` or the `access_token` cookie), verified with `MANAGER_JWT_JWKS_URL` or `MANAGER_JWT_SECRET`.
+- The signing key comes from `MANAGER_SECRET_KEY`. If it isn't set, a random key is generated once and stored next to the database.
+
+Session subdomains get their own cookie. Opening `/sessions/{owner}/{id}` on the manager redirects to the session with a 60-second token bound to that session (`oc_handoff`). The session host swaps it for a host-only cookie and redirects to a clean URL. A visitor without a cookie is sent back to the entry URL and, if needed, to `/login`.
+
+Sessions are `private` (default) or `public`:
+
+| | Owner | Other users, public session | Other users, private session |
+|---|---|---|---|
+| List, view, open, start | yes | yes (per-session `env` hidden) | 404 |
+| Stop, change, delete | yes | 403 | 404 |
 
 ## API
 
 | Method | Path | |
 |---|---|---|
-| GET | `/api/sessions` | List the caller's sessions |
-| POST | `/api/sessions` | Create and start: `{name, description, labels, env}` |
+| POST | `/api/auth/login` | Log in: `{username}` |
+| POST | `/api/auth/logout` | Log out |
+| GET | `/api/me` | Current user |
+| GET | `/api/sessions` | Own sessions plus public ones |
+| POST | `/api/sessions` | Create and start: `{name, description, visibility, labels, env}` |
+| PATCH | `/api/sessions/{id}` | Owner: change `name`, `description`, `visibility`, `labels` |
 | GET | `/api/sessions/{id}` | Session details and status |
 | POST | `/api/sessions/{id}/start` | Start |
 | POST | `/api/sessions/{id}/stop` | Stop |

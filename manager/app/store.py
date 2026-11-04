@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     email TEXT NOT NULL,
     name TEXT NOT NULL,
     description TEXT NOT NULL,
+    visibility TEXT NOT NULL DEFAULT 'private',
     labels TEXT NOT NULL,
     env TEXT NOT NULL,
     image TEXT NOT NULL,
@@ -33,6 +34,9 @@ class SessionStore:
         self._path = path
         with self._connect() as db:
             db.executescript(SCHEMA)
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(sessions)")}
+            if "visibility" not in columns:
+                db.execute("ALTER TABLE sessions ADD COLUMN visibility TEXT NOT NULL DEFAULT 'private'")
 
     @contextmanager
     def _connect(self):
@@ -66,13 +70,21 @@ class SessionStore:
             row = db.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
         return self._to_record(row) if row else None
 
-    def list(self, sub: str | None = None) -> list[SessionRecord]:
+    def list(self, visible_to: str | None = None) -> list[SessionRecord]:
         query, params = "SELECT * FROM sessions", ()
-        if sub is not None:
-            query, params = query + " WHERE sub = ?", (sub,)
+        if visible_to is not None:
+            query, params = query + " WHERE sub = ? OR visibility = 'public'", (visible_to,)
         with self._connect() as db:
             rows = db.execute(query + " ORDER BY created_at DESC", params).fetchall()
         return [self._to_record(row) for row in rows]
+
+    def update(self, session_id: str, changes: dict) -> None:
+        for column in JSON_COLUMNS:
+            if column in changes:
+                changes[column] = json.dumps(changes[column])
+        assignments = ", ".join(f"{column} = :{column}" for column in changes)
+        with self._connect() as db:
+            db.execute(f"UPDATE sessions SET {assignments} WHERE id = :id", {**changes, "id": session_id})
 
     def touch(self, session_id: str) -> None:
         with self._connect() as db:

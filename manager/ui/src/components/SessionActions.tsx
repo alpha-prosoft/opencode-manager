@@ -22,35 +22,38 @@ export default function SessionActions({ session, onChange, onError }: Props) {
   return (
     <Stack direction="row" spacing={0.5} sx={{ justifyContent: "flex-end" }}>
       <Tooltip title="Open">
-        <IconButton href={session.url} color="primary">
+        <IconButton href={session.open_url} color="primary">
           <OpenInNewIcon />
         </IconButton>
       </Tooltip>
-      {isActive ? (
-        <Tooltip title="Stop">
-          <IconButton onClick={run(() => api.stopSession(session.id))}>
-            <StopIcon />
-          </IconButton>
-        </Tooltip>
-      ) : (
+      {!isActive && (
         <Tooltip title="Start">
           <IconButton onClick={run(() => api.startSession(session.id))}>
             <PlayArrowIcon />
           </IconButton>
         </Tooltip>
       )}
-      <Tooltip title="Delete">
-        <IconButton
-          color="error"
-          onClick={run(async () => {
-            if (window.confirm(`Delete session "${session.name}" and its data?`)) {
-              await api.deleteSession(session.id);
-            }
-          })}
-        >
-          <DeleteIcon />
-        </IconButton>
-      </Tooltip>
+      {isActive && session.is_owner && (
+        <Tooltip title="Stop">
+          <IconButton onClick={run(() => api.stopSession(session.id))}>
+            <StopIcon />
+          </IconButton>
+        </Tooltip>
+      )}
+      {session.is_owner && (
+        <Tooltip title="Delete">
+          <IconButton
+            color="error"
+            onClick={run(async () => {
+              if (window.confirm(`Delete session "${session.name}" and its data?`)) {
+                await api.deleteSession(session.id);
+              }
+            })}
+          >
+            <DeleteIcon />
+          </IconButton>
+        </Tooltip>
+      )}
     </Stack>
   );
 }

@@ -4,11 +4,12 @@ import threading
 import time
 from collections import defaultdict
 from datetime import UTC, datetime
+from urllib.parse import quote
 
 from . import opencode
 from .backends import ContainerBackend
 from .config import Settings
-from .models import Identity, Session, SessionCreate, SessionRecord, SessionStatus
+from .models import Identity, Session, SessionCreate, SessionRecord, SessionStatus, SessionUpdate, Visibility
 from .routing import RouteProvider
 from .storage import SharedStorage
 from .store import SessionStore
@@ -40,6 +41,16 @@ class SessionService:
     def session_url(self, record: SessionRecord) -> str:
         return self.settings.public_url(self.settings.session_host(record.id))
 
+    def entry_path(self, record: SessionRecord) -> str:
+        return f"/sessions/{quote(record.sub, safe='')}/{record.id}"
+
+    def entry_url(self, record: SessionRecord) -> str:
+        return self.settings.public_url(self.settings.domain) + self.entry_path(record)
+
+    @staticmethod
+    def can_view(record: SessionRecord, identity: Identity) -> bool:
+        return record.sub == identity.sub or record.visibility == Visibility.PUBLIC
+
     def session_id_from_host(self, host: str) -> str | None:
         hostname = host.split(":", 1)[0].lower()
         suffix = f".{self.settings.domain}"
@@ -48,19 +59,33 @@ class SessionService:
         session_id = hostname.removesuffix(suffix)
         return session_id if session_id.isalnum() else None
 
-    def view(self, record: SessionRecord, statuses: dict[str, SessionStatus]) -> Session:
-        status = statuses.get(record.id, SessionStatus.MISSING)
-        return Session(**record.model_dump(), secret_key=record.secret_key, status=status, url=self.session_url(record))
+    def view(self, record: SessionRecord, identity: Identity, statuses: dict[str, SessionStatus]) -> Session:
+        is_owner = record.sub == identity.sub
+        data = record.model_dump() | ({} if is_owner else {"env": {}})
+        return Session(
+            **data,
+            secret_key=record.secret_key,
+            status=statuses.get(record.id, SessionStatus.MISSING),
+            url=self.session_url(record),
+            open_url=self.entry_path(record),
+            is_owner=is_owner,
+        )
 
-    def list(self, sub: str) -> list[Session]:
+    def list(self, identity: Identity) -> list[Session]:
         statuses = self.backend.statuses()
-        return [self.view(record, statuses) for record in self.store.list(sub)]
+        return [self.view(record, identity, statuses) for record in self.store.list(visible_to=identity.sub)]
 
     def get(self, session_id: str) -> SessionRecord | None:
         return self.store.get(session_id)
 
-    def describe(self, record: SessionRecord) -> Session:
-        return self.view(record, {record.id: self.backend.status(record.id)})
+    def describe(self, record: SessionRecord, identity: Identity) -> Session:
+        return self.view(record, identity, {record.id: self.backend.status(record.id)})
+
+    def update(self, record: SessionRecord, changes: SessionUpdate) -> SessionRecord:
+        fields = changes.model_dump(mode="json", exclude_none=True)
+        if fields:
+            self.store.update(record.id, fields)
+        return self.store.get(record.id)
 
     def sync_routes(self) -> None:
         self.routes.sync(self.store.list())

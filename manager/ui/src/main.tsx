@@ -5,11 +5,13 @@ import { CssBaseline, ThemeProvider, createTheme } from "@mui/material";
 import App from "./App";
 import SessionsPage from "./pages/SessionsPage";
 import SessionDetailPage from "./pages/SessionDetailPage";
+import LoginPage from "./pages/LoginPage";
 
 const theme = createTheme({ colorSchemes: { dark: true } });
 
 const router = createBrowserRouter(
   [
+    { path: "/login", element: <LoginPage /> },
     {
       path: "/",
       element: <App />,

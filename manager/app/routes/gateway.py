@@ -1,8 +1,10 @@
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
+
 from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from ..auth import resolve_identity
+from ..auth import HANDOFF_PARAM, handoff_token, read_handoff, resolve_identity, set_auth_cookie
 from ..config import Settings, get_settings
 from ..models import SessionRecord
 from ..opencode import basic_auth
@@ -20,22 +22,43 @@ STARTING_PAGE = """<!doctype html>
 </head><body><p>Starting your session&hellip; this page refreshes automatically.</p></body></html>"""
 
 
-class GatewayDenied(Exception):
-    def __init__(self, status_code: int):
-        self.response = Response(status_code=status_code)
+class GatewayResponse(Exception):
+    def __init__(self, response: Response):
+        self.response = response
 
 
 def starting_page() -> HTMLResponse:
     return HTMLResponse(STARTING_PAGE, status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
 
 
-def owned_record(request: Request, session_id: str | None, service: SessionService) -> SessionRecord:
-    identity = resolve_identity(request, get_settings())
-    if identity is None:
-        raise GatewayDenied(status.HTTP_401_UNAUTHORIZED)
+def without_handoff(uri: str) -> str:
+    parts = urlsplit(uri)
+    query = [(key, value) for key, value in parse_qsl(parts.query, keep_blank_values=True) if key != HANDOFF_PARAM]
+    return urlunsplit(("", "", parts.path or "/", urlencode(query), parts.fragment))
+
+
+def authorize_session_request(
+    request: Request, session_id: str | None, uri: str, service: SessionService, settings: Settings
+) -> SessionRecord:
     record = service.get(session_id) if session_id else None
-    if record is None or record.sub != identity.sub:
-        raise GatewayDenied(status.HTTP_404_NOT_FOUND)
+    if record is None:
+        raise GatewayResponse(Response(status_code=status.HTTP_404_NOT_FOUND))
+
+    handoff = dict(parse_qsl(urlsplit(uri).query)).get(HANDOFF_PARAM)
+    if handoff:
+        identity = read_handoff(handoff, record.id, settings)
+        if identity is None or not service.can_view(record, identity):
+            raise GatewayResponse(Response(status_code=status.HTTP_401_UNAUTHORIZED))
+        target = service.session_url(record) + without_handoff(uri)
+        redirect = RedirectResponse(target, status_code=status.HTTP_302_FOUND)
+        set_auth_cookie(redirect, identity, settings)
+        raise GatewayResponse(redirect)
+
+    identity = resolve_identity(request, settings)
+    if identity is None:
+        raise GatewayResponse(RedirectResponse(service.entry_url(record), status_code=status.HTTP_302_FOUND))
+    if not service.can_view(record, identity):
+        raise GatewayResponse(Response(status_code=status.HTTP_404_NOT_FOUND))
     return record
 
 
@@ -53,28 +76,33 @@ def enter_session(
     sub: str,
     session_id: str,
     request: Request,
+    settings: Settings = Depends(get_settings),
     service: SessionService = Depends(get_service),
 ) -> Response:
-    try:
-        record = owned_record(request, session_id, service)
-    except GatewayDenied as denied:
-        return denied.response
-    if record.sub != sub:
+    identity = resolve_identity(request, settings)
+    if identity is None:
+        login = f"/login?next={quote(request.url.path, safe='')}"
+        return RedirectResponse(login, status_code=status.HTTP_303_SEE_OTHER)
+    record = service.get(session_id)
+    if record is None or record.sub != sub or not service.can_view(record, identity):
         return Response(status_code=status.HTTP_404_NOT_FOUND)
-    return RedirectResponse(service.session_url(record), status_code=status.HTTP_303_SEE_OTHER)
+    target = f"{service.session_url(record)}/?{HANDOFF_PARAM}={handoff_token(identity, record.id)}"
+    return RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.get(FORWARD_AUTH_PATH)
 async def forward_auth(
     request: Request,
+    settings: Settings = Depends(get_settings),
     service: SessionService = Depends(get_service),
     engine: TemporalEngine = Depends(get_engine),
 ) -> Response:
     host = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
+    uri = request.headers.get("x-forwarded-uri", "/")
     try:
-        record = owned_record(request, service.session_id_from_host(host), service)
-    except GatewayDenied as denied:
-        return denied.response
+        record = authorize_session_request(request, service.session_id_from_host(host), uri, service, settings)
+    except GatewayResponse as result:
+        return result.response
     if not await ensure_ready(record, service, engine):
         return starting_page()
 
@@ -84,9 +112,10 @@ async def forward_auth(
 
 async def wake_session(request: Request, session_id: str) -> Response:
     service: SessionService = request.app.state.sessions
+    uri = request.url.path + (f"?{request.url.query}" if request.url.query else "")
     try:
-        record = owned_record(request, session_id, service)
-    except GatewayDenied as denied:
-        return denied.response
+        record = authorize_session_request(request, session_id, uri, service, get_settings())
+    except GatewayResponse as result:
+        return result.response
     await ensure_ready(record, service, request.app.state.engine)
     return starting_page()

@@ -80,10 +80,8 @@ spec:
               value: {{ .Values.reaper.idleGraceSeconds | quote }}
             - name: MANAGER_AUTH_MODE
               value: {{ .Values.auth.mode | quote }}
-            - name: MANAGER_DEV_SUB
-              value: {{ .Values.auth.devSub | quote }}
-            - name: MANAGER_DEV_EMAIL
-              value: {{ .Values.auth.devEmail | quote }}
+            - name: MANAGER_AUTH_TTL_HOURS
+              value: {{ .Values.auth.ttlHours | quote }}
             {{- with .Values.auth.jwtJwksUrl }}
             - name: MANAGER_JWT_JWKS_URL
               value: {{ . | quote }}

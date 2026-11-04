@@ -11,10 +11,10 @@ domain: opencode.example.com
 publicScheme: https
 publicPort: null
 
+# login: username-only login form (no password). jwt: identity from an external IdP token.
 auth:
-  mode: dev
-  devSub: dev-user
-  devEmail: dev@example.com
+  mode: login
+  ttlHours: 12
   jwtJwksUrl: ""
   jwtAudience: ""
   jwtSecret:

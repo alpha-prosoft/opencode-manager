@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router";
-import { Alert, Box, Button, Chip, Paper, Stack, Typography } from "@mui/material";
+import { Alert, Box, Button, Chip, FormControlLabel, Paper, Stack, Switch, Typography } from "@mui/material";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import { api, type Session } from "../api";
 import SessionActions from "../components/SessionActions";
 import StatusChip from "../components/StatusChip";
+import VisibilityChip from "../components/VisibilityChip";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -49,10 +50,27 @@ export default function SessionDetailPage() {
               <Typography variant="h5" sx={{ flexGrow: 1 }}>
                 {session.name}
               </Typography>
+              <VisibilityChip visibility={session.visibility} />
               <StatusChip status={session.status} />
               <SessionActions session={session} onChange={load} onError={setError} />
             </Box>
             {session.description && <Typography>{session.description}</Typography>}
+            {session.is_owner && (
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={session.visibility === "public"}
+                    onChange={(e) =>
+                      api
+                        .updateSession(session.id, { visibility: e.target.checked ? "public" : "private" })
+                        .then(setSession)
+                        .catch((error: Error) => setError(error.message))
+                    }
+                  />
+                }
+                label="Public: every logged-in user can see and open this session"
+              />
+            )}
             <Field label="ID">{session.id}</Field>
             <Field label="Owner">
               {session.email} ({session.sub})

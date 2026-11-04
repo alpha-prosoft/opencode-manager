@@ -4,7 +4,6 @@ import {
   Alert,
   Box,
   Button,
-  Chip,
   Link,
   Paper,
   Stack,
@@ -14,6 +13,8 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
@@ -21,11 +22,21 @@ import { api, type Session } from "../api";
 import CreateSessionDialog from "../components/CreateSessionDialog";
 import SessionActions from "../components/SessionActions";
 import StatusChip from "../components/StatusChip";
+import VisibilityChip from "../components/VisibilityChip";
 
 const REFRESH_MS = 5000;
 
+type Filter = "all" | "mine" | "public";
+
+const FILTERS: Record<Filter, (session: Session) => boolean> = {
+  all: () => true,
+  mine: (session) => session.is_owner,
+  public: (session) => session.visibility === "public",
+};
+
 export default function SessionsPage() {
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [filter, setFilter] = useState<Filter>("all");
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
 
@@ -45,10 +56,24 @@ export default function SessionsPage() {
     return () => clearInterval(timer);
   }, [load]);
 
+  const visible = sessions.filter(FILTERS[filter]);
+
   return (
     <Stack spacing={3}>
-      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <Typography variant="h5">Sessions</Typography>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
+        <Typography variant="h5" sx={{ flexGrow: 1 }}>
+          Sessions
+        </Typography>
+        <ToggleButtonGroup
+          size="small"
+          exclusive
+          value={filter}
+          onChange={(_, value: Filter | null) => value && setFilter(value)}
+        >
+          <ToggleButton value="all">All</ToggleButton>
+          <ToggleButton value="mine">Mine</ToggleButton>
+          <ToggleButton value="public">Public</ToggleButton>
+        </ToggleButtonGroup>
         <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreating(true)}>
           New session
         </Button>
@@ -61,21 +86,22 @@ export default function SessionsPage() {
           <TableHead>
             <TableRow>
               <TableCell>Name</TableCell>
+              <TableCell>Owner</TableCell>
+              <TableCell>Visibility</TableCell>
               <TableCell>Status</TableCell>
-              <TableCell>Labels</TableCell>
               <TableCell>Last activity</TableCell>
               <TableCell align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
-            {sessions.length === 0 && (
+            {visible.length === 0 && (
               <TableRow>
-                <TableCell colSpan={5} align="center" sx={{ py: 6, color: "text.secondary" }}>
-                  No sessions yet.
+                <TableCell colSpan={6} align="center" sx={{ py: 6, color: "text.secondary" }}>
+                  No sessions.
                 </TableCell>
               </TableRow>
             )}
-            {sessions.map((session) => (
+            {visible.map((session) => (
               <TableRow key={session.id} hover>
                 <TableCell>
                   <Link component={RouterLink} to={`/sessions/${session.id}`}>
@@ -87,15 +113,12 @@ export default function SessionsPage() {
                     </Typography>
                   )}
                 </TableCell>
+                <TableCell>{session.is_owner ? "you" : session.sub}</TableCell>
                 <TableCell>
-                  <StatusChip status={session.status} />
+                  <VisibilityChip visibility={session.visibility} />
                 </TableCell>
                 <TableCell>
-                  <Stack direction="row" spacing={0.5} useFlexGap sx={{ flexWrap: "wrap" }}>
-                    {Object.entries(session.labels).map(([key, value]) => (
-                      <Chip key={key} size="small" variant="outlined" label={`${key}=${value}`} />
-                    ))}
-                  </Stack>
+                  <StatusChip status={session.status} />
                 </TableCell>
                 <TableCell>{new Date(session.last_activity_at).toLocaleString()}</TableCell>
                 <TableCell align="right">
