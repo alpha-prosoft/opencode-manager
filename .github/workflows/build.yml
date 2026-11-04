@@ -90,7 +90,10 @@ jobs:
             echo "version=$(yq '.version' "$CHART_DIR/Chart.yaml")-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
             echo "app_version=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           fi
-      - run: helm dependency build "$CHART_DIR"
+      - run: |
+          helm repo add traefik https://traefik.github.io/charts
+          helm repo add temporal https://go.temporal.io/helm-charts
+          helm dependency build "$CHART_DIR"
       - run: helm lint "$CHART_DIR"
       - run: helm template ci "$CHART_DIR" > /dev/null
       - run: helm package "$CHART_DIR" --version ${{ steps.version.outputs.version }} --app-version ${{ steps.version.outputs.app_version }} --destination dist
