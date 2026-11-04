@@ -47,6 +47,14 @@ bitbucket:
     name: ""
     key: token
 
+# Each pull request session runs an OpenCode code review of the change.
+# guidelines maps a repository slug to its review baseline (markdown). Keep baselines that contain
+# internal knowledge out of Git: helm install ... --set-file review.guidelines.<repo>=<path>
+review:
+  enabled: true
+  model: opencode/deepseek-v4.1-flash-free
+  guidelines: {}
+
 # One volume shared by all sessions; each session uses the sessions/<id> subpath.
 # Session pods can land on any node, so this needs ReadWriteMany storage.
 sharedStorage:

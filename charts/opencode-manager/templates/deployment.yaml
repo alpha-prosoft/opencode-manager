@@ -95,6 +95,10 @@ spec:
             - name: MANAGER_BITBUCKET_BACKFILL
               value: {{ .Values.bitbucket.backfill | quote }}
             {{- end }}
+            - name: MANAGER_REVIEW_ENABLED
+              value: {{ .Values.review.enabled | quote }}
+            - name: MANAGER_REVIEW_MODEL
+              value: {{ .Values.review.model | quote }}
             - name: MANAGER_AUTH_MODE
               value: {{ .Values.auth.mode | quote }}
             - name: MANAGER_AUTH_TTL_HOURS
@@ -123,11 +127,18 @@ spec:
               mountPath: /data
             - name: shared
               mountPath: /shared
+            - name: review-guidelines
+              mountPath: /config/review
+              readOnly: true
           {{- with .Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
       volumes:
+        - name: review-guidelines
+          configMap:
+            name: {{ include "opencode-manager.fullname" . }}-review
+            optional: true
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "opencode-manager.fullname" . }}-data

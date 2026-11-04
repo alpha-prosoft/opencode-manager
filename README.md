@@ -32,19 +32,39 @@ SESSION_ENV='{"ANTHROPIC_API_KEY":"..."}' docker compose up -d
 
 Without keys, sessions can still use OpenCode's free models.
 
-### Bitbucket pull request sessions
+### Bitbucket pull request reviews
 
-The manager polls Bitbucket Cloud for new pull requests and creates a **public** session for each one. The session is owned by the `bitbucket` user and labelled with the repository, PR number, branch and commit. To enable it, give compose the token:
+The manager polls Bitbucket Cloud for new pull requests. For each one it creates a **public** session, owned by the `bitbucket` user, that runs an OpenCode code review of the change.
 
-```bash
-docker compose --env-file /path/to/secrets.env up -d   # provides BITBUCKET_TOKEN
+Environment-specific settings live in the gitignored `local/` directory:
+
+```
+local/manager.env        # MANAGER_BITBUCKET_WORKSPACE=..., MANAGER_BITBUCKET_REPOS=["<repo>"]
+local/review/<repo>.md   # review baseline for <repo> (mounted read-only at /config/review)
 ```
 
-`--env-file` only feeds variable substitution, so only `BITBUCKET_TOKEN` reaches the manager. The defaults are workspace `example-workspace`, repos `["example-repo"]`, and a 15-minute interval. Override them with `BITBUCKET_WORKSPACE`, `BITBUCKET_REPOS` (JSON list) and `BITBUCKET_POLL_MINUTES`.
+Pass the token through an env file that defines `BITBUCKET_TOKEN`:
 
-The Temporal schedule `poll-bitbucket` runs `PollPullRequestsWorkflow`. It starts one `PullRequestSessionWorkflow` (ID `pr-session-<repo>-<id>`) per new PR.
+```bash
+docker compose --env-file /path/to/secrets.env up -d
+```
 
-The first poll records the PRs that are already open as a baseline and creates no sessions for them; set `BITBUCKET_BACKFILL=true` to change that. Seen PRs are stored in the manager database, so a PR gets at most one session, even across restarts. To trigger a poll right away:
+`--env-file` only feeds variable substitution, so only `BITBUCKET_TOKEN` reaches the manager.
+
+How it runs:
+1. The Temporal schedule `poll-bitbucket` (every `MANAGER_BITBUCKET_POLL_MINUTES`, default 15) runs `PollPullRequestsWorkflow`.
+2. That workflow starts one `PullRequestSessionWorkflow` (ID `pr-session-<repo>-<id>`) per new PR, as abandoned children, so reviews run in parallel.
+3. Each `PullRequestSessionWorkflow`:
+   - creates the session;
+   - shallow-clones the PR branch into the workspace (the token is removed from the git remote afterwards);
+   - writes `.review/pr.diff`, `.review/pull-request.md` and `.review/guidelines.md` (the repo's baseline, or a generic default);
+   - starts the container and prompts OpenCode with `MANAGER_REVIEW_MODEL` (default: a free OpenCode model);
+   - waits until the review finishes, then saves it to `.review/review.md` and labels the session `review=done`.
+
+   Opening the session shows the review conversation.
+4. If a free model's quota is exhausted, the workflow fails fast with a clear error instead of waiting.
+
+The first poll records the PRs that are already open as a baseline and creates no sessions for them; set `MANAGER_BITBUCKET_BACKFILL=true` to change that. Seen PRs are stored in the manager database, so a PR gets at most one session, even across restarts. To trigger a poll right away:
 
 ```bash
 docker compose exec temporal temporal schedule trigger --schedule-id poll-bitbucket
@@ -70,8 +90,9 @@ To use an existing Gateway or Temporal, set `traefik.enabled=false` / `temporal.
 Put provider API keys in a Secret whose `session-env.json` key holds a JSON
 object, and set `session.envSecret.name`.
 
-For pull request sessions, create a Secret with the token and set
-`bitbucket.tokenSecret.name`, `bitbucket.workspace` and `bitbucket.repos`.
+For pull request reviews, create a Secret with the token and set
+`bitbucket.tokenSecret.name`, `bitbucket.workspace` and `bitbucket.repos`. Provide review baselines
+without committing them: `--set-file review.guidelines.<repo>=local/review/<repo>.md`.
 
 The shared session volume (`sharedStorage`) needs `ReadWriteMany` when session pods can land on different nodes.
 

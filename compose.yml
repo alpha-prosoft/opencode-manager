@@ -48,11 +48,11 @@ services:
       MANAGER_REAP_INTERVAL_SECONDS: ${MANAGER_REAP_INTERVAL_SECONDS:-300}
       MANAGER_IDLE_GRACE_SECONDS: ${MANAGER_IDLE_GRACE_SECONDS:-300}
       MANAGER_BITBUCKET_TOKEN: ${BITBUCKET_TOKEN:-}
-      MANAGER_BITBUCKET_WORKSPACE: ${BITBUCKET_WORKSPACE:-example-workspace}
-      MANAGER_BITBUCKET_REPOS: '${BITBUCKET_REPOS:-["example-repo"]}'
-      MANAGER_BITBUCKET_POLL_MINUTES: ${BITBUCKET_POLL_MINUTES:-15}
-      MANAGER_BITBUCKET_BACKFILL: ${BITBUCKET_BACKFILL:-false}
+    env_file:
+      - path: ./local/manager.env
+        required: false
     volumes:
+      - ./local/review:/config/review:ro
       - /var/run/docker.sock:/var/run/docker.sock
       - traefik-dynamic:/traefik/dynamic
       - manager-data:/data

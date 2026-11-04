@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     bitbucket_session_owner: str = "bitbucket"
     bitbucket_backfill: bool = False
 
+    review_enabled: bool = True
+    review_model: str = "opencode/deepseek-v4.1-flash-free"
+    review_guidelines_dir: str = "/config/review"
+
     docker_network: str = "opencode-net"
     docker_shared_volume: str = "opencode-shared"
 

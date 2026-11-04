@@ -86,7 +86,7 @@ def enter_session(
     record = service.get(session_id)
     if record is None or record.sub != sub or not service.can_view(record, identity):
         return Response(status_code=status.HTTP_404_NOT_FOUND)
-    target = f"{service.session_url(record)}/?{HANDOFF_PARAM}={handoff_token(identity, record.id)}"
+    target = f"{service.session_url(record)}{service.open_path(record)}?{HANDOFF_PARAM}={handoff_token(identity, record.id)}"
     return RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)
 
 

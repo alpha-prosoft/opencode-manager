@@ -1,8 +1,13 @@
+import time
+
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 from ..config import Settings
 from ..pull_requests import PullRequestSessions
+from ..review import PullRequestReviews, ReviewQuotaExceeded
+
+REVIEW_POLL_SECONDS = 10
 from ..sessions import SessionService
 
 
@@ -65,3 +70,46 @@ class PullRequestActivities:
 
     def all(self) -> list:
         return [self.bitbucket_repositories, self.list_new_pull_requests, self.ensure_pull_request_session]
+
+
+class ReviewActivities:
+    def __init__(self, settings: Settings, reviews: PullRequestReviews):
+        self.settings = settings
+        self.reviews = reviews
+
+    @activity.defn(name="review_enabled")
+    def review_enabled(self) -> bool:
+        return self.settings.review_enabled
+
+    @activity.defn(name="prepare_review_workspace")
+    def prepare_review_workspace(self, session_id: str, pull_request: dict) -> None:
+        self.reviews.prepare_workspace(session_id, pull_request)
+
+    @activity.defn(name="start_review")
+    def start_review(self, session_id: str, pull_request: dict) -> str:
+        return self.reviews.start(session_id, pull_request)
+
+    @activity.defn(name="wait_for_review")
+    def wait_for_review(self, session_id: str, conversation: str) -> str:
+        while True:
+            try:
+                review = self.reviews.result(session_id, conversation)
+            except ReviewQuotaExceeded as error:
+                raise ApplicationError(str(error), non_retryable=True) from error
+            if review is not None:
+                return review
+            activity.heartbeat()
+            time.sleep(REVIEW_POLL_SECONDS)
+
+    @activity.defn(name="save_review")
+    def save_review(self, session_id: str, review: str) -> None:
+        self.reviews.save(session_id, review)
+
+    def all(self) -> list:
+        return [
+            self.review_enabled,
+            self.prepare_review_workspace,
+            self.start_review,
+            self.wait_for_review,
+            self.save_review,
+        ]

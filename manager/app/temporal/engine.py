@@ -20,7 +20,8 @@ from temporalio.worker import Worker
 from ..config import Settings
 from ..pull_requests import PullRequestSessions
 from ..sessions import SessionService
-from .activities import PullRequestActivities, SessionActivities
+from ..review import PullRequestReviews
+from .activities import PullRequestActivities, ReviewActivities, SessionActivities
 from .workflows import (
     PollPullRequestsWorkflow,
     PullRequestSessionWorkflow,
@@ -65,6 +66,7 @@ class TemporalEngine:
             activities=[
                 *SessionActivities(service).all(),
                 *PullRequestActivities(settings, PullRequestSessions(settings, service)).all(),
+                *ReviewActivities(settings, PullRequestReviews(settings, service)).all(),
             ],
             activity_executor=self._executor,
         )

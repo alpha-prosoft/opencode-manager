@@ -3,6 +3,7 @@ from datetime import timedelta
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
+from temporalio.workflow import ParentClosePolicy
 from temporalio.exceptions import ActivityError, WorkflowAlreadyStartedError
 
 QUICK = {"start_to_close_timeout": timedelta(minutes=1)}
@@ -13,6 +14,11 @@ START = {
 BITBUCKET = {
     "start_to_close_timeout": timedelta(minutes=2),
     "retry_policy": RetryPolicy(initial_interval=timedelta(seconds=10), maximum_attempts=3),
+}
+REVIEW_WAIT = {
+    "start_to_close_timeout": timedelta(minutes=45),
+    "heartbeat_timeout": timedelta(minutes=1),
+    "retry_policy": RetryPolicy(maximum_attempts=3),
 }
 WAIT_READY = {
     "start_to_close_timeout": timedelta(seconds=10),
@@ -44,7 +50,16 @@ class ReapSessionsWorkflow:
 class PullRequestSessionWorkflow:
     @workflow.run
     async def run(self, pull_request: dict) -> str:
-        return await workflow.execute_activity("ensure_pull_request_session", pull_request, **QUICK)
+        session_id: str = await workflow.execute_activity("ensure_pull_request_session", pull_request, **QUICK)
+        if not await workflow.execute_activity("review_enabled", **QUICK):
+            return session_id
+        await workflow.execute_activity("prepare_review_workspace", args=[session_id, pull_request], **BITBUCKET)
+        await workflow.execute_activity("start_session", session_id, **START)
+        await workflow.execute_activity("check_ready", session_id, **WAIT_READY)
+        conversation: str = await workflow.execute_activity("start_review", args=[session_id, pull_request], **QUICK)
+        review: str = await workflow.execute_activity("wait_for_review", args=[session_id, conversation], **REVIEW_WAIT)
+        await workflow.execute_activity("save_review", args=[session_id, review], **QUICK)
+        return session_id
 
 
 @workflow.defn
@@ -52,7 +67,7 @@ class PollPullRequestsWorkflow:
     @workflow.run
     async def run(self) -> list[str]:
         repos: list[str] = await workflow.execute_activity("bitbucket_repositories", **QUICK)
-        created = []
+        started = []
         for repo in repos:
             try:
                 pull_requests: list[dict] = await workflow.execute_activity("list_new_pull_requests", repo, **BITBUCKET)
@@ -60,13 +75,15 @@ class PollPullRequestsWorkflow:
                 workflow.logger.warning("Listing pull requests in %s failed: %s", repo, error)
                 continue
             for pull_request in pull_requests:
+                workflow_id = f"pr-session-{repo}-{pull_request['id']}"
                 try:
-                    session_id = await workflow.execute_child_workflow(
+                    await workflow.start_child_workflow(
                         PullRequestSessionWorkflow.run,
                         pull_request,
-                        id=f"pr-session-{repo}-{pull_request['id']}",
+                        id=workflow_id,
+                        parent_close_policy=ParentClosePolicy.ABANDON,
                     )
                 except WorkflowAlreadyStartedError:
                     continue
-                created.append(session_id)
-        return created
+                started.append(workflow_id)
+        return started

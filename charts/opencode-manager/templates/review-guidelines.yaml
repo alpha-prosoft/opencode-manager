@@ -1,0 +1,13 @@
+{{- with .Values.review.guidelines }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "opencode-manager.fullname" $ }}-review
+  labels:
+    {{- include "opencode-manager.labels" $ | nindent 4 }}
+data:
+  {{- range $repo, $content := . }}
+  {{ $repo }}.md: |
+    {{- $content | nindent 4 }}
+  {{- end }}
+{{- end }}

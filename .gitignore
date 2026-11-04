@@ -1,3 +1,6 @@
 __pycache__/
 *.pyc
 .env
+
+# Environment-specific config (private review baselines, local .env)
+/local/

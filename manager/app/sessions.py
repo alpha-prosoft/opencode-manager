@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from urllib.parse import quote
 
 from . import opencode
+from .backends.base import WORKSPACE_DIR
 from .backends import ContainerBackend
 from .config import Settings
 from .models import Identity, Session, SessionCreate, SessionRecord, SessionStatus, SessionUpdate, Visibility
@@ -17,6 +18,7 @@ from .store import SessionStore
 log = logging.getLogger(__name__)
 
 ACTIVE = {SessionStatus.RUNNING, SessionStatus.STARTING}
+REVIEW_CONVERSATION_LABEL = "review-conversation"
 TOUCH_THROTTLE_SECONDS = 30
 
 
@@ -40,6 +42,9 @@ class SessionService:
 
     def session_url(self, record: SessionRecord) -> str:
         return self.settings.public_url(self.settings.session_host(record.id))
+
+    def open_path(self, record: SessionRecord) -> str:
+        return opencode.web_path(WORKSPACE_DIR, record.labels.get(REVIEW_CONVERSATION_LABEL))
 
     def entry_path(self, record: SessionRecord) -> str:
         return f"/sessions/{quote(record.sub, safe='')}/{record.id}"
