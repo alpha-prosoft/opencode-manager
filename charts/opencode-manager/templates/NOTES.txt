@@ -1,0 +1,6 @@
+{{- $port := ternary (printf ":%v" .Values.publicPort) "" (not (empty .Values.publicPort)) -}}
+Manager UI:  {{ .Values.publicScheme }}://{{ .Values.domain }}{{ $port }}
+Sessions:    {{ .Values.publicScheme }}://<sessionId>.{{ .Values.domain }}{{ $port }}
+
+Point DNS for both {{ .Values.domain }} and *.{{ .Values.domain }} at the gateway "{{ .Values.gateway.name }}".
+Gateway API CRDs must be installed in the cluster before this chart.

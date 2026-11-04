@@ -1,0 +1,122 @@
+image:
+  repository: ghcr.io/alpha-prosoft/opencode-manager
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# Manager UI is served on `domain`; every session on `<sessionId>.<domain>`.
+# Point both `domain` and `*.domain` DNS records at the gateway.
+domain: opencode.example.com
+publicScheme: https
+publicPort: null
+
+auth:
+  mode: dev
+  devSub: dev-user
+  devEmail: dev@example.com
+  jwtJwksUrl: ""
+  jwtAudience: ""
+  jwtSecret:
+    existingSecret: ""
+    key: jwt-secret
+
+openwebui:
+  image: ghcr.io/open-webui/open-webui:main
+  env: {}
+
+reaper:
+  intervalSeconds: 300
+  idleGraceSeconds: 300
+
+# One volume shared by all sessions (sessions/<id> subpaths plus a shared model cache).
+# Session pods can land on any node, so this needs ReadWriteMany storage.
+sharedStorage:
+  size: 50Gi
+  storageClassName: ""
+  accessModes: [ReadWriteMany]
+
+managerStorage:
+  size: 1Gi
+  storageClassName: ""
+
+gateway:
+  name: traefik-gateway
+  namespace: ""
+  sectionName: web
+
+temporalConnection:
+  address: temporal-frontend:7233
+  namespace: default
+
+temporalPostgres:
+  enabled: true
+  serviceName: temporal-postgres
+  image: postgres:18.6-alpine
+  user: temporal
+  password: temporal
+  storage:
+    size: 8Gi
+    storageClassName: ""
+
+resources: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+traefik:
+  enabled: true
+  providers:
+    kubernetesGateway:
+      enabled: true
+  gateway:
+    enabled: true
+    name: traefik-gateway
+
+temporal:
+  enabled: true
+  fullnameOverride: temporal
+  schema:
+    useHelmHooks: false
+  server:
+    config:
+      persistence:
+        datastores:
+          default:
+            sql:
+              pluginName: postgres12
+              driverName: postgres12
+              databaseName: temporal
+              connectAddr: temporal-postgres:5432
+              connectProtocol: tcp
+              user: temporal
+              existingSecret: temporal-postgres
+              secretKey: password
+              createDatabase: true
+              manageSchema: true
+              defaultDb: postgres
+              maxConns: 20
+              maxIdleConns: 20
+              maxConnLifetime: 1h
+          visibility:
+            sql:
+              pluginName: postgres12
+              driverName: postgres12
+              databaseName: temporal_visibility
+              connectAddr: temporal-postgres:5432
+              connectProtocol: tcp
+              user: temporal
+              existingSecret: temporal-postgres
+              secretKey: password
+              createDatabase: true
+              manageSchema: true
+              defaultDb: postgres
+              maxConns: 20
+              maxIdleConns: 20
+              maxConnLifetime: 1h
+      namespaces:
+        create: true
+        useHelmHooks: false
+        namespace:
+          - name: default
+            retention: 3d
