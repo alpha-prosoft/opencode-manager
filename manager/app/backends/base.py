@@ -1,3 +1,4 @@
+import json
 from abc import ABC, abstractmethod
 
 from ..config import Settings
@@ -22,6 +23,7 @@ class ContainerBackend(ABC):
     def instance_env(self, record: SessionRecord) -> dict[str, str]:
         return {
             **self.settings.session_env,
+            "OPENCODE_CONFIG_CONTENT": json.dumps(self.settings.session_opencode_config),
             **record.env,
             "HOME": HOME_DIR,
             "OPENCODE_SERVER_PASSWORD": record.secret_key,

@@ -1,3 +1,4 @@
+import json
 import logging
 
 from . import bitbucket
@@ -43,6 +44,7 @@ class PullRequestSessions:
             name=f"{pr['repo']} #{pr['id']}: {pr['title']}"[:100],
             description=f"{pr['author']}: {pr['source_branch']} → {pr['destination_branch']}\n{pr['url']}",
             visibility=Visibility.PUBLIC,
+            env={"OPENCODE_CONFIG_CONTENT": json.dumps(self.settings.review_opencode_config)},
             labels={
                 "source": "bitbucket",
                 "repository": full_name,

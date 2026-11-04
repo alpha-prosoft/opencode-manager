@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     session_image: str = "ghcr.io/anomalyco/opencode:1.19.5"
     session_port: int = 4096
     session_env: dict[str, str] = {}
+    session_opencode_config: dict = {"permission": {"external_directory": "allow"}}
 
     shared_mount_path: str = "/shared"
 
@@ -57,6 +58,17 @@ class Settings(BaseSettings):
     review_enabled: bool = True
     review_model: str = "opencode/deepseek-v4.1-flash-free"
     review_guidelines_dir: str = "/config/review"
+    review_opencode_config: dict = {
+        "permission": {
+            "read": "allow",
+            "edit": "allow",
+            "bash": "allow",
+            "external_directory": "allow",
+            "webfetch": "allow",
+            "doom_loop": "allow",
+            "question": "deny",
+        }
+    }
 
     docker_network: str = "opencode-net"
     docker_shared_volume: str = "opencode-shared"
