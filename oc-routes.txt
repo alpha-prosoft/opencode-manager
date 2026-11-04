@@ -1,4 +1,0 @@
-bundle /assets/index-pLP2E0sC.js 2737137
-path:\s*"[^"]*" ['path:""', 'path:"."', 'path:".gitignore"', 'path:"/"', 'path:"/:dir"', 'path:"/:dir/session/:id"', 'path:"/api/agent"', 'path:"/api/command"', 'path:"/api/debug/location"', 'path:"/api/event"', 'path:"/api/experimental/integration/wellknown"', 'path:"/api/form/request"', 'path:"/api/fs/find"', 'path:"/api/fs/list"', 'path:"/api/generate"', 'path:"/api/health"', 'path:"/api/integration"', 'path:"/api/location"', 'path:"/api/mcp"', 'path:"/api/mcp/resource"', 'path:"/api/model"', 'path:"/api/model/default"', 'path:"/api/permission/request"', 'path:"/api/permission/saved"', 'path:"/api/plugin"']
-"/:dir[^"]*" ['"/:dir"', '"/:dir/session/:id"']
-base64[A-Za-z]*\( []
