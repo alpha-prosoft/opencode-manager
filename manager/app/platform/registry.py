@@ -2,6 +2,7 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from pydantic import ValidationError
 
@@ -86,6 +87,12 @@ class PlatformRegistry:
             ).fetchone()
         return row["role"] if row else None
 
+    def secret_host_allowed(self, secret: str, url: str, platform: PlatformSpec | None = None) -> bool:
+        host = urlsplit(url).hostname or ""
+        if urlsplit(url).scheme == "file":
+            return True
+        return host in (platform or self.platform()).secret_hosts.get(secret, [])
+
     def is_platform_admin(self, username: str) -> bool:
         return username in self.platform().admins
 
@@ -136,9 +143,15 @@ class PlatformRegistry:
             token = self.secrets.get(self.settings.onboarding_credentials) if self.settings.onboarding_credentials else None
             target = self.repos_dir / "onboarding"
             commit = git.checkout(
-                self.settings.onboarding_url, self.settings.onboarding_branch, target, self.settings.onboarding_username, token
+                self.settings.onboarding_url,
+                self.settings.onboarding_branch,
+                target,
+                self.settings.onboarding_username,
+                token,
+                local_roots=self.settings.local_repo_roots,
             )
             raw = json.loads((target / self.settings.onboarding_file).read_text())
+            raw.pop("$schema", None)
             platform = PlatformSpec.model_validate(raw)
         except (git.GitError, OSError, ValueError, ValidationError) as error:
             message = "; ".join(_errors(error)) if isinstance(error, ValidationError) else str(error)
@@ -164,9 +177,18 @@ class PlatformRegistry:
     def _sync_team(self, platform: PlatformSpec, team: TeamEntry) -> dict:
         commit, error, definitions = None, None, []
         try:
-            token = self.secrets.get(team.repository.credentials) if team.repository.credentials else None
+            token = None
+            if team.repository.credentials:
+                if not self.secret_host_allowed(team.repository.credentials, team.repository.url, platform):
+                    raise git.GitError(f"secret {team.repository.credentials} may not be sent to {team.repository.url}")
+                token = self.secrets.get(team.repository.credentials)
             commit = git.checkout(
-                team.repository.url, team.repository.branch, self.repos_dir / "teams" / team.id, team.repository.username, token
+                team.repository.url,
+                team.repository.branch,
+                self.repos_dir / "teams" / team.id,
+                team.repository.username,
+                token,
+                local_roots=self.settings.local_repo_roots,
             )
             definitions = self._load_definitions(platform, team)
         except (git.GitError, OSError) as failure:
@@ -205,7 +227,9 @@ class PlatformRegistry:
             for path in sorted((base / kind).glob("*.json")) if (base / kind).is_dir() else []:
                 def_id, source = path.stem, f"{team.repository.path}/{kind}/{path.name}"
                 try:
-                    spec = model.model_validate(json.loads(path.read_text()))
+                    raw = json.loads(path.read_text())
+                    raw.pop("$schema", None)
+                    spec = model.model_validate(raw)
                     loaded[kind][def_id] = Definition(team.id, kind, def_id, source, spec.model_dump(mode="json"), [])
                 except json.JSONDecodeError as error:
                     loaded[kind][def_id] = Definition(team.id, kind, def_id, source, None, [f"invalid JSON: {error}"])
@@ -222,7 +246,7 @@ class PlatformRegistry:
                 harness.errors += self._check_harness(platform, team, HarnessSpec.model_validate(harness.spec))
         for workflow in loaded["workflows"].values():
             if workflow.valid:
-                workflow.errors += self._check_workflow(team, base, loaded, WorkflowSpec.model_validate(workflow.spec))
+                workflow.errors += self._check_workflow(platform, team, base, loaded, WorkflowSpec.model_validate(workflow.spec))
         return [d for group in loaded.values() for d in group.values()]
 
     def _check_harness(self, platform: PlatformSpec, team: TeamEntry, harness: HarnessSpec) -> list[str]:
@@ -240,7 +264,7 @@ class PlatformRegistry:
                 errors.append(f"models {unknown} are not offered by connection {connection.id}")
         return errors
 
-    def _check_workflow(self, team: TeamEntry, base: Path, loaded: dict, workflow: WorkflowSpec) -> list[str]:
+    def _check_workflow(self, platform: PlatformSpec, team: TeamEntry, base: Path, loaded: dict, workflow: WorkflowSpec) -> list[str]:
         errors = []
         activity = CATALOG.get(workflow.activity)
         if activity is None:
@@ -258,6 +282,17 @@ class PlatformRegistry:
             relative = getattr(options, name, None)
             if relative and not _inside(base, relative):
                 errors.append(f"options.{name}: {relative} not found in the team definitions")
+        repository = getattr(options, "repository", None)
+        if repository:
+            try:
+                git.check_url(repository.url, self.settings.local_repo_roots)
+            except git.GitError as error:
+                errors.append(f"options.repository.url: {error}")
+            if repository.credentials and not self.secret_host_allowed(repository.credentials, repository.url, platform):
+                errors.append(
+                    f"options.repository: secret {repository.credentials} may not be sent to "
+                    f"{urlsplit(repository.url).hostname} (see secret_hosts in the onboarding repository)"
+                )
         used_secrets = {s for s in (_credentials(options), _trigger_credentials(workflow)) if s}
         for secret in used_secrets - set(team.secrets):
             errors.append(f"secret {secret} is not granted to team {team.id} in the onboarding repository")

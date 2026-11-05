@@ -21,56 +21,35 @@ auth:
     existingSecret: ""
     key: jwt-secret
 
-session:
-  image: ghcr.io/anomalyco/opencode:1.19.5
-  # Environment for every session, e.g. provider API keys. Prefer envSecret for credentials:
-  # a Secret whose `key` holds a JSON object of environment variables.
-  env: {}
-  envSecret:
-    name: ""
-    key: session-env.json
+# Onboarding repository: platform.json lists teams and their repositories (see the README).
+onboarding:
+  url: ""
+  branch: main
+  file: platform.json
+  # Name of a platform secret (a key of platformSecrets.existingSecret) holding a token for https URLs.
+  credentials: ""
+  username: x-token-auth
+  syncIntervalMinutes: 10
+
+# Kubernetes Secret whose keys are platform secret names (e.g. COPILOT_TOKEN, BITBUCKET_TOKEN).
+# Mounted read-only into the manager; never into session pods.
+platformSecrets:
+  existingSecret: ""
+
+# Default image for sessions; onboarding's allowed_images may permit others.
+sessionImage: ghcr.io/anomalyco/opencode:1.19.5
 
 reaper:
   intervalSeconds: 300
-  idleGraceSeconds: 300
 
-# Polls Bitbucket Cloud for new pull requests and creates a public session per PR.
-# Enabled when tokenSecret.name, workspace and repos are set. PRs already open on the
-# first poll are recorded as a baseline unless backfill is true.
-bitbucket:
-  workspace: ""
-  repos: []
-  pollMinutes: 15
-  sessionOwner: bitbucket
-  backfill: false
-  tokenSecret:
-    name: ""
-    key: token
-
-# Each pull request session runs an OpenCode code review of the change.
-# guidelines maps a repository slug to its review baseline (markdown). Keep baselines that contain
-# internal knowledge out of Git: helm install ... --set-file review.guidelines.<repo>=<path>
-review:
+# NetworkPolicies isolating session pods: only the manager (LLM gateway, result tools) and the gateway
+# reach them, and they reach only the manager unless their harness sets network: internet.
+networkPolicies:
   enabled: true
-  # Tried in order; when a model's quota is exhausted the review moves on to the next one.
-  models:
-    - github-copilot/claude-sonnet-5.5
-    - opencode/deepseek-v4.1-flash-free
-    - opencode/glm-5.3-flash-free
-    - opencode/mimo-v2.6-flash-free
-    - opencode/nemotron-3.5-lightning-free
-  # off: keep reviews in the session; dry-run: also write .review/post-plan.json; auto: post to the PR.
-  postMode: dry-run
-  # Upper bound on comments per PR (one summary plus inline comments); the rest is folded into the summary.
-  maxComments: 30
-  # OpenCode auth.json content (JSON object keyed by provider, e.g. github-copilot oauth or an
-  # anthropic api key). Written into a review session only while its review runs.
-  modelAuthSecret:
-    name: ""
-    key: auth.json
-  # opencode.json "provider" section for review sessions (base URLs, extra models). No secrets here.
-  providerConfig: {}
-  guidelines: {}
+  ingressFrom:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: traefik
 
 # One volume shared by all sessions; each session uses the sessions/<id> subpath.
 # Session pods can land on any node, so this needs ReadWriteMany storage.
@@ -103,6 +82,9 @@ temporalPostgres:
     storageClassName: ""
 
 resources: {}
+# Extra volumes for the manager pod, e.g. a CA bundle or a read-only Git mirror.
+extraVolumes: []
+extraVolumeMounts: []
 nodeSelector: {}
 tolerations: []
 affinity: {}

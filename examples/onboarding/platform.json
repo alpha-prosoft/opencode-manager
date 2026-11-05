@@ -19,6 +19,11 @@
       ]
     }
   ],
+  "secret_hosts": {
+    "GITHUB_TOKEN": [
+      "github.com"
+    ]
+  },
   "teams": [
     {
       "id": "demo",
@@ -35,7 +40,10 @@
       "admins": [
         "alice"
       ],
-      "secrets": []
+      "secrets": [],
+      "budget": {
+        "daily_tokens": 5000000
+      }
     }
   ]
 }

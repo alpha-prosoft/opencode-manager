@@ -124,7 +124,7 @@ export default function RunPage() {
                 </TableCell>
               </TableRow>
             )}
-            {Object.entries(run.inputs).map(([key, value]) => (
+            {Object.entries(run.inputs).filter(([, value]) => value !== null && value !== "").map(([key, value]) => (
               <TableRow key={key}>
                 <TableCell sx={{ color: "text.secondary" }}>{key}</TableCell>
                 <TableCell sx={{ whiteSpace: "pre-wrap" }}>{String(value ?? "")}</TableCell>

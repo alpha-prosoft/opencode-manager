@@ -45,6 +45,10 @@ class LlmConnection(Strict):
         raise ValueError(f"LLM connection {self.id} needs base_url")
 
 
+class TeamBudget(Strict):
+    daily_tokens: int | None = Field(default=None, ge=1000, description="Prompt + completion tokens per UTC day")
+
+
 class TeamEntry(Strict):
     id: Identifier
     name: str
@@ -53,6 +57,7 @@ class TeamEntry(Strict):
     members: list[Username] = []
     admins: list[Username] = []
     secrets: list[SecretName] = Field(default=[], description="Platform secrets this team's workflows may use")
+    budget: TeamBudget = TeamBudget()
 
 
 class PlatformSpec(Strict):
@@ -62,6 +67,9 @@ class PlatformSpec(Strict):
     admins: list[Username] = []
     allowed_images: list[str] = ["ghcr.io/anomalyco/opencode:1.19.5"]
     llm_connections: list[LlmConnection] = []
+    secret_hosts: dict[SecretName, list[str]] = Field(
+        default={}, description="Hosts each secret may be sent to when used for Git checkouts"
+    )
     teams: list[TeamEntry] = []
 
     @model_validator(mode="after")

@@ -57,6 +57,7 @@ class ReapSessionsWorkflow:
 class RunWorkflow:
     def __init__(self) -> None:
         self.submission: dict | None = None
+        self.unavailable: list[str] = []
 
     @workflow.signal(name="submit")
     def submit(self, submission: dict) -> None:
@@ -85,6 +86,7 @@ class RunWorkflow:
                 if not isinstance(error.cause, ApplicationError) or error.cause.type != MODEL_UNAVAILABLE:
                     raise
                 workflow.logger.warning("Model %s unavailable: %s", model, error.cause.message)
+                self.unavailable.append(f"{model}: {error.cause.message}")
                 if conversation:
                     await workflow.execute_activity("run_abort", args=[run_id, conversation], **QUICK)
                 continue
@@ -106,7 +108,8 @@ class RunWorkflow:
             else:
                 model = await self._converse(run_id, info["models"])
                 if self.submission is None:
-                    raise ApplicationError("The agent finished without submitting a result", non_retryable=True)
+                    reason = "; ".join(self.unavailable) or "the agent finished without submitting a result"
+                    raise ApplicationError(f"No result: {reason}", non_retryable=True)
                 await workflow.execute_activity("run_finalize", args=[run_id, self.submission["payload"]], **SLOW)
         except (ActivityError, ApplicationError) as error:
             cause = error.cause if isinstance(error, ActivityError) and error.cause else error

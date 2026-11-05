@@ -20,6 +20,7 @@ class PullRequest:
 
 class Provider:
     git_username = "x-token-auth"
+    git_host = ""
 
     def __init__(self, token: str):
         self.token = token
@@ -33,6 +34,7 @@ class Provider:
 class Bitbucket(Provider):
     api = "https://api.bitbucket.org/2.0"
     git_username = "x-bitbucket-api-token-auth"
+    git_host = "bitbucket.org"
 
     def _client(self) -> httpx.Client:
         return httpx.Client(base_url=self.api, headers={"Authorization": f"Bearer {self.token}"}, timeout=60, follow_redirects=True)
@@ -86,6 +88,7 @@ class Bitbucket(Provider):
 class GitHub(Provider):
     api = "https://api.github.com"
     git_username = "x-access-token"
+    git_host = "github.com"
 
     def _client(self, accept: str = "application/vnd.github+json") -> httpx.Client:
         headers = {"Authorization": f"Bearer {self.token}", "Accept": accept, "X-GitHub-Api-Version": "2022-11-28"}

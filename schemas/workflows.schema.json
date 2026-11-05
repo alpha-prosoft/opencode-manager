@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "ManualTrigger": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "manual",
+          "default": "manual",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "title": "ManualTrigger",
+      "type": "object"
+    },
+    "PullRequestTrigger": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "pull_request",
+          "title": "Type",
+          "type": "string"
+        },
+        "provider": {
+          "enum": [
+            "bitbucket",
+            "github"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "repository": {
+          "description": "workspace/repo or owner/repo",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+          "title": "Repository",
+          "type": "string"
+        },
+        "credentials": {
+          "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+          "title": "Credentials",
+          "type": "string"
+        },
+        "target_branches": {
+          "default": [],
+          "description": "Only PRs into these branches (empty = all)",
+          "items": {
+            "type": "string"
+          },
+          "title": "Target Branches",
+          "type": "array"
+        },
+        "poll_minutes": {
+          "default": 15,
+          "maximum": 1440,
+          "minimum": 1,
+          "title": "Poll Minutes",
+          "type": "integer"
+        },
+        "backfill": {
+          "default": false,
+          "description": "Also run for PRs already open when the trigger is first seen",
+          "title": "Backfill",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "provider",
+        "repository",
+        "credentials"
+      ],
+      "title": "PullRequestTrigger",
+      "type": "object"
+    },
+    "ScheduleTrigger": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "schedule",
+          "title": "Type",
+          "type": "string"
+        },
+        "every_minutes": {
+          "maximum": 10080,
+          "minimum": 5,
+          "title": "Every Minutes",
+          "type": "integer"
+        },
+        "inputs": {
+          "additionalProperties": true,
+          "default": {},
+          "title": "Inputs",
+          "type": "object"
+        }
+      },
+      "required": [
+        "type",
+        "every_minutes"
+      ],
+      "title": "ScheduleTrigger",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": ".platform/workflows/<id>.json \u2014 a trigger wired to a marketplace activity.",
+  "properties": {
+    "name": {
+      "title": "Name",
+      "type": "string"
+    },
+    "description": {
+      "default": "",
+      "title": "Description",
+      "type": "string"
+    },
+    "activity": {
+      "description": "Marketplace activity id",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+      "title": "Activity",
+      "type": "string"
+    },
+    "agent": {
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+      "title": "Agent",
+      "type": "string"
+    },
+    "harness": {
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+      "title": "Harness",
+      "type": "string"
+    },
+    "trigger": {
+      "default": {
+        "type": "manual"
+      },
+      "discriminator": {
+        "mapping": {
+          "manual": "#/$defs/ManualTrigger",
+          "pull_request": "#/$defs/PullRequestTrigger",
+          "schedule": "#/$defs/ScheduleTrigger"
+        },
+        "propertyName": "type"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ManualTrigger"
+        },
+        {
+          "$ref": "#/$defs/ScheduleTrigger"
+        },
+        {
+          "$ref": "#/$defs/PullRequestTrigger"
+        }
+      ],
+      "title": "Trigger"
+    },
+    "options": {
+      "additionalProperties": true,
+      "default": {},
+      "title": "Options",
+      "type": "object"
+    },
+    "visibility": {
+      "default": "team",
+      "enum": [
+        "team",
+        "public"
+      ],
+      "title": "Visibility",
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "activity",
+    "agent",
+    "harness"
+  ],
+  "title": "WorkflowSpec",
+  "type": "object"
+}

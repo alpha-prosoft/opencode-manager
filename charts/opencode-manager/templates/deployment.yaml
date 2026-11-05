@@ -64,56 +64,27 @@ spec:
             - name: MANAGER_TEMPORAL_NAMESPACE
               value: {{ .Values.temporalConnection.namespace | quote }}
             - name: MANAGER_SESSION_IMAGE
-              value: {{ .Values.session.image | quote }}
-            - name: MANAGER_SESSION_ENV
-              {{- if .Values.session.envSecret.name }}
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.session.envSecret.name }}
-                  key: {{ .Values.session.envSecret.key }}
-              {{- else }}
-              value: {{ .Values.session.env | toJson | quote }}
-              {{- end }}
+              value: {{ .Values.sessionImage | quote }}
             - name: MANAGER_REAP_INTERVAL_SECONDS
               value: {{ .Values.reaper.intervalSeconds | quote }}
-            - name: MANAGER_IDLE_GRACE_SECONDS
-              value: {{ .Values.reaper.idleGraceSeconds | quote }}
-            {{- if and .Values.bitbucket.tokenSecret.name .Values.bitbucket.workspace .Values.bitbucket.repos }}
-            - name: MANAGER_BITBUCKET_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.bitbucket.tokenSecret.name }}
-                  key: {{ .Values.bitbucket.tokenSecret.key }}
-            - name: MANAGER_BITBUCKET_WORKSPACE
-              value: {{ .Values.bitbucket.workspace | quote }}
-            - name: MANAGER_BITBUCKET_REPOS
-              value: {{ .Values.bitbucket.repos | toJson | quote }}
-            - name: MANAGER_BITBUCKET_POLL_MINUTES
-              value: {{ .Values.bitbucket.pollMinutes | quote }}
-            - name: MANAGER_BITBUCKET_SESSION_OWNER
-              value: {{ .Values.bitbucket.sessionOwner | quote }}
-            - name: MANAGER_BITBUCKET_BACKFILL
-              value: {{ .Values.bitbucket.backfill | quote }}
-            {{- end }}
-            - name: MANAGER_REVIEW_ENABLED
-              value: {{ .Values.review.enabled | quote }}
-            - name: MANAGER_REVIEW_MODELS
-              value: {{ .Values.review.models | toJson | quote }}
-            {{- with .Values.review.modelAuthSecret }}
-            {{- if .name }}
-            - name: MANAGER_REVIEW_MODEL_AUTH
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .name }}
-                  key: {{ .key }}
+            {{- with .Values.onboarding }}
+            {{- if .url }}
+            - name: MANAGER_ONBOARDING_URL
+              value: {{ .url | quote }}
+            - name: MANAGER_ONBOARDING_BRANCH
+              value: {{ .branch | quote }}
+            - name: MANAGER_ONBOARDING_FILE
+              value: {{ .file | quote }}
+            - name: MANAGER_ONBOARDING_USERNAME
+              value: {{ .username | quote }}
+            - name: MANAGER_SYNC_INTERVAL_MINUTES
+              value: {{ .syncIntervalMinutes | quote }}
+            {{- with .credentials }}
+            - name: MANAGER_ONBOARDING_CREDENTIALS
+              value: {{ . | quote }}
             {{- end }}
             {{- end }}
-            - name: MANAGER_REVIEW_PROVIDER_CONFIG
-              value: {{ .Values.review.providerConfig | toJson | quote }}
-            - name: MANAGER_REVIEW_POST_MODE
-              value: {{ .Values.review.postMode | quote }}
-            - name: MANAGER_REVIEW_MAX_COMMENTS
-              value: {{ .Values.review.maxComments | quote }}
+            {{- end }}
             - name: MANAGER_MANAGER_SERVICE_URL
               value: http://{{ include "opencode-manager.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:8000
             - name: MANAGER_AUTH_MODE
@@ -144,18 +115,25 @@ spec:
               mountPath: /data
             - name: shared
               mountPath: /shared
-            - name: review-guidelines
-              mountPath: /config/review
+            - name: platform-secrets
+              mountPath: /config/secrets
               readOnly: true
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- with .Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
       volumes:
-        - name: review-guidelines
-          configMap:
-            name: {{ include "opencode-manager.fullname" . }}-review
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        - name: platform-secrets
+          secret:
+            secretName: {{ .Values.platformSecrets.existingSecret | default (printf "%s-platform-secrets" (include "opencode-manager.fullname" .)) }}
             optional: true
+            defaultMode: 0400
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "opencode-manager.fullname" . }}-data

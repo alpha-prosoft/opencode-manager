@@ -1,0 +1,267 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "GitSource": {
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "description": "https:// or file:// URL of the repository",
+          "title": "Url",
+          "type": "string"
+        },
+        "branch": {
+          "default": "main",
+          "title": "Branch",
+          "type": "string"
+        },
+        "credentials": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Platform secret holding a token for https URLs",
+          "title": "Credentials"
+        },
+        "username": {
+          "default": "x-token-auth",
+          "description": "Username sent with the token (Basic auth)",
+          "title": "Username",
+          "type": "string"
+        },
+        "path": {
+          "default": ".platform",
+          "description": "Directory inside the repository with the definitions",
+          "title": "Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "title": "GitSource",
+      "type": "object"
+    },
+    "LlmConnection": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "type": {
+          "default": "openai-compatible",
+          "enum": [
+            "openai-compatible",
+            "github-copilot"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "base_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Upstream base URL (defaults per type)",
+          "title": "Base Url"
+        },
+        "secret": {
+          "description": "Platform secret with the API key or OAuth token",
+          "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+          "title": "Secret",
+          "type": "string"
+        },
+        "models": {
+          "description": "Models teams may use through this connection",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Models",
+          "type": "array"
+        },
+        "teams": {
+          "anyOf": [
+            {
+              "items": {
+                "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "const": "*",
+              "type": "string"
+            }
+          ],
+          "default": "*",
+          "title": "Teams"
+        }
+      },
+      "required": [
+        "id",
+        "secret",
+        "models"
+      ],
+      "title": "LlmConnection",
+      "type": "object"
+    },
+    "TeamBudget": {
+      "additionalProperties": false,
+      "properties": {
+        "daily_tokens": {
+          "anyOf": [
+            {
+              "minimum": 1000,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Prompt + completion tokens per UTC day",
+          "title": "Daily Tokens"
+        }
+      },
+      "title": "TeamBudget",
+      "type": "object"
+    },
+    "TeamEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "repository": {
+          "$ref": "#/$defs/GitSource"
+        },
+        "members": {
+          "default": [],
+          "items": {
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+            "type": "string"
+          },
+          "title": "Members",
+          "type": "array"
+        },
+        "admins": {
+          "default": [],
+          "items": {
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+            "type": "string"
+          },
+          "title": "Admins",
+          "type": "array"
+        },
+        "secrets": {
+          "default": [],
+          "description": "Platform secrets this team's workflows may use",
+          "items": {
+            "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+            "type": "string"
+          },
+          "title": "Secrets",
+          "type": "array"
+        },
+        "budget": {
+          "$ref": "#/$defs/TeamBudget",
+          "default": {
+            "daily_tokens": null
+          }
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "repository"
+      ],
+      "title": "TeamEntry",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "platform.json in the onboarding repository.",
+  "properties": {
+    "version": {
+      "const": 1,
+      "default": 1,
+      "title": "Version",
+      "type": "integer"
+    },
+    "admins": {
+      "default": [],
+      "items": {
+        "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+        "type": "string"
+      },
+      "title": "Admins",
+      "type": "array"
+    },
+    "allowed_images": {
+      "default": [
+        "ghcr.io/anomalyco/opencode:1.19.5"
+      ],
+      "items": {
+        "type": "string"
+      },
+      "title": "Allowed Images",
+      "type": "array"
+    },
+    "llm_connections": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/LlmConnection"
+      },
+      "title": "Llm Connections",
+      "type": "array"
+    },
+    "secret_hosts": {
+      "default": {},
+      "description": "Hosts each secret may be sent to when used for Git checkouts",
+      "patternProperties": {
+        "^[A-Z][A-Z0-9_]{0,63}$": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "title": "Secret Hosts",
+      "type": "object"
+    },
+    "teams": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/TeamEntry"
+      },
+      "title": "Teams",
+      "type": "array"
+    }
+  },
+  "title": "PlatformSpec",
+  "type": "object"
+}

@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     sync_interval_minutes: int = 10
     secrets_dir: str = "/config/secrets"
     repos_dir: str = "/data/repos"
+    local_repo_roots: list[str] = ["/repos"]
 
     session_image: str = "ghcr.io/anomalyco/opencode:1.19.5"
     session_port: int = 4096

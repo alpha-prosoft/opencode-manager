@@ -1,6 +1,7 @@
 import json
 import logging
 import time
+from datetime import UTC, datetime
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request, status
@@ -47,6 +48,11 @@ async def chat_completions(request: Request):
     model = body.get("model")
     if model not in sandbox.llm_models:
         raise HTTPException(status.HTTP_403_FORBIDDEN, f"Model {model} is not allowed for this session")
+    team = platform.registry.team(sandbox.team_id)
+    if team and team.budget.daily_tokens:
+        midnight = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        if platform.usage.tokens_since(sandbox.team_id, midnight) >= team.budget.daily_tokens:
+            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, f"Team {sandbox.team_id} has used its daily token budget")
     streaming = bool(body.get("stream"))
     if streaming:
         body["stream_options"] = {**(body.get("stream_options") or {}), "include_usage": True}

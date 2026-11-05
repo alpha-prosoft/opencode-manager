@@ -1,178 +1,412 @@
-# opencode-manager
+# OpenCode Agent Platform
 
-Runs one [OpenCode](https://opencode.ai) web container (`opencode web`) per
-user session behind Traefik. A FastAPI manager (with a React/MUI UI) owns the
-session lifecycle, and Temporal runs session starts and the idle reaper.
+Run AI agents for your teams safely. Each team keeps its **agents**, **harnesses** (sandbox definitions) and
+**workflows** in its own Git repository. The platform syncs those definitions, runs every workflow in a sandboxed
+[OpenCode](https://opencode.ai) session, meters every LLM call, and records an append-only audit trail of everything
+the agent did.
 
+```mermaid
+flowchart LR
+    subgraph git["Git"]
+        onboarding["Onboarding repo<br/>platform.json"]
+        teamrepo["Team repos<br/>.platform/agents · harnesses · workflows"]
+    end
+    subgraph platform["Platform"]
+        manager["Manager<br/>API · UI · registry"]
+        temporal["Temporal<br/>runs · triggers · schedules"]
+        gateway["LLM gateway<br/>keys · model allow-list · metering"]
+        audit[("Audit trail<br/>hash-chained, append-only")]
+    end
+    subgraph sandbox["Sandbox network (no internet)"]
+        s1["OpenCode session"]
+        s2["OpenCode session"]
+    end
+    llm["LLM provider<br/>(Copilot, Azure OpenAI, …)"]
+    scm["Bitbucket / GitHub"]
+
+    onboarding -- lists --> teamrepo
+    manager -- syncs --> onboarding & teamrepo
+    manager <--> temporal
+    temporal -- starts --> s1 & s2
+    s1 & s2 -- "LLM calls (session key)" --> gateway --> llm
+    s1 & s2 -. "events" .-> audit
+    temporal -- "PR polling, comments" --> scm
 ```
-browser ──► traefik ──► Host(domain)            → manager (UI + /api)
-                   ├──► Host(<id>.domain)       → ForwardAuth(manager) → session <id>
-                   └──► Host(*.domain) fallback → manager wakes a stopped session
+
+## Contents
+
+1. [Concepts](#concepts)
+2. [Quick start](#quick-start)
+3. [Using the platform](#using-the-platform)
+4. [Onboarding repository (platform admins)](#onboarding-repository)
+5. [Team repository (teams)](#team-repository)
+6. [Marketplace activities](#marketplace-activities)
+7. [Security model](#security-model)
+8. [Audit trail and metrics](#audit-trail-and-metrics)
+9. [Deploying on Kubernetes](#deploying-on-kubernetes)
+10. [Development](#development)
+
+## Concepts
+
+| Concept | Where it lives | What it is |
+|---|---|---|
+| **Onboarding repo** | One Git repo, owned by platform admins | `platform.json`: platform admins, LLM connections, allowed images, and the list of teams with their repositories, members and granted secrets. |
+| **Team repo** | One Git repo per team | A `.platform/` directory with the team's agents, harnesses and workflows. |
+| **Agent** | `.platform/agents/<id>.json` | Persona and system prompt (OpenCode agent). |
+| **Harness** | `.platform/harnesses/<id>.json` | The sandbox: LLM connection and models, network access, tool permissions, image, CPU and memory. |
+| **Workflow** | `.platform/workflows/<id>.json` | A trigger (manual, schedule, pull request) wired to a marketplace activity, with an agent, a harness and options. |
+| **Activity** | Built into the platform (marketplace) | What a run does: interactive session, code review, implementation, business analysis. |
+| **Run** | Platform | One execution of a workflow. It creates a sandboxed session, collects a typed result and meters usage. |
+| **Session** | Platform | A running (or stopped) OpenCode sandbox you can open in the browser. |
+
+```mermaid
+flowchart TB
+    workflow["Workflow<br/>trigger + options"] --> activity["Marketplace activity"]
+    workflow --> agent["Agent<br/>prompt, temperature"]
+    workflow --> harness["Harness<br/>LLM, network, permissions, resources"]
+    trigger(("manual · schedule · pull request")) --> run["Run"]
+    workflow --> run
+    run --> session["Sandboxed OpenCode session"]
+    session -- "submit_* tool" --> result["Typed result<br/>review · patch · document"]
 ```
 
-OpenCode cannot run under a sub-path, so each session gets its own subdomain.
-`/sessions/{sub}/{id}` on the manager checks ownership and redirects to it.
+## Quick start
 
-## Run locally (Docker Compose)
+Requirements: Docker with Compose v2.
 
 ```bash
+git clone https://github.com/alpha-prosoft/opencode-manager && cd opencode-manager
+
+# 1. Publish the example onboarding repo, team repo and demo service as local Git repos.
+./scripts/seed-local-repos.sh
+
+# 2. Give the platform an LLM credential. The example uses GitHub Copilot.
+#    Secrets are files named after the secret; they are never committed and never reach a session.
+mkdir -p local/secrets && chmod 700 local/secrets
+printf '%s' 'gho_…' > local/secrets/COPILOT_TOKEN   # see "Getting a Copilot token" below
+
+# 3. Build the toolchain image (OpenCode + Python/Node/git) and start the stack.
+docker compose --profile images build opencode-dev
 docker compose up -d --build
 ```
 
-- Manager UI: http://localhost:8080
-- Sessions: `http://<sessionId>.localhost:8080`. Browsers and curl resolve `*.localhost` to loopback.
-- Traefik dashboard: http://localhost:9090
-- Temporal UI: http://localhost:8233
-
-Environment for every session (e.g. provider API keys), as JSON:
+Open <http://localhost:8080> and log in as `alice` (a platform admin in the example) or `bob` (a team member).
+The demo team has four workflows ready to run. To check that everything works:
 
 ```bash
-SESSION_ENV='{"ANTHROPIC_API_KEY":"..."}' docker compose up -d
+python3 tests/e2e.py
 ```
 
-Without keys, sessions can still use OpenCode's free models.
+| URL | What |
+|---|---|
+| <http://localhost:8080> | Platform UI and API (`/api/docs`) |
+| `http://<session>.localhost:8080` | OpenCode sessions (every browser resolves `*.localhost` to your machine) |
+| <http://localhost:8233> | Temporal UI (local only) |
+| <http://localhost:9090> | Traefik dashboard (local only) |
 
-### Bitbucket pull request reviews
-
-The manager polls Bitbucket Cloud for new pull requests. For each one it creates a **public** session, owned by the `bitbucket` user, that runs an OpenCode code review of the change.
-
-Environment-specific settings live in the gitignored `local/` directory:
-
-```
-local/manager.env        # MANAGER_BITBUCKET_WORKSPACE=..., MANAGER_BITBUCKET_REPOS=["<repo>"]
-local/review/<repo>.md   # review baseline for <repo> (mounted read-only at /config/review)
-```
-
-Secrets go in a gitignored `.env` in the repository root. Compose reads it automatically for variable substitution, so `docker compose up -d` needs no extra flags:
-
-```
-BITBUCKET_TOKEN=...                  # Bitbucket Cloud API token: list PRs, clone, read diffs (and post in auto mode)
-OPENCODE_AUTH='{"github-copilot":…}' # OpenCode auth.json content: credentials for any providers
-OPENCODE_PROVIDER='{…}'              # optional opencode.json "provider" section (base URLs, models; no secrets)
-REVIEW_MODELS='["provider/model",…]' # optional model fallback list
-```
-
-`OPENCODE_AUTH` is written into a review session's `auth.json` only while its review runs. Afterwards it is removed and the session is stopped. For an API-key provider use `{"anthropic":{"type":"api","key":"sk-…"}}`.
-
-For OAuth providers such as GitHub Copilot, log in once and copy the generated file's content:
+**Getting a Copilot token.** Log in once with OpenCode and copy the `refresh` value from the generated
+`local/opencode/auth.json`:
 
 ```bash
 docker run --rm -it -v "$PWD/local/opencode:/root/.local/share/opencode" ghcr.io/anomalyco/opencode:1.19.5 auth login
 ```
 
-How it runs:
-1. The Temporal schedule `poll-bitbucket` (every `MANAGER_BITBUCKET_POLL_MINUTES`, default 15) runs `PollPullRequestsWorkflow`.
-2. That workflow starts one `PullRequestSessionWorkflow` (ID `pr-session-<repo>-<id>`) per new PR, as abandoned children, so reviews run in parallel.
-3. Each `PullRequestSessionWorkflow`:
-   - creates the session;
-   - shallow-clones the PR branch into the workspace (the token is removed from the git remote afterwards);
-   - writes `.review/pr.diff`, `.review/pull-request.md` and `.review/guidelines.md` (the repo's baseline, or a generic default);
-   - starts the container and prompts OpenCode with the first model in `MANAGER_REVIEW_MODELS` (JSON list; falls back to the next one when a model is out of quota);
-   - waits until the review finishes, then saves it to `.review/review.md` and labels the session `review=done`.
+Any OpenAI-compatible provider works the same way; see [LLM connections](#llm-connections).
 
-   Opening the session shows the review conversation.
-4. If a free model's quota is exhausted, the workflow fails fast with a clear error instead of waiting.
+**Your own repositories.** Put your onboarding and team repos anywhere Git can reach (`https://…`), or keep
+local overrides in `local/sources/<name>/`, which `seed-local-repos.sh` publishes alongside the examples. Everything
+under `local/` is gitignored. Point the platform at the onboarding repo with `ONBOARDING_URL` (compose) or
+`onboarding.url` (Helm).
 
-**The agent never posts to Bitbucket.** It hands the review to the workflow by calling the `submit_review` tool. This is an MCP server mounted at `/mcp` on the manager. Each review session is configured to use it, with a per-session key in a header.
+## Using the platform
 
-The tool validates a typed review (verdict, summary, findings with severity/path/line/title/body/suggestion, and checked items) and signals the PR's workflow. If the agent finishes without calling it, the workflow prompts it again, up to twice. The workflow then:
+1. **Dashboard.** Your teams, recent runs and running sessions.
+2. **Teams → a team.** Workflows, agents and harnesses as synced from the team repo. Invalid definitions are shown
+   with the file and the exact reason, and cannot run.
+3. **Run now / Launch.** Fill in the activity's inputs (the form is generated from the activity's schema).
+   - *Interactive* workflows open a session you work in yourself.
+   - *Automated* workflows run to completion; you watch the run page update live.
+4. **Runs → a run.** Status, inputs, LLM usage and the typed result: a review with findings, a patch with test
+   results, or an analysis document. *Open session* shows exactly what the agent saw and did.
+5. **Sessions → a session.** Owner, visibility, usage and the **audit trail** (every message and tool call,
+   with an integrity check and JSONL export).
+6. **Admin** (platform admins). Onboarding sync status, *Sync now*, LLM connections and team health.
 
-- saves `.review/review.json`;
-- plans the comments: one summary comment plus inline comments, highest severity first, at most `MANAGER_REVIEW_MAX_COMMENTS` (default 30) in total. A finding only becomes inline when its line is part of the PR diff; everything else is folded into the summary;
-- writes the plan to `.review/post-plan.json`;
-- posts it, depending on `MANAGER_REVIEW_POST_MODE`:
-  - `off`: nothing;
-  - `dry-run` (default): the plan only;
-  - `auto`: posts the comments.
+Visibility: interactive sessions are private to their owner by default; runs of automated workflows are visible to
+the team (`"visibility": "team"`) or every user (`"public"`). Session owners and team admins can stop, delete or
+change the visibility of a session. Deleting a session keeps its audit trail.
 
-Every posted comment is recorded, so a retried post never duplicates comments.
+## Onboarding repository
 
-The first poll records the PRs that are already open as a baseline and creates no sessions for them; set `MANAGER_BITBUCKET_BACKFILL=true` to change that. Seen PRs are stored in the manager database, so a PR gets at most one session, even across restarts. To trigger a poll right away:
+`platform.json` at the root of the onboarding repo ([schema](schemas/platform.schema.json), [example](examples/onboarding/platform.json)):
 
-```bash
-docker compose exec temporal temporal schedule trigger --schedule-id poll-bitbucket
+```json
+{
+  "version": 1,
+  "admins": ["alice"],
+  "allowed_images": ["ghcr.io/anomalyco/opencode:1.19.5", "opencode-platform/opencode-dev:1.19.5"],
+  "llm_connections": [
+    { "id": "copilot", "type": "github-copilot", "secret": "COPILOT_TOKEN",
+      "models": ["claude-sonnet-5.5", "gemini-3.5-flash"], "teams": "*" }
+  ],
+  "teams": [
+    {
+      "id": "payments",
+      "name": "Payments",
+      "repository": { "url": "https://bitbucket.org/acme/payments-agents.git", "branch": "main",
+                      "credentials": "BITBUCKET_TOKEN", "username": "x-bitbucket-api-token-auth" },
+      "members": ["bob", "carol"],
+      "admins": ["bob"],
+      "secrets": ["BITBUCKET_TOKEN"]
+    }
+  ]
+}
 ```
 
-## Deploy on Kubernetes (Helm)
+| Field | Meaning |
+|---|---|
+| `admins` | Platform admins: see every team, trigger syncs, read `/metrics`. |
+| `allowed_images` | The only container images harnesses may use. |
+| `llm_connections` | Upstream LLM endpoints. `secret` names a platform secret; `models` is the allow-list; `teams` restricts which teams may use it. |
+| `secret_hosts` | For each secret, the hosts it may be sent to in Git checkouts (e.g. `{"GITHUB_TOKEN": ["github.com"]}`). A secret is never sent anywhere else, even if a team repo asks for it. |
+| `teams[].repository` | Where the team's definitions live (`path` defaults to `.platform`). `credentials` names a platform secret for private repos. |
+| `teams[].members` / `admins` | Usernames. Members run workflows and see team sessions; admins also manage team sessions. |
+| `teams[].secrets` | Platform secrets this team's workflows may reference (repository checkouts, pull request triggers). |
+| `teams[].budget.daily_tokens` | Optional cap on prompt + completion tokens per UTC day; the LLM gateway answers `429` once it is reached. |
 
-Prerequisite: the Gateway API CRDs.
+The platform syncs the onboarding repo and all team repos every `MANAGER_SYNC_INTERVAL_MINUTES` (default 10),
+and on *Sync now*. Teams removed from `platform.json` disappear; their history stays.
+
+### LLM connections
+
+| `type` | Upstream | Secret |
+|---|---|---|
+| `openai-compatible` | `base_url` (e.g. `https://my-azure.openai.azure.com/openai/v1`, vLLM, LiteLLM) | API key, sent as `Authorization: Bearer` |
+| `github-copilot` | `https://api.githubcopilot.com` | GitHub OAuth token (`gho_…`) from `opencode auth login` |
+
+### Platform secrets
+
+Secrets are resolved by name, from a file `/config/secrets/<NAME>` (compose: `local/secrets/<NAME>`; Kubernetes:
+a key of `platformSecrets.existingSecret`) or from the environment variable `PLATFORM_SECRET_<NAME>`. They are
+only ever read by the manager: sessions never receive them.
+
+## Team repository
+
+```
+.platform/
+├── agents/          one JSON file per agent    (id = file name)
+├── harnesses/       one JSON file per harness
+├── workflows/       one JSON file per workflow
+└── …                any files referenced by the definitions (prompts, guidelines, templates)
+```
+
+See the complete [example team repo](examples/team-repo/.platform). JSON Schemas for editor validation (add
+`"$schema": "<url>"` to a file; the platform ignores that key): [agents](schemas/agents.schema.json),
+[harnesses](schemas/harnesses.schema.json), [workflows](schemas/workflows.schema.json).
+
+### Agent
+
+```json
+{
+  "description": "Careful code reviewer that reports only verified issues",
+  "prompt_file": "prompts/reviewer.md",
+  "temperature": 0.1,
+  "steps": 50
+}
+```
+
+Set exactly one of `prompt` (inline) or `prompt_file` (relative to `.platform/`).
+
+### Harness
+
+```json
+{
+  "description": "No internet and no file edits: for reviews and analysis.",
+  "image": "opencode-platform/opencode-dev:1.19.5",
+  "llm": { "connection": "copilot", "models": ["claude-sonnet-5.5", "gemini-3.5-flash"] },
+  "network": "none",
+  "permissions": { "edit": "deny", "bash": "allow" },
+  "resources": { "cpus": 1, "memory_mb": 2048, "pids": 512 },
+  "idle_minutes": 15
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `llm.models` | Tried in order: if a model is unavailable, the run moves on to the next one. |
+| `network` | `none`: the session can only reach the platform's LLM gateway. `internet`: outbound internet as well (web search and fetch are then allowed). |
+| `permissions` | OpenCode tool permissions (`allow` / `ask` / `deny`) for `bash`, `edit`, `read`, `webfetch`, … Automated runs never ask questions. |
+| `image` | Must be in the onboarding repo's `allowed_images`. Defaults to the platform image. |
+| `idle_minutes` | Idle sessions are stopped after this long (they wake up when opened again). |
+
+The harness is turned into an OpenCode configuration that is **mounted read-only** into the session, so the agent
+cannot change its own model, permissions or tools.
+
+### Workflow
+
+```json
+{
+  "name": "Review GitHub pull requests",
+  "description": "Reviews every new PR (dry-run: nothing is posted).",
+  "activity": "review",
+  "agent": "reviewer",
+  "harness": "read-only",
+  "trigger": {
+    "type": "pull_request",
+    "provider": "github",
+    "repository": "acme/payments",
+    "credentials": "GITHUB_TOKEN",
+    "target_branches": ["main"],
+    "poll_minutes": 15
+  },
+  "options": { "guidelines_file": "context/review-guidelines.md", "post_mode": "dry-run", "max_comments": 20 },
+  "visibility": "team"
+}
+```
+
+| Trigger | Fields | Behaviour |
+|---|---|---|
+| `manual` (default) | none | Started from the UI or `POST /api/teams/<team>/workflows/<workflow>/runs`. |
+| `schedule` | `every_minutes`, `inputs` | Started on an interval with fixed inputs. |
+| `pull_request` | `provider` (`bitbucket`, `github`), `repository`, `credentials`, `target_branches`, `poll_minutes`, `backfill` | Polls for new PRs and starts one review per PR. PRs already open when the trigger first runs are skipped unless `backfill` is `true`. Each PR is reviewed once. Pull-request workflows can also be run by hand for any PR number. |
+
+Every workflow is validated on sync: references to agents, harnesses, activities, files, secrets, LLM connections
+and images must resolve, and `options` must match the activity's schema. The UI shows the reason for every
+invalid definition.
+
+## Marketplace activities
+
+The **Marketplace** page shows each activity's options and inputs, generated from the same schemas the platform
+validates against.
+
+| Activity | Kind | Options (workflow file) | Inputs (per run) | Result |
+|---|---|---|---|---|
+| `session` | interactive | `repository`, `instructions_file` | `title`, `branch`, `prompt` | A personal OpenCode workspace. |
+| `review` | automated | `scm`, `guidelines_file`, `post_mode` (`off` · `dry-run` · `auto`), `max_comments` | `pull_request` | Structured review: verdict, findings (severity, file, line, fix), checked items, and a comment plan. |
+| `implement` | automated | `repository`, `guidelines_file` | `task`, `branch` | Summary, changes, verification commands, and a **patch computed by the platform** from the working tree. Nothing is pushed. |
+| `analysis` | automated | `repository`, `template_file` | `brief` | A Markdown analysis document. |
+
+Automated activities end with the agent calling a typed result tool (`submit_review`, `submit_implementation`,
+`submit_document`). The platform validates the result and decides what happens next. For example, a review is
+turned into at most `max_comments` comments (a summary plus inline comments anchored only to lines that are in the
+diff, highest severity first) and posted only in `auto` mode. The agent never posts anything itself.
+
+```mermaid
+sequenceDiagram
+    participant T as Trigger
+    participant W as Temporal RunWorkflow
+    participant S as Session (sandbox)
+    participant G as LLM gateway
+    participant P as Platform tools (MCP)
+    T->>W: start run
+    W->>S: prepare workspace + read-only config, start
+    W->>S: prompt (activity task)
+    loop agent work
+        S->>G: chat completion (session key)
+        G-->>S: response (tokens metered)
+    end
+    S->>P: submit_review / submit_implementation / submit_document
+    P->>W: signal (validated result)
+    W->>W: finalize (plan comments, compute patch, store document)
+    W->>S: stop session
+```
+
+## Security model
+
+```mermaid
+flowchart LR
+    subgraph sandbox["opencode-sandbox network (internal: no route out)"]
+        session["Session container<br/>uid 1000 · read-only rootfs<br/>no capabilities · no-new-privileges<br/>CPU / memory / PID limits"]
+    end
+    config["/etc/opencode (read-only)<br/>generated from the harness"] --- session
+    session -- "session key" --> gateway["LLM gateway (manager)"]
+    session -- "session key" --> tools["Result tools (manager)"]
+    gateway -- "real credential" --> provider["LLM provider"]
+    session -. "network: internet only" .-> egress["opencode-egress"]
+    manager["Manager"] -. "event stream" .-> audit[("Host-side audit trail")]
+```
+
+- **No credentials in sessions.** LLM API keys, Git tokens and SCM tokens stay in the manager. Sessions authenticate
+  to the LLM gateway and the result tools with per-session keys derived from the platform signing key. A key only
+  works for its own session, its harness's models and its run's result tool.
+- **Network isolation.** Sessions run on an internal-only network: no internet, only the manager (gateway, result
+  tools) and the HTTP gateway (for you). `network: internet` opts a harness into outbound access. On Kubernetes the
+  same rules are enforced by NetworkPolicies.
+- **Immutable agent configuration.** The OpenCode config (model, provider, permissions, MCP servers) is generated
+  by the platform and mounted read-only. Project-level and home-directory overrides are disabled, and external
+  plugins are turned off.
+- **Hardened containers.** Non-root user, read-only root filesystem (only the workspace and `/tmp` are writable),
+  all Linux capabilities dropped, no privilege escalation, resource limits; on Kubernetes also a `RuntimeDefault`
+  seccomp profile and no service account token.
+- **Least privilege by definition.** Images, LLM connections, models and secrets must be granted in the onboarding
+  repo before a team can use them; violations are rejected at sync time. Secrets are bound to the hosts listed in
+  `secret_hosts`. `file://` repositories must live under `MANAGER_LOCAL_REPO_ROOTS` (`/repos` by default; set it
+  to `[]` in production). Referenced files cannot escape the team repo, not even through symlinks.
+- **Cost control.** Optional per-team daily token budgets, enforced by the LLM gateway.
+- **Access control.** Only team members see a team's workflows, runs and sessions; private sessions are visible to
+  their owner only. Sessions are opened through a short-lived, session-bound handoff token.
+- **Controlled side effects.** Agents return typed results; the platform decides what is posted, with hard limits.
+
+The test suite probes these controls from inside a real session (`tests/e2e.py`).
+
+## Audit trail and metrics
+
+- **Audit trail.** For every running session the manager subscribes to OpenCode's event stream (with the session's
+  server password, which the agent cannot intercept) and records completed messages, tool calls with their inputs
+  and outputs, and session events. It also backfills after reconnects. Records are stored **on the host**, outside
+  the sandbox, in a table that rejects updates and deletes. Each record is hash-chained to the previous one, so
+  tampering is detectable. View it under *Sessions → Audit trail*, verify it with
+  `GET /api/sessions/<id>/audit/verify`, and export it as JSONL.
+- **Usage.** The LLM gateway records prompt, completion and cached tokens, latency and errors for every call, per
+  session, run, team and model. These numbers come from the upstream response, not from the agent. They are shown
+  on runs, sessions and teams.
+- **Prometheus.** `GET /metrics` (platform admins) exposes `opencode_llm_tokens_total`,
+  `opencode_llm_requests_total`, `opencode_llm_errors_total`, `opencode_runs_total` and `opencode_sessions_running`.
+
+## Deploying on Kubernetes
 
 ```bash
 kubectl apply --server-side -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.7.0/standard-install.yaml
+kubectl create namespace agents
+kubectl -n agents create secret generic platform-secrets \
+  --from-literal=COPILOT_TOKEN=gho_… --from-literal=GIT_TOKEN=…
 helm dependency build charts/opencode-manager
-helm install om charts/opencode-manager -n opencode --create-namespace --set domain=opencode.example.com
+helm install platform charts/opencode-manager -n agents \
+  --set domain=agents.example.com \
+  --set onboarding.url=https://git.example.com/platform/onboarding.git \
+  --set onboarding.credentials=GIT_TOKEN \
+  --set platformSecrets.existingSecret=platform-secrets
 ```
 
 The chart installs:
-- the manager, its RBAC, and the storage
-- a Traefik Middleware for ForwardAuth, and HTTPRoutes for `domain` and `*.domain`
-- Traefik (Gateway API provider and its `traefik-gateway`) and Temporal with a small Postgres, as subcharts
+- the manager (with Temporal and Traefik as sub-charts);
+- an HTTPRoute for `domain` and `*.domain`;
+- the ForwardAuth middleware;
+- NetworkPolicies isolating session pods;
+- shared storage for workspaces.
 
-To use an existing Gateway or Temporal, set `traefik.enabled=false` / `temporal.enabled=false` and configure `gateway.*` / `temporalConnection.*`.
+Point DNS for both `domain` and `*.domain` at the gateway. Sessions run as Deployments scaled to zero when idle.
+The shared volume needs `ReadWriteMany` when session pods can land on different nodes. Your CNI must enforce
+NetworkPolicies.
 
-Put provider API keys in a Secret whose `session-env.json` key holds a JSON
-object, and set `session.envSecret.name`.
+## Development
 
-For pull request reviews, create a Secret with the token and set
-`bitbucket.tokenSecret.name`, `bitbucket.workspace` and `bitbucket.repos`; for Copilot reviews set
-`review.modelAuthSecret.name` (a Secret holding the auth.json JSON) and optionally `review.providerConfig`. Provide review baselines
-without committing them: `--set-file review.guidelines.<repo>=local/review/<repo>.md`.
+```
+manager/app/
+├── platform/        spec, registry (sync), catalog (marketplace), harness, gateway, audit, runs, triggers, tools
+├── temporal/        workflows (RunWorkflow, triggers, sync, reaper) and activities
+├── backends/        Docker and Kubernetes session backends
+├── routes/          REST API, session gateway (handoff, ForwardAuth)
+manager/ui/          React 19 + MUI + React Router
+charts/              Helm chart
+examples/            onboarding repo, team repo and demo service used by the quick start
+schemas/             JSON Schemas for the definition files
+tests/e2e.py         end-to-end tests against a running stack
+```
 
-The shared session volume (`sharedStorage`) needs `ReadWriteMany` when session pods can land on different nodes.
-
-## How it works
-
-| Concern | Docker | Kubernetes |
-|---|---|---|
-| Containers (`MANAGER_BACKEND`) | Docker socket | Deployment and Service per session; scaled to 0 when stopped |
-| Routing (`MANAGER_ROUTER`) | Traefik file provider (`traefik-file`) | Gateway API HTTPRoute per session (`gateway-api`), with a Traefik Middleware via `ExtensionRef` |
-| Storage | `opencode-shared` volume, mounted with a volume subpath | one PVC, mounted with `subPath` |
-
-- **Shared storage**: every session mounts `sessions/<id>` from the shared volume as `/session`.
-  It contains `home/` (`HOME`, which holds OpenCode's config and state) and `workspace/` (the working directory).
-- **ForwardAuth** (`/api/gateway/auth`):
-  - checks the caller owns the session;
-  - starts the session if it's stopped and shows a "starting" page until it is healthy;
-  - injects `Authorization: Basic …` for the session's random `OPENCODE_SERVER_PASSWORD`, so containers reject any request that doesn't come through the gateway.
-- **Temporal**:
-  - `StartSessionWorkflow` (workflow ID `start-session-<id>`, so concurrent starts are deduplicated) starts the container and waits until it is ready.
-  - The `reap-sessions` schedule runs `ReapSessionsWorkflow` every `MANAGER_REAP_INTERVAL_SECONDS`. It stops a session that has been idle for `MANAGER_IDLE_GRACE_SECONDS` and has no busy OpenCode sessions (`GET /session/status`).
-
-## Auth and visibility
-
-- `MANAGER_AUTH_MODE=login` (default): username-only login, with no password for now. The manager signs a JWT into an HttpOnly `oc_auth` cookie.
-- `MANAGER_AUTH_MODE=jwt`: identity comes from an external IdP token (`Authorization: Bearer` or the `access_token` cookie), verified with `MANAGER_JWT_JWKS_URL` or `MANAGER_JWT_SECRET`.
-- The signing key comes from `MANAGER_SECRET_KEY`. If it isn't set, a random key is generated once and stored next to the database.
-
-Session subdomains get their own cookie. Opening `/sessions/{owner}/{id}` on the manager redirects to the session with a 60-second token bound to that session (`oc_handoff`). The session host swaps it for a host-only cookie and redirects to a clean URL. A visitor without a cookie is sent back to the entry URL and, if needed, to `/login`.
-
-Sessions are `private` (default) or `public`:
-
-| | Owner | Other users, public session | Other users, private session |
-|---|---|---|---|
-| List, view, open, start | yes | yes (per-session `env` hidden) | 404 |
-| Stop, change, delete | yes | 403 | 404 |
-
-## API
-
-| Method | Path | |
-|---|---|---|
-| POST | `/api/auth/login` | Log in: `{username}` |
-| POST | `/api/auth/logout` | Log out |
-| GET | `/api/me` | Current user |
-| GET | `/api/sessions` | Own sessions plus public ones |
-| POST | `/api/sessions` | Create and start: `{name, description, visibility, labels, env}` |
-| PATCH | `/api/sessions/{id}` | Owner: change `name`, `description`, `visibility`, `labels` |
-| GET | `/api/sessions/{id}` | Session details and status |
-| POST | `/api/sessions/{id}/start` | Start |
-| POST | `/api/sessions/{id}/stop` | Stop |
-| DELETE | `/api/sessions/{id}` | Delete the container, route, and data |
-
-OpenAPI docs: `/api/docs`.
-
-## CI
-
-`.github/workflows/build.yml` does the following:
-- builds the UI and checks the backend;
-- builds the manager image, which bundles the UI, and pushes it to `ghcr.io/<owner>/<repo>`; pull requests get the image as a build artifact instead;
-- lints and packages the Helm chart as an artifact. On `v*` tags, it pushes the chart to `oci://ghcr.io/<owner>/charts`.
+- `docker compose up -d --build` rebuilds the manager. `./scripts/seed-local-repos.sh` republishes example and
+  local repos; the platform picks the changes up on the next sync.
+- `cd manager && pip install -r requirements.txt -r requirements-dev.txt && pytest` runs the unit tests (spec
+  validation, security rules, harness lockdown, audit chain, review planning).
+- `python3 tests/e2e.py` runs the end-to-end suite. `E2E_REVIEW=<team>/<workflow>/<pr>` adds a real code review.
+- CI (`.github/workflows/build.yml`) builds the manager image with the UI and packages the Helm chart.

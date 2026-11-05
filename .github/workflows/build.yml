@@ -24,10 +24,26 @@ jobs:
         with:
           python-version: "3.14"
           cache: pip
-          cache-dependency-path: manager/requirements.txt
-      - run: pip install -r manager/requirements.txt
-      - run: python -c "import app.main, app.backends.kubernetes, app.routing, app.temporal.engine"
+          cache-dependency-path: |
+            manager/requirements.txt
+            manager/requirements-dev.txt
+      - run: pip install -r manager/requirements.txt -r manager/requirements-dev.txt
+      - name: Unit tests
+        run: pytest -q
         working-directory: manager
+        env:
+          MANAGER_UI_DIST_DIR: /nonexistent
+      - name: JSON Schemas are up to date
+        working-directory: manager
+        run: |
+          python - <<'PY'
+          import json
+          from app.platform.spec import json_schemas
+          for name, schema in json_schemas().items():
+              path = f"../schemas/{name}.schema.json"
+              expected = json.dumps({"$schema": "https://json-schema.org/draft/2020-12/schema", **schema}, indent=2) + "\n"
+              assert open(path).read() == expected, f"{path} is outdated; regenerate it"
+          PY
       - uses: actions/setup-node@v7
         with:
           node-version: lts/*

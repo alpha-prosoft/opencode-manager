@@ -12,7 +12,7 @@ from .handlers import HANDLERS, SUBMISSIONS, RunContext
 from .registry import PlatformRegistry
 from .runs import RunStore
 from .secrets import SecretStore
-from .spec import AgentSpec, HarnessSpec, WorkflowSpec
+from .spec import AgentSpec, HarnessSpec, PullRequestTrigger, WorkflowSpec
 
 log = logging.getLogger(__name__)
 
@@ -66,7 +66,12 @@ class RunService:
     def create_manual(self, identity: Identity, team_id: str, workflow_id: str, inputs: dict) -> dict:
         if not self.registry.role(identity.sub, team_id):
             raise PermissionError(f"{identity.sub} is not a member of team {team_id}")
-        return self.create(team_id, workflow_id, {"type": "manual", "by": identity.sub}, inputs, identity.sub)
+        trigger = {"type": "manual", "by": identity.sub}
+        workflow = self._workflow(team_id, workflow_id)
+        if isinstance(workflow.trigger, PullRequestTrigger):
+            source = workflow.trigger
+            trigger["scm"] = {"provider": source.provider, "repository": source.repository, "credentials": source.credentials}
+        return self.create(team_id, workflow_id, trigger, inputs, identity.sub)
 
     def _context(self, run: dict, workspace) -> RunContext:
         team = self.registry.team(run["team_id"])
@@ -90,6 +95,8 @@ class RunService:
             secrets=self.secrets,
             read_team_file=lambda relative: self.registry.read_team_file(run["team_id"], relative),
             session_url=session_url,
+            secret_host_allowed=self.registry.secret_host_allowed,
+            local_roots=self.settings.local_repo_roots,
         )
 
     def _owner(self, run: dict) -> Identity:

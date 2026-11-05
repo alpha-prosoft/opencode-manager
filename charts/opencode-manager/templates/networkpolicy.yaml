@@ -1,0 +1,56 @@
+{{- if .Values.networkPolicies.enabled }}
+# Session pods: reachable only from the gateway and the manager; may only call the manager (LLM gateway,
+# result tools) and DNS. Pods whose harness sets network: internet get an additional allow-all egress policy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "opencode-manager.fullname" . }}-sessions
+  labels:
+    {{- include "opencode-manager.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: opencode-manager/session
+        operator: Exists
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "opencode-manager.selectorLabels" . | nindent 14 }}
+        {{- with .Values.networkPolicies.ingressFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "opencode-manager.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: 8000
+          protocol: TCP
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "opencode-manager.fullname" . }}-sessions-internet
+  labels:
+    {{- include "opencode-manager.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      opencode-manager/network: internet
+  policyTypes: [Egress]
+  egress:
+    - {}
+{{- end }}

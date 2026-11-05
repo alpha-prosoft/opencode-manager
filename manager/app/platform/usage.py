@@ -31,6 +31,14 @@ class UsageStore:
     def for_run(self, run_id: str) -> dict:
         return self._summary("run_id = ?", (run_id,))
 
+    def tokens_since(self, team_id: str, since: str) -> int:
+        with self.db.connect() as db:
+            row = db.execute(
+                "SELECT COALESCE(SUM(prompt_tokens + completion_tokens), 0) FROM llm_usage WHERE team_id = ? AND ts >= ?",
+                (team_id, since),
+            ).fetchone()
+        return int(row[0])
+
     def for_team(self, team_id: str, since: str) -> dict:
         return self._summary("team_id = ? AND ts >= ?", (team_id, since))
 

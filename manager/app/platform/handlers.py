@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field
 
@@ -51,6 +52,8 @@ class RunContext:
     secrets: object
     read_team_file: callable
     session_url: str
+    secret_host_allowed: callable
+    local_roots: list
 
     @property
     def context_dir(self) -> Path:
@@ -61,8 +64,14 @@ class RunContext:
         (self.context_dir / name).write_text(content)
 
     def checkout(self, source: GitSource, branch: str | None = None) -> str:
-        token = self.secrets.require(source.credentials) if source.credentials else None
-        return git.checkout(source.url, branch or source.branch, self.workspace / REPO_DIR, source.username, token, depth=50)
+        token = None
+        if source.credentials:
+            if not self.secret_host_allowed(source.credentials, source.url):
+                raise ValueError(f"Secret {source.credentials} may not be sent to {urlsplit(source.url).hostname}")
+            token = self.secrets.require(source.credentials)
+        return git.checkout(
+            source.url, branch or source.branch, self.workspace / REPO_DIR, source.username, token, 50, self.local_roots
+        )
 
     def team_file(self, relative: str | None, default: str = "") -> str:
         return self.read_team_file(relative) if relative else default
@@ -96,6 +105,8 @@ class ReviewHandler(Handler):
     def prepare(self, ctx: RunContext) -> None:
         source, provider = self._scm(ctx)
         pr = provider.pull_request(source.repository, ctx.inputs.pull_request)
+        if urlsplit(pr.clone_url).hostname != provider.git_host:
+            raise ValueError(f"Refusing to clone {pr.clone_url}: not hosted on {provider.git_host}")
         git.checkout(
             pr.clone_url, pr.source_branch, ctx.workspace / REPO_DIR, provider.git_username, provider.token, depth=50
         )
