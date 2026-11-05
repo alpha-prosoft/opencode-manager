@@ -35,60 +35,31 @@ class Settings(BaseSettings):
     jwt_cookie: str = "access_token"
     email_domain: str = "users.local"
 
+    onboarding_url: str | None = None
+    onboarding_branch: str = "main"
+    onboarding_credentials: str | None = None
+    onboarding_username: str = "x-token-auth"
+    onboarding_file: str = "platform.json"
+    sync_interval_minutes: int = 10
+    secrets_dir: str = "/config/secrets"
+    repos_dir: str = "/data/repos"
+
     session_image: str = "ghcr.io/anomalyco/opencode:1.19.5"
     session_port: int = 4096
-    session_env: dict[str, str] = {}
-    session_opencode_config: dict = {"permission": {"external_directory": "allow"}}
-
     shared_mount_path: str = "/shared"
 
     temporal_address: str = "temporal:7233"
     temporal_namespace: str = "default"
     temporal_task_queue: str = "opencode-manager"
     reap_interval_seconds: int = 300
-    idle_grace_seconds: int = 300
+    idle_grace_seconds: int = 900
 
-    bitbucket_token: str | None = None
-    bitbucket_workspace: str | None = None
-    bitbucket_repos: list[str] = []
-    bitbucket_poll_minutes: int = 15
-    bitbucket_session_owner: str = "bitbucket"
-    bitbucket_backfill: bool = False
-
-    review_enabled: bool = True
-    review_model_auth: dict = {}
-    review_provider_config: dict = {}
-    review_models: list[str] = [
-        "github-copilot/claude-sonnet-5.5",
-        "opencode/deepseek-v4.1-flash-free",
-        "opencode/glm-5.3-flash-free",
-        "opencode/mimo-v2.6-flash-free",
-        "opencode/nemotron-3.5-lightning-free",
-    ]
-    review_guidelines_dir: str = "/config/review"
-    review_post_mode: Literal["off", "dry-run", "auto"] = "dry-run"
-    review_max_comments: int = 30
-    review_opencode_config: dict = {
-        "permission": {
-            "read": "allow",
-            "edit": "allow",
-            "bash": "allow",
-            "external_directory": "allow",
-            "webfetch": "deny",
-            "doom_loop": "allow",
-            "question": "deny",
-        }
-    }
-
-    docker_network: str = "opencode-net"
+    docker_sandbox_network: str = "opencode-sandbox"
+    docker_egress_network: str = "opencode-egress"
     docker_shared_volume: str = "opencode-shared"
 
     k8s_namespace: str = "default"
     k8s_shared_pvc: str = "opencode-shared"
-
-    @property
-    def bitbucket_enabled(self) -> bool:
-        return bool(self.bitbucket_token and self.bitbucket_workspace and self.bitbucket_repos)
 
     def session_host(self, session_id: str) -> str:
         return f"{session_id}.{self.domain}"

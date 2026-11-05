@@ -3,6 +3,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 
+from temporalio import activity
 from temporalio.client import (
     Client,
     Schedule,
@@ -12,28 +13,34 @@ from temporalio.client import (
     ScheduleSpec,
     ScheduleUpdate,
 )
-from temporalio.service import RPCStatusCode
 from temporalio.common import WorkflowIDConflictPolicy
-from temporalio.service import RPCError
+from temporalio.service import RPCError, RPCStatusCode
 from temporalio.worker import Worker
 
 from ..config import Settings
-from ..pull_requests import PullRequestSessions
+from ..platform.registry import PlatformRegistry
+from ..platform.runner import RunService
+from ..platform.triggers import TriggerService
 from ..sessions import SessionService
-from ..review import PullRequestReviews
-from .activities import PullRequestActivities, ReviewActivities, SessionActivities
+from .activities import PlatformActivities, RunActivities, SessionActivities
 from .workflows import (
+    PlatformSyncWorkflow,
     PollPullRequestsWorkflow,
-    PullRequestSessionWorkflow,
     ReapSessionsWorkflow,
+    RunWorkflow,
+    ScheduledRunWorkflow,
     StartSessionWorkflow,
+    run_workflow_id,
 )
 
 log = logging.getLogger(__name__)
 
 REAP_SCHEDULE_ID = "reap-sessions"
-BITBUCKET_SCHEDULE_ID = "poll-bitbucket"
+SYNC_SCHEDULE_ID = "platform-sync"
+TRIGGER_PREFIX = "trigger-"
+LEGACY_SCHEDULES = ("poll-bitbucket",)
 CONNECT_ATTEMPTS = 30
+TRIGGER_WORKFLOWS = {"pull_request": PollPullRequestsWorkflow, "schedule": ScheduledRunWorkflow}
 
 
 async def connect(settings: Settings) -> Client:
@@ -49,24 +56,36 @@ async def connect(settings: Settings) -> Client:
 
 
 class TemporalEngine:
-    def __init__(self, settings: Settings, service: SessionService, client: Client):
+    def __init__(
+        self,
+        settings: Settings,
+        sessions: SessionService,
+        registry: PlatformRegistry,
+        runner: RunService,
+        triggers: TriggerService,
+        client: Client,
+    ):
         self.settings = settings
-        self.service = service
+        self.sessions = sessions
+        self.triggers = triggers
         self.client = client
-        self._executor = ThreadPoolExecutor(max_workers=16)
+        self._executor = ThreadPoolExecutor(max_workers=32)
         self.worker = Worker(
             client,
             task_queue=settings.temporal_task_queue,
             workflows=[
                 StartSessionWorkflow,
                 ReapSessionsWorkflow,
+                RunWorkflow,
                 PollPullRequestsWorkflow,
-                PullRequestSessionWorkflow,
+                ScheduledRunWorkflow,
+                PlatformSyncWorkflow,
             ],
             activities=[
-                *SessionActivities(service).all(),
-                *PullRequestActivities(settings, PullRequestSessions(settings, service)).all(),
-                *ReviewActivities(settings, PullRequestReviews(settings, service)).all(),
+                *SessionActivities(sessions).all(),
+                *RunActivities(runner).all(),
+                *PlatformActivities(registry, triggers).all(),
+                self.reconcile_schedules,
             ],
             activity_executor=self._executor,
         )
@@ -80,10 +99,23 @@ class TemporalEngine:
             id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
         )
 
-    async def _upsert_schedule(self, schedule_id: str, workflow_run, every: timedelta) -> None:
+    async def start_run(self, run_id: str) -> None:
+        await self.client.start_workflow(
+            RunWorkflow.run, run_id, id=run_workflow_id(run_id), task_queue=self.settings.temporal_task_queue
+        )
+
+    async def sync_now(self) -> dict:
+        return await self.client.execute_workflow(
+            PlatformSyncWorkflow.run,
+            id="platform-sync-manual",
+            task_queue=self.settings.temporal_task_queue,
+            id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+        )
+
+    async def _upsert_schedule(self, schedule_id: str, workflow_run, every: timedelta, args: list | None = None) -> None:
         schedule = Schedule(
             action=ScheduleActionStartWorkflow(
-                workflow_run, id=schedule_id, task_queue=self.settings.temporal_task_queue
+                workflow_run, args=args or [], id=schedule_id, task_queue=self.settings.temporal_task_queue
             ),
             spec=ScheduleSpec(intervals=[ScheduleIntervalSpec(every=every)]),
         )
@@ -99,18 +131,33 @@ class TemporalEngine:
             if error.status != RPCStatusCode.NOT_FOUND:
                 raise
 
+    @activity.defn(name="reconcile_schedules")
+    async def reconcile_schedules(self) -> dict:
+        desired = await asyncio.to_thread(self.triggers.desired_schedules)
+        existing = set()
+        async for entry in await self.client.list_schedules():
+            if entry.id.startswith(TRIGGER_PREFIX):
+                existing.add(entry.id)
+        for schedule_id in existing - desired.keys():
+            await self._delete_schedule(schedule_id)
+        for schedule_id, item in desired.items():
+            await self._upsert_schedule(
+                schedule_id, TRIGGER_WORKFLOWS[item["kind"]].run, timedelta(minutes=item["minutes"]), [item["team"], item["workflow"]]
+            )
+        return {"schedules": sorted(desired)}
+
     async def ensure_schedules(self) -> None:
+        for legacy in LEGACY_SCHEDULES:
+            await self._delete_schedule(legacy)
         await self._upsert_schedule(
             REAP_SCHEDULE_ID, ReapSessionsWorkflow.run, timedelta(seconds=self.settings.reap_interval_seconds)
         )
-        if self.settings.bitbucket_enabled:
+        if self.settings.onboarding_url:
             await self._upsert_schedule(
-                BITBUCKET_SCHEDULE_ID,
-                PollPullRequestsWorkflow.run,
-                timedelta(minutes=self.settings.bitbucket_poll_minutes),
+                SYNC_SCHEDULE_ID, PlatformSyncWorkflow.run, timedelta(minutes=self.settings.sync_interval_minutes)
             )
         else:
-            await self._delete_schedule(BITBUCKET_SCHEDULE_ID)
+            await self._delete_schedule(SYNC_SCHEDULE_ID)
 
     async def run(self) -> None:
         while True:

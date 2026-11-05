@@ -10,11 +10,12 @@ services:
       - --log.level=INFO
     ports:
       - "8080:80"
-      - "9090:8080"
+      - "127.0.0.1:9090:8080"
     volumes:
       - traefik-dynamic:/traefik/dynamic:ro
     networks:
       - opencode-net
+      - opencode-sandbox
     depends_on:
       - manager
     restart: unless-stopped
@@ -23,12 +24,17 @@ services:
     image: temporalio/temporal:1.10.0
     command: ["server", "start-dev", "--ip", "0.0.0.0", "--db-filename", "/home/temporal/temporal.db"]
     ports:
-      - "8233:8233"
+      - "127.0.0.1:8233:8233"
     volumes:
       - temporal-data:/home/temporal
     networks:
       - opencode-net
     restart: unless-stopped
+
+  opencode-dev:
+    image: opencode-platform/opencode-dev:1.19.5
+    build: ./images/opencode-dev
+    profiles: [images]
 
   manager:
     build: ./manager
@@ -37,31 +43,29 @@ services:
       MANAGER_ROUTER: traefik-file
       MANAGER_DOMAIN: ${MANAGER_DOMAIN:-localhost}
       MANAGER_PUBLIC_PORT: ${MANAGER_PUBLIC_PORT:-8080}
-      MANAGER_DOCKER_NETWORK: opencode-net
+      MANAGER_DOCKER_SANDBOX_NETWORK: opencode-sandbox
+      MANAGER_DOCKER_EGRESS_NETWORK: opencode-egress
       MANAGER_DOCKER_SHARED_VOLUME: opencode-shared
       MANAGER_TEMPORAL_ADDRESS: temporal:7233
       MANAGER_AUTH_MODE: ${MANAGER_AUTH_MODE:-login}
       MANAGER_JWT_JWKS_URL: ${MANAGER_JWT_JWKS_URL:-}
       MANAGER_JWT_SECRET: ${MANAGER_JWT_SECRET:-}
-      MANAGER_SESSION_IMAGE: ${SESSION_IMAGE:-ghcr.io/anomalyco/opencode:1.19.5}
-      MANAGER_SESSION_ENV: ${SESSION_ENV:-{}}
+      MANAGER_ONBOARDING_URL: ${ONBOARDING_URL:-file:///repos/onboarding}
       MANAGER_REAP_INTERVAL_SECONDS: ${MANAGER_REAP_INTERVAL_SECONDS:-300}
-      MANAGER_IDLE_GRACE_SECONDS: ${MANAGER_IDLE_GRACE_SECONDS:-300}
-      MANAGER_BITBUCKET_TOKEN: ${BITBUCKET_TOKEN:-}
-      MANAGER_REVIEW_MODEL_AUTH: ${OPENCODE_AUTH:-{}}
-      MANAGER_REVIEW_PROVIDER_CONFIG: ${OPENCODE_PROVIDER:-{}}
-      MANAGER_REVIEW_MODELS: ${REVIEW_MODELS:-}
     env_file:
       - path: ./local/manager.env
         required: false
     volumes:
-      - ./local/review:/config/review:ro
       - /var/run/docker.sock:/var/run/docker.sock
+      - ./local/secrets:/config/secrets:ro
+      - ./local/repos:/repos:ro
       - traefik-dynamic:/traefik/dynamic
       - manager-data:/data
       - opencode-shared:/shared
     networks:
-      - opencode-net
+      opencode-net: {}
+      opencode-sandbox:
+        aliases: [manager]
     depends_on:
       - temporal
     restart: unless-stopped
@@ -69,6 +73,11 @@ services:
 networks:
   opencode-net:
     name: opencode-net
+  opencode-sandbox:
+    name: opencode-sandbox
+    internal: true
+  opencode-egress:
+    name: opencode-egress
 
 volumes:
   traefik-dynamic:

@@ -3,14 +3,13 @@ import time
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from ..config import Settings
-from ..pull_requests import PullRequestSessions
-from ..review import ModelUnavailable, PullRequestReviews
-from ..review_post import PostPlan, ReviewSubmission
-
-REVIEW_POLL_SECONDS = 10
-MODEL_UNAVAILABLE = "ModelUnavailable"
+from ..platform.registry import PlatformRegistry
+from ..platform.runner import ModelUnavailable, RunService
+from ..platform.triggers import TriggerService
 from ..sessions import SessionService
+from .workflows import MODEL_UNAVAILABLE
+
+POLL_SECONDS = 10
 
 
 class SessionActivities:
@@ -32,6 +31,11 @@ class SessionActivities:
         if not self.service.is_ready(self._record(session_id)):
             raise ApplicationError(f"Session {session_id} is not ready yet")
 
+    @activity.defn(name="stop_session")
+    def stop_session(self, session_id: str) -> None:
+        if self.service.get(session_id):
+            self.service.stop(session_id)
+
     @activity.defn(name="list_running_sessions")
     def list_running_sessions(self) -> list[str]:
         return self.service.running_session_ids()
@@ -45,112 +49,81 @@ class SessionActivities:
         return True
 
     def all(self) -> list:
-        return [
-            self.start_session,
-            self.check_ready,
-            self.list_running_sessions,
-            self.stop_session_if_done,
-        ]
+        return [self.start_session, self.check_ready, self.stop_session, self.list_running_sessions, self.stop_session_if_done]
 
 
-class PullRequestActivities:
-    def __init__(self, settings: Settings, pull_requests: PullRequestSessions):
-        self.settings = settings
-        self.pull_requests = pull_requests
+class RunActivities:
+    def __init__(self, runner: RunService):
+        self.runner = runner
 
-    @activity.defn(name="bitbucket_repositories")
-    def bitbucket_repositories(self) -> list[str]:
-        return self.settings.bitbucket_repos
+    @activity.defn(name="run_prepare")
+    def run_prepare(self, run_id: str) -> dict:
+        return self.runner.prepare(run_id)
 
-    @activity.defn(name="list_new_pull_requests")
-    def list_new_pull_requests(self, repo: str) -> list[dict]:
-        return self.pull_requests.new_pull_requests(repo)
+    @activity.defn(name="run_start_conversation")
+    def run_start_conversation(self, run_id: str, model: str) -> str | None:
+        return self.runner.start_conversation(run_id, model)
 
-    @activity.defn(name="ensure_pull_request_session")
-    def ensure_pull_request_session(self, pull_request: dict) -> str:
-        return self.pull_requests.ensure_session(pull_request)
-
-    def all(self) -> list:
-        return [self.bitbucket_repositories, self.list_new_pull_requests, self.ensure_pull_request_session]
-
-
-class ReviewActivities:
-    def __init__(self, settings: Settings, reviews: PullRequestReviews):
-        self.settings = settings
-        self.reviews = reviews
-
-    @activity.defn(name="review_enabled")
-    def review_enabled(self) -> bool:
-        return self.settings.review_enabled
-
-    @activity.defn(name="review_models")
-    def review_models(self) -> list[str]:
-        return self.settings.review_models
-
-    @activity.defn(name="prepare_review_workspace")
-    def prepare_review_workspace(self, session_id: str, pull_request: dict) -> None:
-        self.reviews.prepare_workspace(session_id, pull_request)
-
-    @activity.defn(name="start_review")
-    def start_review(self, session_id: str, pull_request: dict, model: str) -> str:
-        try:
-            return self.reviews.start(session_id, pull_request, model)
-        except ModelUnavailable as error:
-            raise ApplicationError(str(error), type=MODEL_UNAVAILABLE, non_retryable=True) from error
-
-    @activity.defn(name="wait_for_review")
-    def wait_for_review(self, session_id: str, conversation: str) -> str:
+    @activity.defn(name="run_wait")
+    def run_wait(self, run_id: str, conversation: str) -> None:
         while True:
             try:
-                review = self.reviews.result(session_id, conversation)
+                if self.runner.conversation_finished(run_id, conversation):
+                    return
             except ModelUnavailable as error:
                 raise ApplicationError(str(error), type=MODEL_UNAVAILABLE, non_retryable=True) from error
-            if review is not None:
-                return review
             activity.heartbeat()
-            time.sleep(REVIEW_POLL_SECONDS)
+            time.sleep(POLL_SECONDS)
 
-    @activity.defn(name="install_model_credentials")
-    def install_model_credentials(self, session_id: str) -> bool:
-        return self.reviews.install_model_credentials(session_id)
+    @activity.defn(name="run_nudge")
+    def run_nudge(self, run_id: str, conversation: str, model: str) -> None:
+        self.runner.nudge(run_id, conversation, model)
 
-    @activity.defn(name="remove_model_credentials")
-    def remove_model_credentials(self, session_id: str) -> None:
-        self.reviews.remove_model_credentials(session_id)
-        self.reviews.service.stop(session_id)
+    @activity.defn(name="run_abort")
+    def run_abort(self, run_id: str, conversation: str) -> None:
+        self.runner.abort(run_id, conversation)
 
-    @activity.defn(name="nudge_review")
-    def nudge_review(self, session_id: str, conversation: str, model: str) -> None:
-        self.reviews.nudge(session_id, conversation, model)
+    @activity.defn(name="run_finalize")
+    def run_finalize(self, run_id: str, submission: dict) -> dict:
+        return self.runner.finalize(run_id, submission)
 
-    @activity.defn(name="abort_review")
-    def abort_review(self, session_id: str, conversation: str) -> None:
-        self.reviews.abort(session_id, conversation)
+    @activity.defn(name="run_complete")
+    def run_complete(self, run_id: str) -> None:
+        self.runner.complete(run_id)
 
-    @activity.defn(name="save_review")
-    def save_review(self, session_id: str, review: dict) -> None:
-        self.reviews.save(session_id, ReviewSubmission.model_validate(review))
-
-    @activity.defn(name="plan_review_post")
-    def plan_review_post(self, session_id: str, review: dict) -> dict:
-        return self.reviews.plan(session_id, ReviewSubmission.model_validate(review)).model_dump()
-
-    @activity.defn(name="post_review")
-    def post_review(self, session_id: str, pull_request: dict, plan: dict) -> int:
-        return self.reviews.post(session_id, pull_request, PostPlan.model_validate(plan))
+    @activity.defn(name="run_fail")
+    def run_fail(self, run_id: str, message: str) -> None:
+        self.runner.fail(run_id, message)
 
     def all(self) -> list:
         return [
-            self.review_enabled,
-            self.review_models,
-            self.abort_review,
-            self.install_model_credentials,
-            self.remove_model_credentials,
-            self.prepare_review_workspace,
-            self.start_review,
-            self.wait_for_review,
-            self.nudge_review,
-            self.save_review,
-            self.plan_review_post,
-            self.post_review,
+            self.run_prepare,
+            self.run_start_conversation,
+            self.run_wait,
+            self.run_nudge,
+            self.run_abort,
+            self.run_finalize,
+            self.run_complete,
+            self.run_fail,
         ]
+
+
+class PlatformActivities:
+    def __init__(self, registry: PlatformRegistry, triggers: TriggerService):
+        self.registry = registry
+        self.triggers = triggers
+
+    @activity.defn(name="platform_sync")
+    def platform_sync(self) -> dict:
+        return self.registry.sync()
+
+    @activity.defn(name="trigger_new_pull_requests")
+    def trigger_new_pull_requests(self, team_id: str, workflow_id: str) -> list[str]:
+        return self.triggers.new_pull_requests(team_id, workflow_id)
+
+    @activity.defn(name="trigger_scheduled_run")
+    def trigger_scheduled_run(self, team_id: str, workflow_id: str) -> str:
+        return self.triggers.scheduled_run(team_id, workflow_id)
+
+    def all(self) -> list:
+        return [self.platform_sync, self.trigger_new_pull_requests, self.trigger_scheduled_run]

@@ -1,9 +1,9 @@
 import { createContext, useContext } from "react";
-import type { Identity } from "./api";
+import type { Me } from "./api";
 
-export const IdentityContext = createContext<Identity | null>(null);
+export const IdentityContext = createContext<Me | null>(null);
 
-export function useIdentity(): Identity {
+export function useIdentity(): Me {
   const identity = useContext(IdentityContext);
   if (!identity) {
     throw new Error("useIdentity must be used inside an authenticated layout");

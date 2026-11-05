@@ -7,9 +7,20 @@ from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 
+from .auth import signing_key
 from .backends import create_backend
 from .config import get_settings
-from . import review_tool
+from .db import Database
+from .platform import tools
+from .platform.audit import AuditCollector, AuditStore
+from .platform.context import Platform
+from .platform.gateway import router as llm_router
+from .platform.registry import PlatformRegistry
+from .platform.runner import RunService
+from .platform.runs import RunStore
+from .platform.secrets import SecretStore
+from .platform.triggers import TriggerService
+from .platform.usage import UsageStore
 from .routes import api, gateway
 from .routing import FORWARD_AUTH_PATH, create_route_provider
 from .sessions import SessionService
@@ -18,6 +29,7 @@ from .store import SessionStore
 from .temporal.engine import TemporalEngine, connect
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger(__name__)
 
 
@@ -26,52 +38,84 @@ def log_failure(task: asyncio.Task) -> None:
         log.error("Background task %s failed", task.get_name(), exc_info=task.exception())
 
 
-async def prepare_backend(service: SessionService) -> None:
+async def prepare_backend(sessions: SessionService) -> None:
     try:
-        await run_in_threadpool(service.backend.prepare)
+        await run_in_threadpool(sessions.backend.prepare)
     except Exception:
         log.exception("Backend preparation failed")
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
+async def initial_sync(platform: Platform) -> None:
+    if platform.registry.configured:
+        try:
+            await platform.engine.sync_now()
+        except Exception:
+            log.exception("Initial platform sync failed")
+
+
+def build_platform() -> Platform:
     settings = get_settings()
+    db = Database(settings.database_path)
+    secrets = SecretStore(settings)
+    registry = PlatformRegistry(settings, db, secrets)
     backend = create_backend(settings)
-    service = SessionService(
+    sessions = SessionService(
         settings,
-        SessionStore(settings.database_path),
+        SessionStore(db),
         backend,
         create_route_provider(settings, backend),
         SharedStorage(settings.shared_mount_path),
+        team_role=registry.role,
     )
-    await run_in_threadpool(service.sync_routes)
-    engine = TemporalEngine(settings, service, await connect(settings))
-    app.state.sessions = service
-    app.state.engine = engine
-    review_tool.state.service = service
-    review_tool.state.engine = engine
+    runs = RunStore(db)
+    key = signing_key()
+    runner = RunService(settings, registry, sessions, runs, secrets, key)
+    audit = AuditStore(db)
+    return Platform(
+        settings=settings,
+        signing_key=key,
+        secrets=secrets,
+        registry=registry,
+        sessions=sessions,
+        runs=runs,
+        runner=runner,
+        triggers=TriggerService(runner),
+        usage=UsageStore(db),
+        audit=audit,
+        collector=AuditCollector(audit, sessions),
+    )
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    platform = build_platform()
+    await run_in_threadpool(platform.sessions.sync_routes)
+    platform.engine = TemporalEngine(
+        platform.settings, platform.sessions, platform.registry, platform.runner, platform.triggers, await connect(platform.settings)
+    )
+    app.state.platform = platform
+    app.state.sessions = platform.sessions
+    app.state.engine = platform.engine
+    tools.state.platform = platform
 
     tasks = [
-        asyncio.create_task(prepare_backend(service), name="prepare-backend"),
-        asyncio.create_task(engine.run(), name="temporal-engine"),
+        asyncio.create_task(prepare_backend(platform.sessions), name="prepare-backend"),
+        asyncio.create_task(platform.engine.run(), name="temporal-engine"),
+        asyncio.create_task(platform.collector.run(), name="audit-collector"),
+        asyncio.create_task(initial_sync(platform), name="initial-sync"),
     ]
     for task in tasks:
         task.add_done_callback(log_failure)
-    async with review_tool.server.session_manager.run():
+    async with tools.server.session_manager.run():
         yield
-    await engine.shutdown()
+    await platform.engine.shutdown()
     for task in tasks:
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
 
 
-app = FastAPI(
-    title="OpenCode Session Manager",
-    lifespan=lifespan,
-    docs_url="/api/docs",
-    openapi_url="/api/openapi.json",
-)
+app = FastAPI(title="OpenCode Agent Platform", lifespan=lifespan, docs_url="/api/docs", openapi_url="/api/openapi.json")
 
 
 @app.middleware("http")
@@ -83,8 +127,10 @@ async def wake_session_hosts(request: Request, call_next):
 
 
 app.include_router(api.router)
+app.include_router(api.metrics_router)
 app.include_router(gateway.router)
-app.mount("/mcp", review_tool.mcp_app())
+app.include_router(llm_router)
+app.mount("/mcp", tools.mcp_app())
 
 
 @app.get("/healthz", include_in_schema=False)

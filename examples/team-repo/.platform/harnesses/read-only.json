@@ -1,0 +1,8 @@
+{
+  "description": "No internet and no file edits: for reviews and analysis.",
+  "llm": { "connection": "copilot", "models": ["claude-sonnet-5.5"] },
+  "network": "none",
+  "permissions": { "edit": "deny", "bash": "allow" },
+  "resources": { "cpus": 1, "memory_mb": 1536 },
+  "idle_minutes": 10
+}

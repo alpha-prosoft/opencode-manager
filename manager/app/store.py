@@ -1,69 +1,22 @@
 import json
-import sqlite3
-from contextlib import contextmanager
 from datetime import UTC, datetime
-from pathlib import Path
 
+from .db import Database
 from .models import SessionRecord
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS sessions (
-    id TEXT PRIMARY KEY,
-    sub TEXT NOT NULL,
-    email TEXT NOT NULL,
-    name TEXT NOT NULL,
-    description TEXT NOT NULL,
-    visibility TEXT NOT NULL DEFAULT 'private',
-    labels TEXT NOT NULL,
-    env TEXT NOT NULL,
-    image TEXT NOT NULL,
-    secret_key TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    last_activity_at TEXT NOT NULL,
-    stopped_at TEXT
-);
-CREATE INDEX IF NOT EXISTS sessions_sub ON sessions (sub);
-CREATE TABLE IF NOT EXISTS review_comments (
-    session_id TEXT NOT NULL,
-    key TEXT NOT NULL,
-    comment_id INTEGER NOT NULL,
-    posted_at TEXT NOT NULL,
-    PRIMARY KEY (session_id, key)
-);
-CREATE TABLE IF NOT EXISTS pull_requests (
-    repo TEXT NOT NULL,
-    pr_id INTEGER NOT NULL,
-    session_id TEXT,
-    seen_at TEXT NOT NULL,
-    PRIMARY KEY (repo, pr_id)
-);
-"""
 
 JSON_COLUMNS = ("labels", "env")
 
 
-class SessionStore:
-    def __init__(self, path: str):
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        self._path = path
-        with self._connect() as db:
-            db.executescript(SCHEMA)
-            columns = {row["name"] for row in db.execute("PRAGMA table_info(sessions)")}
-            if "visibility" not in columns:
-                db.execute("ALTER TABLE sessions ADD COLUMN visibility TEXT NOT NULL DEFAULT 'private'")
+def now() -> str:
+    return datetime.now(UTC).isoformat()
 
-    @contextmanager
-    def _connect(self):
-        db = sqlite3.connect(self._path, timeout=10)
-        db.row_factory = sqlite3.Row
-        try:
-            yield db
-            db.commit()
-        finally:
-            db.close()
+
+class SessionStore:
+    def __init__(self, db: Database):
+        self.db = db
 
     @staticmethod
-    def _to_record(row: sqlite3.Row) -> SessionRecord:
+    def _to_record(row) -> SessionRecord:
         data = dict(row)
         for column in JSON_COLUMNS:
             data[column] = json.loads(data[column])
@@ -76,20 +29,17 @@ class SessionStore:
             data[column] = json.dumps(data[column])
         columns = ", ".join(data)
         placeholders = ", ".join(f":{key}" for key in data)
-        with self._connect() as db:
+        with self.db.connect() as db:
             db.execute(f"INSERT INTO sessions ({columns}) VALUES ({placeholders})", data)
 
     def get(self, session_id: str) -> SessionRecord | None:
-        with self._connect() as db:
+        with self.db.connect() as db:
             row = db.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
         return self._to_record(row) if row else None
 
-    def list(self, visible_to: str | None = None) -> list[SessionRecord]:
-        query, params = "SELECT * FROM sessions", ()
-        if visible_to is not None:
-            query, params = query + " WHERE sub = ? OR visibility = 'public'", (visible_to,)
-        with self._connect() as db:
-            rows = db.execute(query + " ORDER BY created_at DESC", params).fetchall()
+    def list(self) -> list[SessionRecord]:
+        with self.db.connect() as db:
+            rows = db.execute("SELECT * FROM sessions ORDER BY created_at DESC").fetchall()
         return [self._to_record(row) for row in rows]
 
     def update(self, session_id: str, changes: dict) -> None:
@@ -97,55 +47,31 @@ class SessionStore:
             if column in changes:
                 changes[column] = json.dumps(changes[column])
         assignments = ", ".join(f"{column} = :{column}" for column in changes)
-        with self._connect() as db:
+        with self.db.connect() as db:
             db.execute(f"UPDATE sessions SET {assignments} WHERE id = :id", {**changes, "id": session_id})
 
     def touch(self, session_id: str) -> None:
-        with self._connect() as db:
+        with self.db.connect() as db:
             db.execute(
-                "UPDATE sessions SET last_activity_at = ?, stopped_at = NULL WHERE id = ?",
-                (datetime.now(UTC).isoformat(), session_id),
+                "UPDATE sessions SET last_activity_at = ?, stopped_at = NULL WHERE id = ?", (now(), session_id)
             )
 
     def mark_stopped(self, session_id: str) -> None:
-        with self._connect() as db:
-            db.execute(
-                "UPDATE sessions SET stopped_at = ? WHERE id = ?",
-                (datetime.now(UTC).isoformat(), session_id),
-            )
+        with self.db.connect() as db:
+            db.execute("UPDATE sessions SET stopped_at = ? WHERE id = ?", (now(), session_id))
 
     def delete(self, session_id: str) -> None:
-        with self._connect() as db:
+        with self.db.connect() as db:
             db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
 
-    def seen_pull_requests(self, repo: str) -> set[int]:
-        with self._connect() as db:
-            rows = db.execute("SELECT pr_id FROM pull_requests WHERE repo = ?", (repo,)).fetchall()
-        return {row["pr_id"] for row in rows}
-
-    def pull_request_session(self, repo: str, pr_id: int) -> str | None:
-        with self._connect() as db:
-            row = db.execute(
-                "SELECT session_id FROM pull_requests WHERE repo = ? AND pr_id = ?", (repo, pr_id)
-            ).fetchone()
-        return row["session_id"] if row else None
-
     def posted_review_comments(self, session_id: str) -> set[str]:
-        with self._connect() as db:
+        with self.db.connect() as db:
             rows = db.execute("SELECT key FROM review_comments WHERE session_id = ?", (session_id,)).fetchall()
         return {row["key"] for row in rows}
 
     def record_review_comment(self, session_id: str, key: str, comment_id: int) -> None:
-        with self._connect() as db:
+        with self.db.connect() as db:
             db.execute(
                 "INSERT INTO review_comments (session_id, key, comment_id, posted_at) VALUES (?, ?, ?, ?)",
-                (session_id, key, comment_id, datetime.now(UTC).isoformat()),
-            )
-
-    def record_pull_request(self, repo: str, pr_id: int, session_id: str | None) -> None:
-        with self._connect() as db:
-            db.execute(
-                "INSERT INTO pull_requests (repo, pr_id, session_id, seen_at) VALUES (?, ?, ?, ?) "
-                "ON CONFLICT (repo, pr_id) DO UPDATE SET session_id = excluded.session_id",
-                (repo, pr_id, session_id, datetime.now(UTC).isoformat()),
+                (session_id, key, comment_id, now()),
             )

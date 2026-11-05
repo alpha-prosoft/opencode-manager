@@ -3,14 +3,15 @@ import secrets
 import threading
 import time
 from collections import defaultdict
+from collections.abc import Callable
 from datetime import UTC, datetime
 from urllib.parse import quote
 
 from . import opencode
-from .backends.base import WORKSPACE_DIR
 from .backends import ContainerBackend
+from .backends.base import WORKSPACE_DIR
 from .config import Settings
-from .models import Identity, Session, SessionCreate, SessionRecord, SessionStatus, SessionUpdate, Visibility
+from .models import Identity, Session, SessionRecord, SessionStatus, SessionUpdate, Visibility
 from .routing import RouteProvider
 from .storage import SharedStorage
 from .store import SessionStore
@@ -18,7 +19,7 @@ from .store import SessionStore
 log = logging.getLogger(__name__)
 
 ACTIVE = {SessionStatus.RUNNING, SessionStatus.STARTING}
-REVIEW_CONVERSATION_LABEL = "review-conversation"
+CONVERSATION_LABEL = "conversation"
 TOUCH_THROTTLE_SECONDS = 30
 
 
@@ -30,12 +31,14 @@ class SessionService:
         backend: ContainerBackend,
         routes: RouteProvider,
         storage: SharedStorage,
+        team_role: Callable[[str, str], str | None] = lambda username, team: None,
     ):
         self.settings = settings
         self.store = store
         self.backend = backend
         self.routes = routes
         self.storage = storage
+        self.team_role = team_role
         self._locks: defaultdict[str, threading.Lock] = defaultdict(threading.Lock)
         self._ready: set[str] = set()
         self._last_touch: dict[str, float] = {}
@@ -44,7 +47,7 @@ class SessionService:
         return self.settings.public_url(self.settings.session_host(record.id))
 
     def open_path(self, record: SessionRecord) -> str:
-        return opencode.web_path(WORKSPACE_DIR, record.labels.get(REVIEW_CONVERSATION_LABEL))
+        return opencode.web_path(WORKSPACE_DIR, record.labels.get(CONVERSATION_LABEL))
 
     def entry_path(self, record: SessionRecord) -> str:
         return f"/sessions/{quote(record.sub, safe='')}/{record.id}"
@@ -52,9 +55,15 @@ class SessionService:
     def entry_url(self, record: SessionRecord) -> str:
         return self.settings.public_url(self.settings.domain) + self.entry_path(record)
 
-    @staticmethod
-    def can_view(record: SessionRecord, identity: Identity) -> bool:
-        return record.sub == identity.sub or record.visibility == Visibility.PUBLIC
+    def can_view(self, record: SessionRecord, identity: Identity) -> bool:
+        if record.sub == identity.sub or record.visibility == Visibility.PUBLIC:
+            return True
+        return bool(record.team_id and self.team_role(identity.sub, record.team_id))
+
+    def can_manage(self, record: SessionRecord, identity: Identity) -> bool:
+        if record.sub == identity.sub:
+            return True
+        return bool(record.team_id and self.team_role(identity.sub, record.team_id) == "admin")
 
     def session_id_from_host(self, host: str) -> str | None:
         hostname = host.split(":", 1)[0].lower()
@@ -65,20 +74,19 @@ class SessionService:
         return session_id if session_id.isalnum() else None
 
     def view(self, record: SessionRecord, identity: Identity, statuses: dict[str, SessionStatus]) -> Session:
-        is_owner = record.sub == identity.sub
-        data = record.model_dump() | ({} if is_owner else {"env": {}})
         return Session(
-            **data,
+            **record.model_dump(),
             secret_key=record.secret_key,
             status=statuses.get(record.id, SessionStatus.STOPPED),
             url=self.session_url(record),
             open_url=self.entry_path(record),
-            is_owner=is_owner,
+            is_owner=record.sub == identity.sub,
+            can_manage=self.can_manage(record, identity),
         )
 
     def list(self, identity: Identity) -> list[Session]:
         statuses = self.backend.statuses()
-        return [self.view(record, identity, statuses) for record in self.store.list(visible_to=identity.sub)]
+        return [self.view(r, identity, statuses) for r in self.store.list() if self.can_view(r, identity)]
 
     def get(self, session_id: str) -> SessionRecord | None:
         return self.store.get(session_id)
@@ -92,20 +100,41 @@ class SessionService:
             self.store.update(record.id, fields)
         return self.store.get(record.id)
 
+    def label(self, session_id: str, key: str, value: str) -> None:
+        record = self.store.get(session_id)
+        self.store.update(session_id, {"labels": {**record.labels, key: value}})
+
     def sync_routes(self) -> None:
         self.routes.sync(self.store.list())
 
-    def create(self, identity: Identity, data: SessionCreate) -> SessionRecord:
-        now = datetime.now(UTC)
+    def create(
+        self,
+        owner: Identity,
+        name: str,
+        description: str,
+        visibility: Visibility,
+        team_id: str,
+        run_id: str,
+        activity: str,
+        labels: dict[str, str],
+    ) -> SessionRecord:
+        stamp = datetime.now(UTC)
         record = SessionRecord(
-            **data.model_dump(),
             id=secrets.token_hex(8),
-            sub=identity.sub,
-            email=identity.email,
-            image=self.settings.session_image,
+            sub=owner.sub,
+            email=owner.email,
+            name=name[:100] or activity,
+            description=description,
+            visibility=visibility,
+            labels=labels,
+            env={},
+            image="",
+            team_id=team_id,
+            run_id=run_id,
+            activity=activity,
             secret_key=secrets.token_urlsafe(32),
-            created_at=now,
-            last_activity_at=now,
+            created_at=stamp,
+            last_activity_at=stamp,
         )
         self.storage.prepare(record.id)
         self.backend.provision(record)
@@ -117,13 +146,15 @@ class SessionService:
         return self.backend.status(session_id) in ACTIVE
 
     def start(self, record: SessionRecord) -> None:
+        sandbox = self.storage.load_sandbox(record.id)
+        if sandbox is None:
+            raise RuntimeError(f"Session {record.id} has no sandbox configuration")
         with self._locks[record.id]:
             if self.is_active(record.id):
                 return
             log.info("Starting session %s", record.id)
             self._ready.discard(record.id)
-            self.storage.prepare(record.id)
-            self.backend.start(record)
+            self.backend.start(record, sandbox)
             self.store.touch(record.id)
 
     def is_known_ready(self, session_id: str) -> bool:
@@ -138,9 +169,9 @@ class SessionService:
         return False
 
     def touch(self, session_id: str) -> None:
-        now = time.monotonic()
-        if now - self._last_touch.get(session_id, 0) >= TOUCH_THROTTLE_SECONDS:
-            self._last_touch[session_id] = now
+        moment = time.monotonic()
+        if moment - self._last_touch.get(session_id, 0) >= TOUCH_THROTTLE_SECONDS:
+            self._last_touch[session_id] = moment
             self.store.touch(session_id)
 
     def stop(self, session_id: str) -> None:
@@ -165,8 +196,9 @@ class SessionService:
         return [r.id for r in self.store.list() if statuses.get(r.id) == SessionStatus.RUNNING]
 
     def is_done(self, record: SessionRecord) -> bool:
+        sandbox = self.storage.load_sandbox(record.id)
+        grace = (sandbox.idle_minutes * 60) if sandbox else self.settings.idle_grace_seconds
         idle = (datetime.now(UTC) - record.last_activity_at).total_seconds()
-        if idle < self.settings.idle_grace_seconds:
+        if idle < grace:
             return False
-        busy = opencode.count_busy_sessions(self.backend.service_url(record.id), record.secret_key)
-        return busy == 0
+        return opencode.count_busy_sessions(self.backend.service_url(record.id), record.secret_key) == 0

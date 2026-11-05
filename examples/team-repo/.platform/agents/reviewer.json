@@ -1,0 +1,5 @@
+{
+  "description": "Careful code reviewer that reports only verified issues",
+  "prompt_file": "prompts/reviewer.md",
+  "temperature": 0.1
+}

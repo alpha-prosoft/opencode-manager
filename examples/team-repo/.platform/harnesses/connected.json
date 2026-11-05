@@ -1,0 +1,7 @@
+{
+  "description": "Interactive work with internet access (package installs, docs lookup).",
+  "llm": { "connection": "copilot", "models": ["claude-sonnet-5.5", "claude-opus-5.5"] },
+  "network": "internet",
+  "resources": { "cpus": 2, "memory_mb": 4096 },
+  "idle_minutes": 60
+}

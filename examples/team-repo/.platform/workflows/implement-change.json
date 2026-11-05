@@ -1,0 +1,11 @@
+{
+  "name": "Implement a change",
+  "description": "Describe a change; get back a patch with a summary and test results.",
+  "activity": "implement",
+  "agent": "engineer",
+  "harness": "sandboxed",
+  "options": {
+    "repository": { "url": "file:///repos/demo-service", "branch": "main" },
+    "guidelines_file": "context/coding-guidelines.md"
+  }
+}

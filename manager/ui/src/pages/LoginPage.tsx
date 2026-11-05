@@ -32,7 +32,7 @@ export default function LoginPage() {
       <Paper variant="outlined" sx={{ p: 4, width: "100%", maxWidth: 360 }}>
         <form onSubmit={submit}>
           <Stack spacing={3}>
-            <Typography variant="h5">OpenCode Sessions</Typography>
+            <Typography variant="h5">Agent Platform</Typography>
             <TextField
               label="Username"
               value={username}

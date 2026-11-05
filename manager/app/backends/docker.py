@@ -5,7 +5,17 @@ from docker.errors import ImageNotFound, NotFound
 from docker.types import Mount
 
 from ..models import SessionRecord, SessionStatus
-from .base import LABEL_SESSION, LABEL_SUB, WORKSPACE_DIR, ContainerBackend, resource_name
+from ..platform.harness import Sandbox
+from .base import (
+    LABEL_NETWORK,
+    LABEL_SESSION,
+    LABEL_SUB,
+    LABEL_TEAM,
+    SESSION_UID,
+    WORKSPACE_DIR,
+    ContainerBackend,
+    resource_name,
+)
 
 log = logging.getLogger(__name__)
 
@@ -35,33 +45,51 @@ class DockerBackend(ContainerBackend):
     def prepare(self) -> None:
         self._ensure_image(self.settings.session_image)
 
-    def _create(self, record: SessionRecord) -> None:
-        self._ensure_image(record.image)
-        target, subpath = self.mount(record.id)
-        self.client.containers.create(
-            image=record.image,
+    def _create(self, record: SessionRecord, sandbox: Sandbox) -> None:
+        self._ensure_image(sandbox.image)
+        mounts = [
+            Mount(target=target, source=self.settings.docker_shared_volume, subpath=subpath, read_only=read_only)
+            for target, subpath, read_only in self.mounts(record.id)
+        ]
+        container = self.client.containers.create(
+            image=sandbox.image,
             name=resource_name(record.id),
             hostname=resource_name(record.id),
             command=self.command(),
             working_dir=WORKSPACE_DIR,
-            environment=self.instance_env(record),
-            labels={LABEL_SESSION: record.id, LABEL_SUB: record.sub},
-            network=self.settings.docker_network,
-            mounts=[Mount(target=target, source=self.settings.docker_shared_volume, subpath=subpath)],
+            environment=self.environment(sandbox),
+            labels={
+                LABEL_SESSION: record.id,
+                LABEL_SUB: record.sub,
+                LABEL_TEAM: record.team_id or "",
+                LABEL_NETWORK: sandbox.network,
+            },
+            network=self.settings.docker_sandbox_network,
+            mounts=mounts,
+            user=f"{SESSION_UID}:{SESSION_UID}",
+            read_only=True,
+            tmpfs={"/tmp": "rw,nosuid,size=512m"},
+            cap_drop=["ALL"],
+            security_opt=["no-new-privileges"],
+            pids_limit=sandbox.pids,
+            mem_limit=f"{sandbox.memory_mb}m",
+            nano_cpus=int(sandbox.cpus * 1e9),
         )
+        if sandbox.network == "internet":
+            self.client.networks.get(self.settings.docker_egress_network).connect(container)
 
-    def start(self, record: SessionRecord) -> None:
+    def start(self, record: SessionRecord, sandbox: Sandbox) -> None:
         try:
             container = self.client.containers.get(resource_name(record.id))
         except NotFound:
-            self._create(record)
+            self._create(record, sandbox)
             container = self.client.containers.get(resource_name(record.id))
         if container.status != "running":
             container.start()
 
     def stop(self, session_id: str) -> None:
         try:
-            self.client.containers.get(resource_name(session_id)).stop(timeout=30)
+            self.client.containers.get(resource_name(session_id)).stop(timeout=5)
         except NotFound:
             pass
 
@@ -74,8 +102,7 @@ class DockerBackend(ContainerBackend):
     def statuses(self) -> dict[str, SessionStatus]:
         containers = self.client.containers.list(all=True, sparse=True, filters={"label": LABEL_SESSION})
         return {
-            c.attrs["Labels"][LABEL_SESSION]: STATE_TO_STATUS.get(c.status, SessionStatus.ERROR)
-            for c in containers
+            c.attrs["Labels"][LABEL_SESSION]: STATE_TO_STATUS.get(c.status, SessionStatus.ERROR) for c in containers
         }
 
     def service_url(self, session_id: str) -> str:

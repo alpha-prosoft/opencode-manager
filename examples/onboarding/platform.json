@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "admins": [
+    "alice"
+  ],
+  "allowed_images": [
+    "ghcr.io/anomalyco/opencode:1.19.5",
+    "opencode-platform/opencode-dev:1.19.5"
+  ],
+  "llm_connections": [
+    {
+      "id": "copilot",
+      "type": "github-copilot",
+      "secret": "COPILOT_TOKEN",
+      "models": [
+        "claude-sonnet-5.5",
+        "claude-opus-5.5",
+        "gemini-3.5-flash"
+      ]
+    }
+  ],
+  "teams": [
+    {
+      "id": "demo",
+      "name": "Demo team",
+      "description": "Sample team showing every marketplace activity.",
+      "repository": {
+        "url": "file:///repos/demo-team",
+        "branch": "main"
+      },
+      "members": [
+        "alice",
+        "bob"
+      ],
+      "admins": [
+        "alice"
+      ],
+      "secrets": []
+    }
+  ]
+}

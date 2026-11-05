@@ -13,7 +13,6 @@ interface Props {
 
 export default function SessionActions({ session, onChange, onError }: Props) {
   const isActive = session.status === "running" || session.status === "starting";
-
   const run = (action: () => Promise<unknown>) => () =>
     action()
       .then(onChange)
@@ -21,8 +20,8 @@ export default function SessionActions({ session, onChange, onError }: Props) {
 
   return (
     <Stack direction="row" spacing={0.5} sx={{ justifyContent: "flex-end" }}>
-      <Tooltip title="Open">
-        <IconButton href={session.open_url} color="primary">
+      <Tooltip title="Open in OpenCode">
+        <IconButton href={session.open_url} target="_blank" rel="noopener" color="primary">
           <OpenInNewIcon />
         </IconButton>
       </Tooltip>
@@ -33,19 +32,19 @@ export default function SessionActions({ session, onChange, onError }: Props) {
           </IconButton>
         </Tooltip>
       )}
-      {isActive && session.is_owner && (
+      {isActive && session.can_manage && (
         <Tooltip title="Stop">
           <IconButton onClick={run(() => api.stopSession(session.id))}>
             <StopIcon />
           </IconButton>
         </Tooltip>
       )}
-      {session.is_owner && (
-        <Tooltip title="Delete">
+      {session.can_manage && (
+        <Tooltip title="Delete (the audit trail is kept)">
           <IconButton
             color="error"
             onClick={run(async () => {
-              if (window.confirm(`Delete session "${session.name}" and its data?`)) {
+              if (window.confirm(`Delete session "${session.name}" and its workspace? The audit trail is kept.`)) {
                 await api.deleteSession(session.id);
               }
             })}

@@ -1,0 +1,5 @@
+{
+  "description": "Pragmatic senior engineer",
+  "prompt_file": "prompts/engineer.md",
+  "temperature": 0.2
+}

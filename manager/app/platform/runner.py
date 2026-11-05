@@ -1,0 +1,221 @@
+import logging
+
+from pydantic import ValidationError
+
+from .. import opencode
+from ..config import Settings
+from ..models import Identity, Visibility
+from ..sessions import CONVERSATION_LABEL, SessionService
+from . import harness as harness_builder
+from .catalog import get_activity
+from .handlers import HANDLERS, SUBMISSIONS, RunContext
+from .registry import PlatformRegistry
+from .runs import RunStore
+from .secrets import SecretStore
+from .spec import AgentSpec, HarnessSpec, WorkflowSpec
+
+log = logging.getLogger(__name__)
+
+PLATFORM_ACTOR = "platform"
+
+
+class RunError(Exception):
+    pass
+
+
+class ModelUnavailable(Exception):
+    pass
+
+
+NUDGE = "You have not submitted your result yet. Call the `{tool}` tool now with your complete result."
+RETRY_LIMIT = 3
+
+
+class RunService:
+    def __init__(
+        self,
+        settings: Settings,
+        registry: PlatformRegistry,
+        sessions: SessionService,
+        runs: RunStore,
+        secrets: SecretStore,
+        signing_key: str,
+    ):
+        self.settings = settings
+        self.registry = registry
+        self.sessions = sessions
+        self.runs = runs
+        self.secrets = secrets
+        self.signing_key = signing_key
+
+    def _workflow(self, team_id: str, workflow_id: str) -> WorkflowSpec:
+        workflow = self.registry.definition(team_id, "workflows", workflow_id)
+        if workflow is None:
+            raise RunError(f"Workflow {team_id}/{workflow_id} does not exist or is invalid")
+        return workflow
+
+    def create(self, team_id: str, workflow_id: str, trigger: dict, inputs: dict, created_by: str) -> dict:
+        workflow = self._workflow(team_id, workflow_id)
+        activity = get_activity(workflow.activity)
+        try:
+            validated = activity.inputs.model_validate(inputs)
+        except ValidationError as error:
+            raise RunError("; ".join(f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in error.errors())) from error
+        return self.runs.create(team_id, workflow_id, workflow.activity, trigger, validated.model_dump(mode="json"), created_by)
+
+    def create_manual(self, identity: Identity, team_id: str, workflow_id: str, inputs: dict) -> dict:
+        if not self.registry.role(identity.sub, team_id):
+            raise PermissionError(f"{identity.sub} is not a member of team {team_id}")
+        return self.create(team_id, workflow_id, {"type": "manual", "by": identity.sub}, inputs, identity.sub)
+
+    def _context(self, run: dict, workspace) -> RunContext:
+        team = self.registry.team(run["team_id"])
+        workflow = self._workflow(run["team_id"], run["workflow_id"])
+        activity = get_activity(workflow.activity)
+        options = dict(workflow.options)
+        if run["trigger"].get("scm"):
+            options["scm"] = run["trigger"]["scm"]
+        session_url = ""
+        if run.get("session_id"):
+            record = self.sessions.get(run["session_id"])
+            session_url = self.sessions.entry_url(record) if record else ""
+        return RunContext(
+            run=run,
+            team=team,
+            workflow=workflow,
+            activity=activity,
+            options=activity.options.model_validate(options),
+            inputs=activity.inputs.model_validate(run["inputs"]),
+            workspace=workspace,
+            secrets=self.secrets,
+            read_team_file=lambda relative: self.registry.read_team_file(run["team_id"], relative),
+            session_url=session_url,
+        )
+
+    def _owner(self, run: dict) -> Identity:
+        sub = run["created_by"] if not run["created_by"].startswith(PLATFORM_ACTOR) else PLATFORM_ACTOR
+        return Identity(sub=sub, email=f"{sub}@{self.settings.email_domain}", name=sub)
+
+    def prepare(self, run_id: str) -> dict:
+        run = self.runs.get(run_id)
+        workflow = self._workflow(run["team_id"], run["workflow_id"])
+        agent: AgentSpec = self.registry.definition(run["team_id"], "agents", workflow.agent)
+        harness: HarnessSpec = self.registry.definition(run["team_id"], "harnesses", workflow.harness)
+        if agent is None or harness is None:
+            raise RunError("The workflow's agent or harness is missing or invalid")
+        activity = get_activity(workflow.activity)
+
+        if run.get("session_id") and self.sessions.get(run["session_id"]):
+            record = self.sessions.get(run["session_id"])
+        else:
+            title = run["inputs"].get("title") or workflow.name
+            if run["inputs"].get("pull_request"):
+                title = f"{workflow.name} · PR #{run['inputs']['pull_request']}"
+            visibility = Visibility.TEAM if workflow.visibility == "team" else Visibility.PUBLIC
+            if activity.interactive and run["created_by"] != PLATFORM_ACTOR:
+                visibility = Visibility.PRIVATE if workflow.visibility == "team" else Visibility.PUBLIC
+            record = self.sessions.create(
+                self._owner(run),
+                title,
+                workflow.description,
+                visibility,
+                run["team_id"],
+                run_id,
+                workflow.activity,
+                {"workflow": run["workflow_id"], "activity": workflow.activity},
+            )
+            self.runs.update(run_id, session_id=record.id, status="preparing")
+            run = self.runs.get(run_id)
+
+        ctx = self._context(run, self.sessions.storage.workspace(record.id))
+        HANDLERS[workflow.activity].prepare(ctx)
+        self.sessions.storage.hand_over(record.id)
+
+        prompt = agent.prompt or self.registry.read_team_file(run["team_id"], agent.prompt_file)
+        instructions = getattr(ctx.options, "instructions_file", None)
+        if instructions:
+            prompt += "\n\n" + self.registry.read_team_file(run["team_id"], instructions)
+        result_tool = activity.result_tool
+        config = harness_builder.opencode_config(
+            self.settings,
+            record.id,
+            workflow.agent,
+            agent,
+            prompt,
+            harness,
+            activity.interactive,
+            harness_builder.derive_key(self.signing_key, "llm", record.id),
+            harness_builder.derive_key(self.signing_key, "mcp", record.id) if result_tool else None,
+        )
+        sandbox = harness_builder.sandbox(self.settings, harness, config, record.secret_key, run["team_id"], run_id)
+        self.sessions.storage.write_sandbox(record.id, sandbox)
+        self.runs.update(run_id, status="running")
+        return {"session_id": record.id, "interactive": activity.interactive, "models": list(harness.llm.models)}
+
+    def start_conversation(self, run_id: str, model: str) -> str | None:
+        run = self.runs.get(run_id)
+        record = self.sessions.get(run["session_id"])
+        ctx = self._context(run, self.sessions.storage.workspace(record.id))
+        prompt = HANDLERS[run["activity"]].prompt(ctx)
+        base_url = self.sessions.backend.service_url(record.id)
+        if prompt is None:
+            return None
+        conversation = opencode.create_session(base_url, record.secret_key, ctx.workflow.name)
+        self.sessions.label(record.id, CONVERSATION_LABEL, conversation)
+        opencode.prompt_async(base_url, record.secret_key, conversation, f"{harness_builder.PROVIDER_ID}/{model}", prompt)
+        if not ctx.activity.interactive:
+            self.runs.update(run_id, status="awaiting_result")
+        return conversation
+
+    def _session(self, run_id: str):
+        run = self.runs.get(run_id)
+        record = self.sessions.get(run["session_id"])
+        return run, record, self.sessions.backend.service_url(record.id)
+
+    def conversation_finished(self, run_id: str, conversation: str) -> bool:
+        _, record, base_url = self._session(run_id)
+        status = opencode.session_statuses(base_url, record.secret_key).get(conversation)
+        if status and status.get("type") == "retry":
+            reason = (status.get("action") or {}).get("reason")
+            if reason == "free_tier_limit" or status.get("attempt", 0) >= RETRY_LIMIT:
+                raise ModelUnavailable(status.get("message") or "The model is not available")
+        if status and status.get("type") != "idle":
+            return False
+        try:
+            opencode.last_reply(base_url, record.secret_key, conversation)
+        except RuntimeError as error:
+            raise ModelUnavailable(str(error)) from error
+        return True
+
+    def nudge(self, run_id: str, conversation: str, model: str) -> None:
+        run, record, base_url = self._session(run_id)
+        tool = get_activity(run["activity"]).result_tool
+        opencode.prompt_async(
+            base_url, record.secret_key, conversation, f"{harness_builder.PROVIDER_ID}/{model}", NUDGE.format(tool=tool)
+        )
+
+    def abort(self, run_id: str, conversation: str) -> None:
+        _, record, base_url = self._session(run_id)
+        opencode.abort(base_url, record.secret_key, conversation)
+
+    def validate_submission(self, run_id: str, tool: str, payload: dict) -> dict:
+        run = self.runs.get(run_id)
+        expected = get_activity(run["activity"]).result_tool
+        if tool != expected:
+            raise RunError(f"This run expects {expected}, not {tool}")
+        return SUBMISSIONS[tool].model_validate(payload).model_dump(mode="json")
+
+    def finalize(self, run_id: str, submission: dict) -> dict:
+        run = self.runs.get(run_id)
+        ctx = self._context(run, self.sessions.storage.workspace(run["session_id"]))
+        result = HANDLERS[run["activity"]].finalize(ctx, submission, self.sessions.store)
+        self.runs.update(run_id, status="finalizing", result=result, error=None)
+        return result
+
+    def complete(self, run_id: str) -> None:
+        run = self.runs.get(run_id)
+        result = run["result"] or {"session_id": run["session_id"]}
+        self.runs.update(run_id, status="completed", result=result)
+
+    def fail(self, run_id: str, message: str) -> None:
+        self.runs.update(run_id, status="failed", error=message[:4000])

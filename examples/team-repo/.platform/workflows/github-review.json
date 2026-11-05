@@ -1,0 +1,15 @@
+{
+  "name": "Review GitHub pull requests",
+  "description": "Reviews every new PR on a GitHub repository (dry-run: nothing is posted).",
+  "activity": "review",
+  "agent": "reviewer",
+  "harness": "read-only",
+  "trigger": {
+    "type": "pull_request",
+    "provider": "github",
+    "repository": "your-org/your-repo",
+    "credentials": "GITHUB_TOKEN",
+    "poll_minutes": 15
+  },
+  "options": { "guidelines_file": "context/review-guidelines.md", "post_mode": "dry-run", "max_comments": 20 }
+}

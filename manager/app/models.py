@@ -13,6 +13,7 @@ class SessionStatus(StrEnum):
 
 class Visibility(StrEnum):
     PRIVATE = "private"
+    TEAM = "team"
     PUBLIC = "public"
 
 
@@ -40,6 +41,9 @@ class SessionRecord(SessionAttributes):
     sub: str
     email: str
     image: str
+    team_id: str | None = None
+    run_id: str | None = None
+    activity: str | None = None
     secret_key: str = Field(exclude=True)
     created_at: datetime
     last_activity_at: datetime
@@ -51,6 +55,7 @@ class Session(SessionRecord):
     url: str
     open_url: str
     is_owner: bool
+    can_manage: bool
 
 
 class Identity(BaseModel):
