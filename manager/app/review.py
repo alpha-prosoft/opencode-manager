@@ -1,4 +1,5 @@
 import json
+import shutil
 from pathlib import Path
 
 from . import bitbucket, opencode
@@ -45,7 +46,7 @@ NUDGE = """You have not submitted the review yet. Call the `{tool}` tool now wit
 and checked items."""
 
 
-class ReviewQuotaExceeded(Exception):
+class ModelUnavailable(Exception):
     pass
 
 
@@ -62,6 +63,23 @@ class PullRequestReviews:
 
     def _workspace(self, session_id: str) -> Path:
         return Path(self.settings.shared_mount_path) / session_subpath(session_id) / "workspace"
+
+    def _model_auth_path(self, session_id: str) -> Path:
+        home = Path(self.settings.shared_mount_path) / session_subpath(session_id) / "home"
+        return home / ".local" / "share" / "opencode" / "auth.json"
+
+    def install_model_credentials(self, session_id: str) -> bool:
+        source = Path(self.settings.review_model_auth_file)
+        if not source.is_file():
+            return False
+        target = self._model_auth_path(session_id)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        target.chmod(0o600)
+        return True
+
+    def remove_model_credentials(self, session_id: str) -> None:
+        self._model_auth_path(session_id).unlink(missing_ok=True)
 
     def _guidelines(self, repo: str) -> str:
         path = Path(self.settings.review_guidelines_dir) / f"{repo}.md"
@@ -93,6 +111,9 @@ class PullRequestReviews:
     def start(self, session_id: str, pr: dict, model: str) -> str:
         record = self._record(session_id)
         base_url = self.service.backend.service_url(session_id)
+        provider = model.split("/", 1)[0]
+        if provider not in opencode.connected_providers(base_url, record.secret_key):
+            raise ModelUnavailable(f"Provider {provider} is not connected in this session")
         conversation = opencode.create_session(base_url, record.secret_key, f"Code review PR #{pr['id']} ({model})")
         prompt = PROMPT.format(review_dir=REVIEW_DIR, tool=REVIEW_TOOL, **pr)
         opencode.prompt_async(base_url, record.secret_key, conversation, model, prompt)
@@ -104,10 +125,13 @@ class PullRequestReviews:
         base_url = self.service.backend.service_url(session_id)
         status = opencode.session_statuses(base_url, record.secret_key).get(conversation)
         if status and status.get("action", {}).get("reason") == "free_tier_limit":
-            raise ReviewQuotaExceeded(status.get("message") or "Model quota exhausted")
+            raise ModelUnavailable(status.get("message") or "Model quota exhausted")
         if status and status.get("type") != "idle":
             return None
-        return opencode.last_reply(base_url, record.secret_key, conversation)
+        try:
+            return opencode.last_reply(base_url, record.secret_key, conversation)
+        except RuntimeError as error:
+            raise ModelUnavailable(str(error)) from error
 
     def nudge(self, session_id: str, conversation: str, model: str) -> None:
         record = self._record(session_id)

@@ -56,7 +56,9 @@ class Settings(BaseSettings):
     bitbucket_backfill: bool = False
 
     review_enabled: bool = True
+    review_model_auth_file: str = "/config/opencode/auth.json"
     review_models: list[str] = [
+        "github-copilot/claude-sonnet-5.5",
         "opencode/deepseek-v4.1-flash-free",
         "opencode/glm-5.3-flash-free",
         "opencode/mimo-v2.6-flash-free",
@@ -71,7 +73,7 @@ class Settings(BaseSettings):
             "edit": "allow",
             "bash": "allow",
             "external_directory": "allow",
-            "webfetch": "allow",
+            "webfetch": "deny",
             "doom_loop": "allow",
             "question": "deny",
         }

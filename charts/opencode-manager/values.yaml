@@ -54,6 +54,7 @@ review:
   enabled: true
   # Tried in order; when a model's quota is exhausted the review moves on to the next one.
   models:
+    - github-copilot/claude-sonnet-5.5
     - opencode/deepseek-v4.1-flash-free
     - opencode/glm-5.3-flash-free
     - opencode/mimo-v2.6-flash-free
@@ -62,6 +63,10 @@ review:
   postMode: dry-run
   # Upper bound on comments per PR (one summary plus inline comments); the rest is folded into the summary.
   maxComments: 30
+  # OpenCode auth.json (e.g. from `opencode auth login` with GitHub Copilot) used only while a review runs.
+  modelAuthSecret:
+    name: ""
+    key: auth.json
   guidelines: {}
 
 # One volume shared by all sessions; each session uses the sessions/<id> subpath.

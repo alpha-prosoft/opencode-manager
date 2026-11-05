@@ -68,6 +68,27 @@ class PullRequestSessionWorkflow:
     def get_review(self) -> dict | None:
         return self.review
 
+    async def _review(self, session_id: str, pull_request: dict) -> str | None:
+        models: list[str] = await workflow.execute_activity("review_models", **QUICK)
+        for model in models:
+            if self.review is not None:
+                break
+            conversation = None
+            try:
+                conversation = await workflow.execute_activity(
+                    "start_review", args=[session_id, pull_request, model], **QUICK
+                )
+                await self._await_submission(session_id, conversation, model)
+            except ActivityError as error:
+                if not isinstance(error.cause, ApplicationError) or error.cause.type != "ModelUnavailable":
+                    raise
+                workflow.logger.warning("Model %s is unavailable (%s), trying the next one", model, error.cause.message)
+                if conversation:
+                    await workflow.execute_activity("abort_review", args=[session_id, conversation], **QUICK)
+                continue
+            return model
+        return None
+
     async def _await_submission(self, session_id: str, conversation: str, model: str) -> None:
         for attempt in range(REVIEW_NUDGES + 1):
             await workflow.execute_activity("wait_for_review", args=[session_id, conversation], **REVIEW_WAIT)
@@ -82,25 +103,13 @@ class PullRequestSessionWorkflow:
         if not await workflow.execute_activity("review_enabled", **QUICK):
             return result
         await workflow.execute_activity("prepare_review_workspace", args=[session_id, pull_request], **BITBUCKET)
-        await workflow.execute_activity("start_session", session_id, **START)
-        await workflow.execute_activity("check_ready", session_id, **WAIT_READY)
-        models: list[str] = await workflow.execute_activity("review_models", **QUICK)
-        for model in models:
-            if self.review is not None:
-                break
-            conversation: str = await workflow.execute_activity(
-                "start_review", args=[session_id, pull_request, model], **QUICK
-            )
-            try:
-                await self._await_submission(session_id, conversation, model)
-            except ActivityError as error:
-                if not isinstance(error.cause, ApplicationError) or error.cause.type != "ReviewQuotaExceeded":
-                    raise
-                workflow.logger.warning("Model %s is out of quota, trying the next one", model)
-                await workflow.execute_activity("abort_review", args=[session_id, conversation], **QUICK)
-                continue
-            result["model"] = model
-            break
+        await workflow.execute_activity("install_model_credentials", session_id, **QUICK)
+        try:
+            await workflow.execute_activity("start_session", session_id, **START)
+            await workflow.execute_activity("check_ready", session_id, **WAIT_READY)
+            result["model"] = await self._review(session_id, pull_request)
+        finally:
+            await workflow.execute_activity("remove_model_credentials", session_id, **QUICK)
         if self.review is None:
             raise ApplicationError("No model produced a submitted review", non_retryable=True)
 

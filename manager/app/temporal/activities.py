@@ -5,11 +5,11 @@ from temporalio.exceptions import ApplicationError
 
 from ..config import Settings
 from ..pull_requests import PullRequestSessions
-from ..review import PullRequestReviews, ReviewQuotaExceeded
+from ..review import ModelUnavailable, PullRequestReviews
 from ..review_post import PostPlan, ReviewSubmission
 
 REVIEW_POLL_SECONDS = 10
-QUOTA_EXCEEDED = "ReviewQuotaExceeded"
+MODEL_UNAVAILABLE = "ModelUnavailable"
 from ..sessions import SessionService
 
 
@@ -93,19 +93,31 @@ class ReviewActivities:
 
     @activity.defn(name="start_review")
     def start_review(self, session_id: str, pull_request: dict, model: str) -> str:
-        return self.reviews.start(session_id, pull_request, model)
+        try:
+            return self.reviews.start(session_id, pull_request, model)
+        except ModelUnavailable as error:
+            raise ApplicationError(str(error), type=MODEL_UNAVAILABLE, non_retryable=True) from error
 
     @activity.defn(name="wait_for_review")
     def wait_for_review(self, session_id: str, conversation: str) -> str:
         while True:
             try:
                 review = self.reviews.result(session_id, conversation)
-            except ReviewQuotaExceeded as error:
-                raise ApplicationError(str(error), type=QUOTA_EXCEEDED, non_retryable=True) from error
+            except ModelUnavailable as error:
+                raise ApplicationError(str(error), type=MODEL_UNAVAILABLE, non_retryable=True) from error
             if review is not None:
                 return review
             activity.heartbeat()
             time.sleep(REVIEW_POLL_SECONDS)
+
+    @activity.defn(name="install_model_credentials")
+    def install_model_credentials(self, session_id: str) -> bool:
+        return self.reviews.install_model_credentials(session_id)
+
+    @activity.defn(name="remove_model_credentials")
+    def remove_model_credentials(self, session_id: str) -> None:
+        self.reviews.remove_model_credentials(session_id)
+        self.reviews.service.stop(session_id)
 
     @activity.defn(name="nudge_review")
     def nudge_review(self, session_id: str, conversation: str, model: str) -> None:
@@ -132,6 +144,8 @@ class ReviewActivities:
             self.review_enabled,
             self.review_models,
             self.abort_review,
+            self.install_model_credentials,
+            self.remove_model_credentials,
             self.prepare_review_workspace,
             self.start_review,
             self.wait_for_review,

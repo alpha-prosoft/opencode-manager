@@ -1,6 +1,10 @@
 __pycache__/
 *.pyc
+# Secrets
 .env
+.env.*
+*.env
+auth.json
 
 # Environment-specific config (private review baselines, local .env)
 /local/
