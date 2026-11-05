@@ -43,13 +43,18 @@ local/manager.env        # MANAGER_BITBUCKET_WORKSPACE=..., MANAGER_BITBUCKET_RE
 local/review/<repo>.md   # review baseline for <repo> (mounted read-only at /config/review)
 ```
 
-Pass the token through an env file that defines `BITBUCKET_TOKEN`:
+Secrets go in a gitignored `.env` in the repository root. Compose reads it automatically for variable substitution, so `docker compose up -d` needs no extra flags:
 
-```bash
-docker compose --env-file /path/to/secrets.env up -d
+```
+BITBUCKET_TOKEN=...   # Bitbucket Cloud API token: list PRs, clone, read diffs (and post comments in auto mode)
+COPILOT_TOKEN=gho_... # GitHub Copilot OAuth token from `opencode auth login` (GitHub Copilot)
 ```
 
-`--env-file` only feeds variable substitution, so only `BITBUCKET_TOKEN` reaches the manager.
+The Copilot token is written into a review session's `auth.json` only while its review runs. Afterwards it is removed and the session is stopped. To get the token, log in once and copy the `refresh` value from the generated `auth.json`:
+
+```bash
+docker run --rm -it -v "$PWD/local/opencode:/root/.local/share/opencode" ghcr.io/anomalyco/opencode:1.19.5 auth login
+```
 
 How it runs:
 1. The Temporal schedule `poll-bitbucket` (every `MANAGER_BITBUCKET_POLL_MINUTES`, default 15) runs `PollPullRequestsWorkflow`.
@@ -105,7 +110,8 @@ Put provider API keys in a Secret whose `session-env.json` key holds a JSON
 object, and set `session.envSecret.name`.
 
 For pull request reviews, create a Secret with the token and set
-`bitbucket.tokenSecret.name`, `bitbucket.workspace` and `bitbucket.repos`. Provide review baselines
+`bitbucket.tokenSecret.name`, `bitbucket.workspace` and `bitbucket.repos`; for Copilot reviews set
+`review.copilotTokenSecret.name`. Provide review baselines
 without committing them: `--set-file review.guidelines.<repo>=local/review/<repo>.md`.
 
 The shared session volume (`sharedStorage`) needs `ReadWriteMany` when session pods can land on different nodes.

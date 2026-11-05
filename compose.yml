@@ -48,12 +48,12 @@ services:
       MANAGER_REAP_INTERVAL_SECONDS: ${MANAGER_REAP_INTERVAL_SECONDS:-300}
       MANAGER_IDLE_GRACE_SECONDS: ${MANAGER_IDLE_GRACE_SECONDS:-300}
       MANAGER_BITBUCKET_TOKEN: ${BITBUCKET_TOKEN:-}
+      MANAGER_REVIEW_COPILOT_TOKEN: ${COPILOT_TOKEN:-}
     env_file:
       - path: ./local/manager.env
         required: false
     volumes:
       - ./local/review:/config/review:ro
-      - ./local/opencode:/config/opencode:ro
       - /var/run/docker.sock:/var/run/docker.sock
       - traefik-dynamic:/traefik/dynamic
       - manager-data:/data

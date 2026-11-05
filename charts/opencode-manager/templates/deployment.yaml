@@ -99,6 +99,15 @@ spec:
               value: {{ .Values.review.enabled | quote }}
             - name: MANAGER_REVIEW_MODELS
               value: {{ .Values.review.models | toJson | quote }}
+            {{- with .Values.review.copilotTokenSecret }}
+            {{- if .name }}
+            - name: MANAGER_REVIEW_COPILOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .name }}
+                  key: {{ .key }}
+            {{- end }}
+            {{- end }}
             - name: MANAGER_REVIEW_POST_MODE
               value: {{ .Values.review.postMode | quote }}
             - name: MANAGER_REVIEW_MAX_COMMENTS
@@ -136,26 +145,11 @@ spec:
             - name: review-guidelines
               mountPath: /config/review
               readOnly: true
-            {{- if .Values.review.modelAuthSecret.name }}
-            - name: model-auth
-              mountPath: /config/opencode
-              readOnly: true
-            {{- end }}
           {{- with .Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
       volumes:
-        {{- with .Values.review.modelAuthSecret }}
-        {{- if .name }}
-        - name: model-auth
-          secret:
-            secretName: {{ .name }}
-            items:
-              - key: {{ .key }}
-                path: auth.json
-        {{- end }}
-        {{- end }}
         - name: review-guidelines
           configMap:
             name: {{ include "opencode-manager.fullname" . }}-review

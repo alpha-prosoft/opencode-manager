@@ -1,5 +1,4 @@
 import json
-import shutil
 from pathlib import Path
 
 from . import bitbucket, opencode
@@ -69,13 +68,13 @@ class PullRequestReviews:
         return home / ".local" / "share" / "opencode" / "auth.json"
 
     def install_model_credentials(self, session_id: str) -> bool:
-        source = Path(self.settings.review_model_auth_file)
-        if not source.is_file():
+        token = self.settings.review_copilot_token
+        if not token:
             return False
         target = self._model_auth_path(session_id)
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, target)
-        target.chmod(0o600)
+        target.touch(mode=0o600)
+        target.write_text(json.dumps({"github-copilot": {"type": "oauth", "refresh": token, "access": token, "expires": 0}}))
         return True
 
     def remove_model_credentials(self, session_id: str) -> None:

@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     bitbucket_backfill: bool = False
 
     review_enabled: bool = True
-    review_model_auth_file: str = "/config/opencode/auth.json"
+    review_copilot_token: str | None = None
     review_models: list[str] = [
         "github-copilot/claude-sonnet-5.5",
         "opencode/deepseek-v4.1-flash-free",
