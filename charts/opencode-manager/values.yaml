@@ -63,11 +63,13 @@ review:
   postMode: dry-run
   # Upper bound on comments per PR (one summary plus inline comments); the rest is folded into the summary.
   maxComments: 30
-  # GitHub Copilot OAuth token (the gho_ token from `opencode auth login`), given to a review session
-  # only while its review runs.
-  copilotTokenSecret:
+  # OpenCode auth.json content (JSON object keyed by provider, e.g. github-copilot oauth or an
+  # anthropic api key). Written into a review session only while its review runs.
+  modelAuthSecret:
     name: ""
-    key: token
+    key: auth.json
+  # opencode.json "provider" section for review sessions (base URLs, extra models). No secrets here.
+  providerConfig: {}
   guidelines: {}
 
 # One volume shared by all sessions; each session uses the sessions/<id> subpath.

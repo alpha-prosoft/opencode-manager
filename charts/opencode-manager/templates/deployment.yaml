@@ -99,15 +99,17 @@ spec:
               value: {{ .Values.review.enabled | quote }}
             - name: MANAGER_REVIEW_MODELS
               value: {{ .Values.review.models | toJson | quote }}
-            {{- with .Values.review.copilotTokenSecret }}
+            {{- with .Values.review.modelAuthSecret }}
             {{- if .name }}
-            - name: MANAGER_REVIEW_COPILOT_TOKEN
+            - name: MANAGER_REVIEW_MODEL_AUTH
               valueFrom:
                 secretKeyRef:
                   name: {{ .name }}
                   key: {{ .key }}
             {{- end }}
             {{- end }}
+            - name: MANAGER_REVIEW_PROVIDER_CONFIG
+              value: {{ .Values.review.providerConfig | toJson | quote }}
             - name: MANAGER_REVIEW_POST_MODE
               value: {{ .Values.review.postMode | quote }}
             - name: MANAGER_REVIEW_MAX_COMMENTS

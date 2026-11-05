@@ -46,11 +46,15 @@ local/review/<repo>.md   # review baseline for <repo> (mounted read-only at /con
 Secrets go in a gitignored `.env` in the repository root. Compose reads it automatically for variable substitution, so `docker compose up -d` needs no extra flags:
 
 ```
-BITBUCKET_TOKEN=...   # Bitbucket Cloud API token: list PRs, clone, read diffs (and post comments in auto mode)
-COPILOT_TOKEN=gho_... # GitHub Copilot OAuth token from `opencode auth login` (GitHub Copilot)
+BITBUCKET_TOKEN=...                  # Bitbucket Cloud API token: list PRs, clone, read diffs (and post in auto mode)
+OPENCODE_AUTH='{"github-copilot":…}' # OpenCode auth.json content: credentials for any providers
+OPENCODE_PROVIDER='{…}'              # optional opencode.json "provider" section (base URLs, models; no secrets)
+REVIEW_MODELS='["provider/model",…]' # optional model fallback list
 ```
 
-The Copilot token is written into a review session's `auth.json` only while its review runs. Afterwards it is removed and the session is stopped. To get the token, log in once and copy the `refresh` value from the generated `auth.json`:
+`OPENCODE_AUTH` is written into a review session's `auth.json` only while its review runs. Afterwards it is removed and the session is stopped. For an API-key provider use `{"anthropic":{"type":"api","key":"sk-…"}}`.
+
+For OAuth providers such as GitHub Copilot, log in once and copy the generated file's content:
 
 ```bash
 docker run --rm -it -v "$PWD/local/opencode:/root/.local/share/opencode" ghcr.io/anomalyco/opencode:1.19.5 auth login
@@ -111,7 +115,7 @@ object, and set `session.envSecret.name`.
 
 For pull request reviews, create a Secret with the token and set
 `bitbucket.tokenSecret.name`, `bitbucket.workspace` and `bitbucket.repos`; for Copilot reviews set
-`review.copilotTokenSecret.name`. Provide review baselines
+`review.modelAuthSecret.name` (a Secret holding the auth.json JSON) and optionally `review.providerConfig`. Provide review baselines
 without committing them: `--set-file review.guidelines.<repo>=local/review/<repo>.md`.
 
 The shared session volume (`sharedStorage`) needs `ReadWriteMany` when session pods can land on different nodes.

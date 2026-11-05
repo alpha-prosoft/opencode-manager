@@ -68,13 +68,12 @@ class PullRequestReviews:
         return home / ".local" / "share" / "opencode" / "auth.json"
 
     def install_model_credentials(self, session_id: str) -> bool:
-        token = self.settings.review_copilot_token
-        if not token:
+        if not self.settings.review_model_auth:
             return False
         target = self._model_auth_path(session_id)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.touch(mode=0o600)
-        target.write_text(json.dumps({"github-copilot": {"type": "oauth", "refresh": token, "access": token, "expires": 0}}))
+        target.write_text(json.dumps(self.settings.review_model_auth))
         return True
 
     def remove_model_credentials(self, session_id: str) -> None:
@@ -142,8 +141,10 @@ class PullRequestReviews:
         opencode.abort(self.service.backend.service_url(session_id), record.secret_key, conversation)
 
     def opencode_config(self, record: SessionRecord) -> dict:
+        provider = {"provider": self.settings.review_provider_config} if self.settings.review_provider_config else {}
         return {
             **self.settings.review_opencode_config,
+            **provider,
             "mcp": {
                 MCP_SERVER_NAME: {
                     "type": "remote",

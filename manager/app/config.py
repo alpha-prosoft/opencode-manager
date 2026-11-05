@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="MANAGER_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="MANAGER_", env_file=".env", env_ignore_empty=True, extra="ignore")
 
     backend: Literal["docker", "kubernetes"] = "docker"
     router: Literal["traefik-file", "gateway-api"] = "traefik-file"
@@ -56,7 +56,8 @@ class Settings(BaseSettings):
     bitbucket_backfill: bool = False
 
     review_enabled: bool = True
-    review_copilot_token: str | None = None
+    review_model_auth: dict = {}
+    review_provider_config: dict = {}
     review_models: list[str] = [
         "github-copilot/claude-sonnet-5.5",
         "opencode/deepseek-v4.1-flash-free",
