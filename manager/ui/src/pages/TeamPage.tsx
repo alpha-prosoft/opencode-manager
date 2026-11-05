@@ -3,6 +3,7 @@ import { Link as RouterLink, useParams } from "react-router";
 import {
   Alert,
   Box,
+  LinearProgress,
   Button,
   Card,
   CardActions,
@@ -192,7 +193,7 @@ export default function TeamPage() {
                       {run.id}
                     </Link>
                   </TableCell>
-                  <TableCell>{run.workflow_id}</TableCell>
+                  <TableCell>{run.workflow_name ?? run.workflow_id}</TableCell>
                   <TableCell>{triggerLabel(run.trigger)}</TableCell>
                   <TableCell>
                     <RunStatusChip status={run.status} />
@@ -208,6 +209,22 @@ export default function TeamPage() {
       {tab === 4 && (
         <Stack spacing={3}>
           <Box>
+            {t.budget.daily_tokens && (
+              <Box sx={{ mb: 3 }}>
+                <Typography variant="h6" gutterBottom>
+                  Daily token budget
+                </Typography>
+                <LinearProgress
+                  variant="determinate"
+                  value={Math.min(100, (100 * t.budget.used_today) / t.budget.daily_tokens)}
+                  color={t.budget.used_today >= t.budget.daily_tokens ? "error" : "primary"}
+                  sx={{ height: 10, borderRadius: 5, maxWidth: 480 }}
+                />
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                  {tokens(t.budget.used_today)} of {tokens(t.budget.daily_tokens)} tokens used today (UTC)
+                </Typography>
+              </Box>
+            )}
             <Typography variant="h6" gutterBottom>
               LLM usage, last 7 days
             </Typography>

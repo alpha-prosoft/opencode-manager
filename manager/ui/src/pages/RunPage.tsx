@@ -75,7 +75,7 @@ export default function RunPage() {
       <Stack direction="row" spacing={2} sx={{ alignItems: "center", flexWrap: "wrap" }} useFlexGap>
         <ActivityChip activity={run.activity} />
         <Typography variant="h4" sx={{ flexGrow: 1 }}>
-          {run.workflow_id}
+          {run.workflow_name ?? run.workflow_id}
         </Typography>
         <RunStatusChip status={run.status} />
         {run.session && (

@@ -104,6 +104,7 @@ export interface TeamDetail extends TeamSummary {
   definitions: Definition[];
   usage: Usage;
   usage_by_model: { model: string; calls: number; prompt_tokens: number; completion_tokens: number }[];
+  budget: { daily_tokens: number | null; used_today: number };
 }
 
 export interface Run {
@@ -120,6 +121,7 @@ export interface Run {
   created_at: string;
   updated_at: string;
   has_result?: boolean;
+  workflow_name?: string;
 }
 
 export interface RunDetail extends Run {

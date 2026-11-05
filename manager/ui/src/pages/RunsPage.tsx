@@ -42,7 +42,10 @@ export default function RunsPage() {
                   <ActivityChip activity={run.activity} />
                 </TableCell>
                 <TableCell>
-                  {run.team_id} / {run.workflow_id}
+                  {run.workflow_name ?? run.workflow_id}
+                  <Typography variant="caption" color="text.secondary" component="div">
+                    {run.team_id}
+                  </Typography>
                 </TableCell>
                 <TableCell>{triggerLabel(run.trigger)}</TableCell>
                 <TableCell>

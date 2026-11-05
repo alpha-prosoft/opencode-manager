@@ -77,7 +77,7 @@ export default function DashboardPage() {
               <ActivityChip activity={run.activity} />
               <Box sx={{ flexGrow: 1, minWidth: 0 }}>
                 <Typography variant="body2" noWrap>
-                  {run.team_id} / {run.workflow_id}
+                  {run.workflow_name ?? run.workflow_id}
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
                   {triggerLabel(run.trigger)} · {relativeTime(run.created_at)}

@@ -153,6 +153,12 @@ def team(
             for d in platform.registry.definitions(team_id)
         ],
         "usage": platform.usage.for_team(team_id, _since()),
+        "budget": {
+            "daily_tokens": spec.get("budget", {}).get("daily_tokens"),
+            "used_today": platform.usage.tokens_since(
+                team_id, datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+            ),
+        },
         "usage_by_model": platform.usage.by_model({team_id}, _since()),
     }
 
@@ -176,6 +182,14 @@ async def start_run(
 # ---- runs ----------------------------------------------------------------------------
 
 
+def _workflow_names(platform: Platform, team_ids: set[str]) -> dict[tuple[str, str], str]:
+    names = {}
+    for team_id in team_ids:
+        for definition in platform.registry.workflows(team_id):
+            names[(team_id, definition.id)] = (definition.spec or {}).get("name", definition.id)
+    return names
+
+
 def _visible_run(platform: Platform, identity: Identity, run_id: str) -> dict:
     run = platform.runs.get(run_id)
     if run is None or run["team_id"] not in platform.registry.teams_of(identity.sub):
@@ -190,8 +204,14 @@ def runs(
     identity: Identity = Depends(current_identity),
     platform: Platform = Depends(get_platform),
 ) -> list[dict]:
-    items = platform.runs.list(platform.registry.teams_of(identity.sub), limit, team)
-    return [{k: v for k, v in run.items() if k != "result"} | {"has_result": bool(run["result"])} for run in items]
+    teams = platform.registry.teams_of(identity.sub)
+    items = platform.runs.list(teams, limit, team)
+    names = _workflow_names(platform, {run["team_id"] for run in items})
+    return [
+        {k: v for k, v in run.items() if k != "result"}
+        | {"has_result": bool(run["result"]), "workflow_name": names.get((run["team_id"], run["workflow_id"]), run["workflow_id"])}
+        for run in items
+    ]
 
 
 @router.get("/runs/{run_id}")
@@ -199,7 +219,8 @@ def run(run_id: str, identity: Identity = Depends(current_identity), platform: P
     item = _visible_run(platform, identity, run_id)
     record = platform.sessions.get(item["session_id"]) if item["session_id"] else None
     session = platform.sessions.describe(record, identity).model_dump(mode="json") if record and platform.sessions.can_view(record, identity) else None
-    return {**item, "session": session, "usage": platform.usage.for_run(run_id)}
+    name = _workflow_names(platform, {item["team_id"]}).get((item["team_id"], item["workflow_id"]), item["workflow_id"])
+    return {**item, "workflow_name": name, "session": session, "usage": platform.usage.for_run(run_id)}
 
 
 # ---- sessions ------------------------------------------------------------------------
