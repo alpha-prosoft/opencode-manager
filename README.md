@@ -1,9 +1,45 @@
 # OpenCode Agent Platform
 
-Run AI agents for your teams safely. Each team keeps its **agents**, **harnesses** (sandbox definitions) and
-**workflows** in its own Git repository. The platform syncs those definitions, runs every workflow in a sandboxed
-[OpenCode](https://opencode.ai) session, meters every LLM call, and records an append-only audit trail of everything
-the agent did.
+A self-hosted platform for running AI coding agents for your teams, without handing them your keys.
+
+Teams describe their agents in their own Git repositories: who the agent is (its prompt), the sandbox it works in
+(model, tools, network, limits) and the workflows people can start (a code review, an implementation, a
+requirements analysis, or an interactive workspace). The platform turns each run into an isolated
+[OpenCode](https://opencode.ai) session, gives the agent exactly the tools its team allowed, and hands back a
+checked result: review findings, a patch with test results, or a document.
+
+Everything sensitive stays on the platform side. LLM keys, Git tokens and the credentials for tools like Bitbucket
+or Jira are added by the platform's gateways, so an agent never sees them. Every LLM call is metered, every message
+and tool call lands in a tamper-evident audit trail, and admins see usage and cost per team.
+
+**What you can do with it**
+
+- **Start agent work from one place.** Pick a workflow, fill in a short form, follow progress live, and get the
+  result. Pull request reviews can also start by themselves when a PR is opened.
+- **Give agents tools safely.** MCP servers (Bitbucket, Jira, your own) run behind the platform's MCP gateway. Each
+  call uses the right credential (the person's own, or a shared one) and is checked against a tool allow-list.
+- **Keep credentials personal.** People connect their own accounts once, at login. Their sessions only open for
+  them; teammates can fork a session to continue it with their own credentials.
+- **Stay in control.** Sandboxes have no internet unless a harness allows it, run read-only and unprivileged, and
+  can't change their own configuration. Harness policies block commands such as `git push`.
+- **See everything.** Live activity per session, a verified audit trail, token budgets, model pricing and a Prometheus
+  endpoint.
+- **Run it anywhere.** Docker Compose on a laptop, or Kubernetes with the included Helm chart.
+
+## A quick tour
+
+| | |
+|---|---|
+| ![Home: every workflow you can start, grouped by team](docs/screenshots/home.png) | ![A finished implementation run: summary, how it was verified, and the patch](docs/screenshots/run-result.png) |
+| **Home.** Every workflow you can start, grouped by team, with a short explanation of how runs work. | **Results.** An implementation run returns a summary, how the agent verified it, and a downloadable patch. |
+| ![Live activity of a session, with a git push blocked by policy](docs/screenshots/live-activity.png) | ![Harnesses: the sandboxes on offer, their tools and skills, and whether they are ready for you](docs/screenshots/harnesses.png) |
+| **Live activity.** What the agent is doing, which tools it used, and what the harness policy blocked. | **Harnesses.** The kinds of sandboxes your teams offer, their MCP tools and skills, and whether they're ready for you. |
+| ![Connect your accounts: a step per credential at login](docs/screenshots/connect-accounts.png) | ![A locked session that others can fork](docs/screenshots/fork-locked-session.png) |
+| **Connect your accounts.** At login, people add the credentials their teams' tools need, each checked before it's saved. | **Fork and lock.** Continue someone's session in your own copy, with your own credentials. Locked sessions can only be forked. |
+| ![Sessions: every OpenCode instance you can see](docs/screenshots/sessions.png) | ![Admin: credentials, who provides them and where they are used](docs/screenshots/admin-credentials.png) |
+| **Sessions.** Every OpenCode instance you can see, who owns it, who it's shared with, and what you can do with it. | **Admin.** Credentials, MCP servers, people and roles, usage and cost, sync state and background jobs. |
+
+## How it fits together
 
 ```mermaid
 flowchart LR
@@ -15,6 +51,7 @@ flowchart LR
         manager["Manager<br/>API · UI · registry"]
         temporal["Temporal<br/>runs · triggers · schedules"]
         gateway["LLM gateway<br/>keys · model allow-list · metering"]
+        mcpgw["MCP gateway<br/>credentials · tool allow-list · audit"]
         audit[("Audit trail<br/>hash-chained, append-only")]
     end
     subgraph sandbox["Sandbox network (no internet)"]
@@ -22,6 +59,7 @@ flowchart LR
         s2["OpenCode session"]
     end
     llm["LLM provider<br/>(Copilot, Azure OpenAI, …)"]
+    tools["MCP servers<br/>(Bitbucket, Jira, …)"]
     scm["Bitbucket / GitHub"]
 
     onboarding -- lists --> teamrepo
@@ -29,6 +67,7 @@ flowchart LR
     manager <--> temporal
     temporal -- starts --> s1 & s2
     s1 & s2 -- "LLM calls (session key)" --> gateway --> llm
+    s1 & s2 -- "tool calls (session key)" --> mcpgw --> tools
     s1 & s2 -. "events" .-> audit
     temporal -- "PR polling, comments" --> scm
 ```
