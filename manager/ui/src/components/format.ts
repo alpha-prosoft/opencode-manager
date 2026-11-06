@@ -27,6 +27,7 @@ export function money(value: number | null | undefined): string {
 
 export function triggerLabel(trigger: Record<string, any>): string {
   if (trigger.retry_of) return `Re-run by ${trigger.by}`;
+  if (trigger.type === "ci_failure") return `After build #${trigger.build} failed`;
   if (trigger.type === "manual") return `Started by ${trigger.by}`;
   if (trigger.type === "pull_request") return `Pull request #${trigger.pull_request?.id} in ${trigger.scm?.repository}`;
   if (trigger.type === "schedule") return "Schedule";

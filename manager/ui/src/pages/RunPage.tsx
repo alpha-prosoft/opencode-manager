@@ -8,6 +8,7 @@ import { api, type RunDetail, type RunStatus } from "../api";
 import { ActivityChip, RunStatusChip, SessionStatusChip } from "../components/Chips";
 import { useConfirm } from "../components/ConfirmDialog";
 import { DetailList, Mono, TwoColumns } from "../components/Data";
+import BuildPanel from "../components/BuildPanel";
 import Markdown from "../components/Markdown";
 import { PageHeader, PageStack, Section } from "../components/Page";
 import PatchView from "../components/PatchView";
@@ -17,6 +18,7 @@ import { dateTime, isActive, relativeTime, triggerLabel } from "../components/fo
 import { useLoad } from "../hooks";
 
 const AUTOMATED_STEPS = ["Queued", "Starting sandbox", "Agent working", "Collecting result", "Done"];
+const CI_STEPS = ["Queued", "Starting sandbox", "Agent working", "Collecting result", "Following build", "Done"];
 const SESSION_STEPS = ["Queued", "Starting sandbox", "Ready"];
 const STEP_OF: Record<RunStatus, number> = {
   queued: 0,
@@ -24,14 +26,15 @@ const STEP_OF: Record<RunStatus, number> = {
   running: 2,
   awaiting_result: 2,
   finalizing: 3,
-  completed: 5,
+  following_ci: 4,
+  completed: 6,
   failed: -1,
   cancelled: -1,
 };
 
 function Progress({ run }: { run: RunDetail }) {
   const interactive = run.activity === "session";
-  const steps = interactive ? SESSION_STEPS : AUTOMATED_STEPS;
+  const steps = interactive ? SESSION_STEPS : run.status === "following_ci" || run.result?.ci ? CI_STEPS : AUTOMATED_STEPS;
   const step = interactive ? Math.min(STEP_OF[run.status], 1) : STEP_OF[run.status];
   return (
     <Paper sx={{ p: 2.5 }}>
@@ -45,7 +48,9 @@ function Progress({ run }: { run: RunDetail }) {
       <Typography variant="body2" color="text.secondary" sx={{ mt: 2, textAlign: "center" }}>
         {run.status === "awaiting_result"
           ? "The agent is working in its sandbox. You can watch it live with Open session. This page updates by itself."
-          : "This page updates by itself."}
+          : run.status === "following_ci"
+            ? "The pull request is pushed. The platform checks its build every minute until it passes or fails."
+            : "This page updates by itself."}
       </Typography>
     </Paper>
   );
@@ -56,6 +61,17 @@ function Implementation({ run }: { run: RunDetail }) {
   const impl = result.implementation;
   return (
     <Stack spacing={2}>
+      {result.pull_request && (
+        <Alert severity={result.pull_request.draft ? "warning" : "success"}>
+          {result.pull_request.updated ? "Pushed to pull request " : result.pull_request.draft ? "Draft pull request " : "Pull request "}
+          <Link href={result.pull_request.url} target="_blank" rel="noopener">
+            #{result.pull_request.id}
+          </Link>
+          {result.pull_request.updated ? " " : " opened "}(<Mono>{result.pull_request.branch}</Mono> into{" "}
+          <Mono>{result.pull_request.target}</Mono>). It is not merged.
+          {result.pull_request.draft && " It's a draft because the agent couldn't verify the change."}
+        </Alert>
+      )}
       <Markdown>{impl.summary}</Markdown>
       {impl.changes.length > 0 && (
         <Box>
@@ -168,6 +184,12 @@ export default function RunPage() {
           <Paper sx={{ p: { xs: 2, md: 3 } }}>
             <Result run={run} />
           </Paper>
+        </Section>
+      )}
+
+      {run.result?.ci && (
+        <Section title="Build" description="Read from the CI system through its MCP server.">
+          <BuildPanel ci={run.result.ci} />
         </Section>
       )}
 

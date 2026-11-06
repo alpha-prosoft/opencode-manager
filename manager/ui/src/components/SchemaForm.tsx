@@ -1,5 +1,5 @@
-import { FormControlLabel, MenuItem, Stack, Switch, TextField } from "@mui/material";
-import type { JsonSchema } from "../api";
+import { Autocomplete, FormControlLabel, MenuItem, Stack, Switch, TextField } from "@mui/material";
+import type { JsonSchema, OpenPullRequest } from "../api";
 
 const LONG_TEXT = new Set(["prompt", "task", "brief"]);
 
@@ -8,17 +8,22 @@ function resolve(schema: JsonSchema): JsonSchema {
   return options?.length === 1 ? { ...options[0], description: schema.description, default: schema.default } : schema;
 }
 
-function label(name: string, schema: JsonSchema): string {
-  return schema.title ?? name.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
+function label(name: string): string {
+  return name.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
+}
+
+function prLabel(pr: OpenPullRequest): string {
+  return `#${pr.id} ${pr.title} (${pr.author})`;
 }
 
 interface Props {
   schema: JsonSchema;
   value: Record<string, unknown>;
   onChange: (value: Record<string, unknown>) => void;
+  pullRequests?: OpenPullRequest[];
 }
 
-export default function SchemaForm({ schema, value, onChange }: Props) {
+export default function SchemaForm({ schema, value, onChange, pullRequests }: Props) {
   const required = new Set(schema.required ?? []);
   const fields = Object.entries(schema.properties ?? {}).map(([name, raw]) => [name, resolve(raw)] as const);
   const set = (name: string, next: unknown) => onChange({ ...value, [name]: next === "" ? undefined : next });
@@ -29,7 +34,7 @@ export default function SchemaForm({ schema, value, onChange }: Props) {
         const current = value[name] ?? "";
         const common = {
           key: name,
-          label: label(name, field),
+          label: label(name),
           helperText: field.description,
           required: required.has(name),
           fullWidth: true,
@@ -52,6 +57,21 @@ export default function SchemaForm({ schema, value, onChange }: Props) {
                 </MenuItem>
               ))}
             </TextField>
+          );
+        }
+        if (name === "pull_request" && pullRequests && pullRequests.length > 0) {
+          const selected = pullRequests.find((pr) => pr.id === value[name]) ?? null;
+          return (
+            <Autocomplete
+              key={name}
+              options={pullRequests}
+              value={selected}
+              getOptionLabel={prLabel}
+              onChange={(_, pr) => set(name, pr ? pr.id : undefined)}
+              renderInput={(props) => (
+                <TextField {...props} label={common.label} helperText={field.description} required={common.required} />
+              )}
+            />
           );
         }
         if (field.type === "integer" || field.type === "number") {

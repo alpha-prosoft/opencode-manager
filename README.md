@@ -313,7 +313,7 @@ and on *Sync now*. Teams removed from `platform.json` disappear; their history s
 | `credentials[].provided_by` | `platform`: admins set one value. `platform_or_user`: admins set a shared value; people may use their own instead. `user`: no shared value; everyone adds their own. |
 | `credentials[].kind` | `token` (one secret), `basic` (username and password, e.g. Atlassian e-mail and API token) or `ssh_key`. |
 | `credentials[].hosts` | The only hosts the value is ever sent to, for MCP servers, Git checkouts and pull request APIs alike. |
-| `credentials[].test` | Optional URL called with the value when someone saves it; a non-2xx answer rejects it. |
+| `credentials[].test` | Optional check when someone saves a value: `{"url": …}` is called with it (a non-2xx answer or a redirect to a login page rejects it), or `{"mcp_tool": "whoami"}` calls that tool of the MCP server using the credential, which also works for services only the MCP server can reach (for example behind a VPN). |
 | `credentials[].teams` | Restrict which teams may use it (default: all). |
 | `mcp_servers[].url` | A Streamable HTTP MCP endpoint reachable from the manager only (a cluster service, or the Docker network in compose). MCP servers that only speak stdio can be wrapped as an HTTP service. |
 | `mcp_servers[].credential` | Added by the gateway to every request (`auth.header`, `auth.scheme`: `bearer`, `basic` or `raw`). |
@@ -327,6 +327,12 @@ a workflow that runs automatically and needs a `user`-only credential is rejecte
 Credential values are stored in the manager database, encrypted with AES-GCM under `MANAGER_CREDENTIALS_KEY` (32
 bytes, base64; generated on the data volume if unset) and bound to their credential and owner. The API returns
 only a short hint. Values in `/config/secrets` keep working as platform values.
+
+**Services behind a VPN or a company CA.** The manager never has to reach a tool's service itself: the MCP server
+does. If a service is only reachable through a VPN on the host, run that MCP server with host networking (bound to
+the Docker bridge address, `HOST=172.17.0.1`), point `mcp_servers[].url` at `http://host.docker.internal:<port>/`,
+and use `"test": {"mcp_tool": "whoami"}` for its credential. Mount the company CA bundle read-only and set
+`SSL_CERT_FILE` for internal certificates. Keep such overrides in a local compose file (`COMPOSE_FILE` in `.env`).
 
 `images/mcp-bitbucket` is a small read-only Bitbucket Cloud MCP server used by the examples. It holds no credentials
 of its own: it forwards the `Authorization` header the gateway adds.
@@ -442,9 +448,9 @@ validates against.
 
 | Activity | Kind | Options (workflow file) | Inputs (per run) | Result |
 |---|---|---|---|---|
-| `session` | interactive | `repository`, `instructions_file` | `title`, `branch`, `prompt` | A personal OpenCode workspace. |
+| `session` | interactive | `repository`, `instructions_file` | `title`, `prompt`, `branch` | A personal OpenCode workspace. |
 | `review` | automated | `scm`, `guidelines_file`, `post_mode` (`off` · `dry-run` · `auto`), `max_comments` | `pull_request` | Structured review: verdict, findings (severity, file, line, fix), checked items, and a comment plan. |
-| `implement` | automated | `repository`, `guidelines_file` | `task`, `branch` | Summary, changes, verification commands, and a **patch computed by the platform** from the working tree. Nothing is pushed. |
+| `implement` | automated | `repository`, `guidelines_file`, `pull_request`, `ci` | `task`, `pull_request`, `branch` | Title, summary, changes, verification commands and whether they passed, and a **patch computed by the platform** from the working tree. Optionally a pull request and its build (below). |
 | `analysis` | automated | `repository`, `template_file` | `brief` | A Markdown analysis document. |
 
 Automated activities end with the agent calling a typed result tool (`submit_review`, `submit_implementation`,
@@ -471,6 +477,35 @@ sequenceDiagram
     W->>W: finalize (plan comments, compute patch, store document)
     W->>S: stop session
 ```
+
+### Pull requests and builds
+
+An `implement` workflow can hand its change over as a pull request and follow the build:
+
+```json
+"options": {
+  "repository": { "url": "https://bitbucket.org/acme/service.git", "branch": "main", "credentials": "BITBUCKET_TOKEN" },
+  "pull_request": { "provider": "bitbucket", "repository": "acme/service" },
+  "ci": { "mcp_server": "jenkins", "job": "acme/service/PR-{pr}", "timeout_minutes": 120, "on_failure": "build-failure" }
+}
+```
+
+- **The platform pushes, never the agent.** After the agent submits, the platform commits the working tree as the
+  person who started the run, pushes `agent/<run-id>` with that person's credential (or the shared one), and opens a
+  pull request. It is never merged. If the agent reports that its checks didn't pass (`verified: false`), the pull
+  request is opened as a **draft** and says so.
+- **Continue on a pull request.** Pick an open pull request in the run form (the list is read with your
+  credential): its branch is checked out and the change is pushed to it, without a new pull request.
+- **Follow the build.** With `ci`, the run gets a *Following build* step: every minute the platform reads the job
+  through the MCP server's `get_build` tool, until the build passes, fails or `timeout_minutes` runs out. The run
+  page shows the build number, its stages and a link. Builds that started before the push are ignored.
+- **Analyse failures.** With `ci.on_failure`, a failed build starts that workflow (a manual `analysis` or
+  `session` workflow of the same team) for the same person, with the failed stages and the end of the console log.
+  A session checks out the pull request's branch, so the agent can reproduce and fix the failure; the original run
+  links to it.
+
+`images/mcp-jenkins` is a read-only Jenkins MCP server (`whoami`, `list_jobs`, `get_builds`, `get_build`,
+`get_build_log`) for this. Like the Bitbucket one, it holds no credentials of its own.
 
 ## Security model
 

@@ -109,6 +109,21 @@ def checkout(
     return _run(["rev-parse", "HEAD"], token, cwd=target)
 
 
+def commit_and_push(
+    target: Path, url: str, branch: str, username: str | None, token: str | None, message: str, author: tuple[str, str]
+) -> str:
+    """Commit everything in the working tree and push it to a new branch. Returns the commit id."""
+    _run(["add", "--all"], None, cwd=target)
+    if not _run(["status", "--porcelain"], None, cwd=target):
+        raise GitError("the agent made no changes, so there is nothing to push")
+    name, email = author
+    identity = {"GIT_AUTHOR_NAME": name, "GIT_AUTHOR_EMAIL": email, "GIT_COMMITTER_NAME": name, "GIT_COMMITTER_EMAIL": email}
+    _run(["commit", "--quiet", "--no-verify", "-m", message], None, cwd=target, env=identity)
+    with _credentials(url, username, token) as (auth, env):
+        _run([*auth, "push", "--quiet", url, f"HEAD:refs/heads/{branch}"], token, cwd=target, env=env)
+    return _run(["rev-parse", "HEAD"], None, cwd=target)
+
+
 def diff(target: Path) -> str:
     _run(["add", "--all", "--intent-to-add"], None, cwd=target)
     return _run(["diff", "--no-color", "HEAD"], None, cwd=target)

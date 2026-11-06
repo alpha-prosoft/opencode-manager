@@ -4,7 +4,7 @@ import secrets
 from ..db import Database
 from ..store import now
 
-ACTIVE = ("queued", "preparing", "running", "awaiting_result", "finalizing")
+ACTIVE = ("queued", "preparing", "running", "awaiting_result", "finalizing", "following_ci")
 FINISHED = ("completed", "failed", "cancelled")
 
 

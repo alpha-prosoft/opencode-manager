@@ -3,7 +3,7 @@ import { useNavigate } from "react-router";
 import { Alert, Button, Dialog, DialogActions, DialogContent, DialogTitle, Stack, Typography } from "@mui/material";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import TerminalIcon from "@mui/icons-material/Terminal";
-import { api, type Activity, type Definition } from "../api";
+import { api, type Activity, type Definition, type OpenPullRequest } from "../api";
 import SchemaForm from "./SchemaForm";
 
 interface Props {
@@ -18,11 +18,20 @@ export default function RunDialog({ team, workflow, activity, onClose }: Props) 
   const [inputs, setInputs] = useState<Record<string, unknown>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [pullRequests, setPullRequests] = useState<OpenPullRequest[]>([]);
+  const takesPullRequest = Boolean(activity?.inputs_schema.properties?.pull_request);
 
   useEffect(() => {
     setInputs({});
     setError(null);
-  }, [workflow?.id]);
+    setPullRequests([]);
+    if (workflow && takesPullRequest) {
+      api
+        .openPullRequests(team, workflow.id)
+        .then(setPullRequests)
+        .catch(() => setPullRequests([]));
+    }
+  }, [workflow?.id, team, takesPullRequest]);
 
   if (!workflow || !activity) return null;
   const interactive = activity.interactive;
@@ -53,7 +62,7 @@ export default function RunDialog({ team, workflow, activity, onClose }: Props) 
                 ? "A private sandbox starts with the workflow's agent; you can open it as soon as it's ready."
                 : "The agent works in its own sandbox and reports a result. You can follow it on the run page."}
             </Typography>
-            <SchemaForm schema={activity.inputs_schema} value={inputs} onChange={setInputs} />
+            <SchemaForm schema={activity.inputs_schema} value={inputs} onChange={setInputs} pullRequests={pullRequests} />
             {error && <Alert severity="error">{error}</Alert>}
           </Stack>
         </DialogContent>

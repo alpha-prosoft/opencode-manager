@@ -232,7 +232,11 @@ async def admin_mcp_servers(platform: Platform = Depends(get_platform)) -> list[
     async with httpx.AsyncClient(timeout=5) as http:
         for server in spec.mcp_servers:
             try:
-                response = await http.get(server.url)
+                response = await http.post(
+                    server.url,
+                    json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
+                    headers={"Accept": "application/json, text/event-stream"},
+                )
                 reachable, detail = True, f"HTTP {response.status_code}"
             except httpx.HTTPError as error:
                 reachable, detail = False, type(error).__name__

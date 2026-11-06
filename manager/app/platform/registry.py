@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from ..config import Settings
 from ..db import Database
 from ..store import now
-from . import git, sources
+from . import git, scm, sources
 from .catalog import CATALOG
 from .secrets import SecretStore
 from .spec import (
@@ -298,6 +298,28 @@ class PlatformRegistry:
                 workflow.errors += self._check_workflow(platform, team, base, loaded, WorkflowSpec.model_validate(workflow.spec))
         return [d for group in loaded.values() for d in group.values()]
 
+    def _check_ci(self, platform: PlatformSpec, team: TeamEntry, loaded: dict, options, delivery) -> list[str]:
+        ci = getattr(options, "ci", None)
+        if ci is None:
+            return []
+        errors = [] if delivery else ["options.ci needs options.pull_request: only pushed pull requests have builds"]
+        server = platform.mcp_server(ci.mcp_server)
+        needed = {"get_build", "get_build_log"} if ci.on_failure else {"get_build"}
+        if server is None:
+            errors.append(f"options.ci: MCP server {ci.mcp_server} is not configured in the onboarding repository")
+        elif server.teams != "*" and team.id not in server.teams:
+            errors.append(f"options.ci: team {team.id} may not use MCP server {ci.mcp_server}")
+        elif server.tools is not None and not needed <= set(server.tools):
+            errors.append(f"options.ci: MCP server {ci.mcp_server} must allow the tools {sorted(needed)}")
+        if ci.on_failure:
+            follow_up = loaded["workflows"].get(ci.on_failure)
+            spec = follow_up.spec if follow_up and follow_up.valid else None
+            if spec is None:
+                errors.append(f"options.ci.on_failure: workflow {ci.on_failure} does not exist or is invalid")
+            elif spec["activity"] not in ("analysis", "session") or (spec.get("trigger") or {}).get("type", "manual") != "manual":
+                errors.append(f"options.ci.on_failure: {ci.on_failure} must be a manual analysis or workspace workflow")
+        return errors
+
     def _check_harness(self, platform: PlatformSpec, team: TeamEntry, base: Path, harness: HarnessSpec) -> list[str]:
         errors = []
         if harness.image and harness.image not in platform.allowed_images:
@@ -354,6 +376,14 @@ class PlatformRegistry:
                     f"options.repository: secret {repository.credentials} may not be sent to "
                     f"{git.host_of(repository.url)} (see secret_hosts in the onboarding repository)"
                 )
+        delivery = getattr(options, "pull_request", None)
+        if delivery:
+            api_host = urlsplit(scm.PROVIDERS[delivery.provider].api).hostname
+            if not repository.credentials:
+                errors.append("options.pull_request needs options.repository.credentials to push and open the pull request")
+            elif api_host not in platform.credential_hosts(repository.credentials):
+                errors.append(f"options.pull_request: credential {repository.credentials} may not be sent to {api_host}")
+        errors += self._check_ci(platform, team, loaded, options, delivery)
         used_secrets = {s for s in (_credentials(options), _trigger_credentials(workflow)) if s}
         for secret in sorted(used_secrets):
             if not self.team_may_use(platform, team, secret):

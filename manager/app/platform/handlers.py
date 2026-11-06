@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -21,8 +22,14 @@ as a question.
 """
 
 
+class HandlerError(Exception):
+    """A problem with the run's inputs or options that retrying won't fix."""
+
+
 class ImplementationSubmission(BaseModel):
+    title: str = Field(default="", max_length=120, description="Short title for the commit and pull request")
     summary: str = Field(max_length=4000, description="What was changed and why")
+    verified: bool = Field(default=False, description="True only if the project's tests or checks ran and passed")
     changes: list[str] = Field(default=[], max_length=100, description="One line per notable change")
     tests: list[str] = Field(default=[], max_length=50, description="Commands run to verify the change and their outcome")
     notes: str = Field(default="", max_length=4000, description="Follow-ups, risks or open questions")
@@ -54,6 +61,7 @@ class RunContext:
     session_url: str
     secret_host_allowed: callable
     local_roots: list
+    author: tuple[str, str] = ("Agent Platform", "agent-platform@noreply.invalid")
 
     @property
     def context_dir(self) -> Path:
@@ -154,20 +162,48 @@ class ReviewHandler(Handler):
         }
 
 
+def short_title(text: str, limit: int = 100) -> str:
+    line = text.strip().splitlines()[0] if text.strip() else ""
+    if len(line) <= limit:
+        return line
+    cut = line[:limit].rsplit(" ", 1)[0]
+    return cut.rstrip(" ,;:") + "…"
+
+
 class ImplementHandler(Handler):
+    def _provider(self, ctx: RunContext):
+        source = ctx.options.repository
+        token = ctx.secrets.require(source.credentials) if source.credentials else None
+        return scm.provider(ctx.options.pull_request.provider, token or ""), token
+
     def prepare(self, ctx: RunContext) -> None:
-        ctx.checkout(ctx.options.repository, ctx.inputs.branch)
+        branch = ctx.inputs.branch
+        if ctx.inputs.pull_request:
+            if not ctx.options.pull_request:
+                raise HandlerError("This workflow does not deliver pull requests, so it can't continue on one")
+            provider, _ = self._provider(ctx)
+            pr = provider.pull_request(ctx.options.pull_request.repository, ctx.inputs.pull_request)
+            branch = pr.source_branch
+            ctx.write_context("pull_request.md", f"# Pull request #{pr.id}: {pr.title}\n\nBranch `{pr.source_branch}` into `{pr.destination_branch}`.\n")
+        ctx.checkout(ctx.options.repository, branch)
         ctx.write_context("task.md", ctx.inputs.task)
         if ctx.options.guidelines_file:
             ctx.write_context("guidelines.md", ctx.team_file(ctx.options.guidelines_file))
 
     def prompt(self, ctx: RunContext) -> str:
         guidelines = f" Follow `{CONTEXT_DIR}/guidelines.md`." if ctx.options.guidelines_file else ""
+        continuing = (
+            f" You are continuing pull request #{ctx.inputs.pull_request} (see `{CONTEXT_DIR}/pull_request.md`); its branch is checked out."
+            if ctx.inputs.pull_request
+            else ""
+        )
         return (
-            f"Implement the task in `{CONTEXT_DIR}/task.md` in the repository checked out at `{REPO_DIR}/`.{guidelines}\n\n"
+            f"Implement the task in `{CONTEXT_DIR}/task.md` in the repository checked out at `{REPO_DIR}/`.{continuing}{guidelines}\n\n"
             "Make focused changes, run the project's tests or linters if they exist, and do not commit or push. "
-            "When you are done, call the `submit_implementation` tool exactly once with a summary, the list of "
-            "changes, the commands you ran and their outcome, and any notes."
+            "If you need a virtual environment, create it in your home directory. "
+            "When you are done, call the `submit_implementation` tool exactly once with a short title, a summary, "
+            "the list of changes, the commands you ran and their outcome, and any notes. Set `verified` to true only "
+            "if the tests or checks actually ran and passed."
         )
 
     def finalize(self, ctx: RunContext, submission: dict, store) -> dict:
@@ -176,11 +212,48 @@ class ImplementHandler(Handler):
         truncated = len(patch.encode()) > MAX_PATCH_BYTES
         files = sorted({line[6:] for line in patch.splitlines() if line.startswith("+++ b/")})
         (ctx.context_dir / "change.patch").write_text(patch)
-        return {
+        output = {
             "implementation": result.model_dump(),
             "patch": patch[:MAX_PATCH_BYTES],
             "patch_truncated": truncated,
             "files": files,
+        }
+        if ctx.options.pull_request and patch:
+            output["pull_request"] = self._deliver(ctx, result)
+        return output
+
+    def _description(self, ctx: RunContext, result: ImplementationSubmission) -> str:
+        person = ctx.run["created_by"]
+        lines = [result.summary, ""]
+        lines += [f"- {change}" for change in result.changes]
+        if result.tests:
+            lines += ["", "**How the agent verified it:** " + "; ".join(result.tests)]
+        if not result.verified:
+            lines += ["", "**Not verified:** the agent could not run the checks successfully, so this is a draft."]
+        if result.notes:
+            lines += ["", f"**Notes:** {result.notes}"]
+        lines += ["", f"_Opened by the agent platform for {person}._" + (f" [Session]({ctx.session_url})" if ctx.session_url else "")]
+        return "\n".join(lines)
+
+    def _deliver(self, ctx: RunContext, result: ImplementationSubmission) -> dict:
+        delivery = ctx.options.pull_request
+        source = ctx.options.repository
+        provider, token = self._provider(ctx)
+        title = short_title(result.title or result.summary) or ctx.workflow.name
+        message = f"{title}\n\nMade by an agent for {ctx.run['created_by']} (run {ctx.run['id']})."
+        if ctx.inputs.pull_request:
+            pr = provider.pull_request(delivery.repository, ctx.inputs.pull_request)
+            commit = git.commit_and_push(ctx.workspace / REPO_DIR, source.url, pr.source_branch, provider.git_username, token, message, ctx.author)
+            pushed = {"pushed_at": datetime.now(UTC).isoformat()}
+            return {"id": pr.id, "url": pr.url, "branch": pr.source_branch, "target": pr.destination_branch, "commit": commit, "updated": True, **pushed}
+        branch = f"agent/{ctx.run['id']}"
+        commit = git.commit_and_push(ctx.workspace / REPO_DIR, source.url, branch, provider.git_username, token, message, ctx.author)
+        target = delivery.target_branch or ctx.inputs.branch or source.branch
+        draft = not result.verified
+        pr = provider.create_pull_request(delivery.repository, branch, target, title, self._description(ctx, result), draft)
+        return {
+            "id": pr.id, "url": pr.url, "branch": branch, "target": target, "commit": commit, "draft": draft,
+            "pushed_at": datetime.now(UTC).isoformat(),
         }
 
 

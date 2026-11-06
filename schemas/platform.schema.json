@@ -140,15 +140,33 @@
       "additionalProperties": false,
       "properties": {
         "url": {
+          "anyOf": [
+            {
+              "pattern": "^https?://",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
           "description": "Endpoint called with the credential; a 2xx answer means it works",
-          "pattern": "^https?://",
-          "title": "Url",
-          "type": "string"
+          "title": "Url"
+        },
+        "mcp_tool": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Instead of a URL: a tool (without arguments) of the MCP server using this credential, called through it",
+          "title": "Mcp Tool"
         }
       },
-      "required": [
-        "url"
-      ],
       "title": "CredentialTest",
       "type": "object"
     },

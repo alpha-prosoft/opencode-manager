@@ -25,6 +25,7 @@ export const RUN_STATUS: Record<RunStatus, [string, Color]> = {
   running: ["Agent working", "info"],
   awaiting_result: ["Agent working", "info"],
   finalizing: ["Collecting result", "info"],
+  following_ci: ["Following build", "info"],
   completed: ["Completed", "success"],
   failed: ["Failed", "error"],
   cancelled: ["Cancelled", "warning"],

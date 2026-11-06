@@ -1,6 +1,7 @@
 import json
 from datetime import UTC, datetime, timedelta
 
+import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import PlainTextResponse, StreamingResponse
@@ -12,6 +13,7 @@ from ..config import Settings, get_settings
 from ..models import Identity, LoginRequest, Session, SessionRecord, SessionUpdate
 from ..platform.catalog import CATALOG
 from ..platform.context import Platform
+from ..platform import scm
 from ..platform.runner import RunError
 from ..platform.spec import json_schemas
 from . import get_platform
@@ -216,6 +218,45 @@ def _visible_run(platform: Platform, identity: Identity, run_id: str) -> dict:
     return run
 
 
+def _outcome(result: dict | None) -> dict | None:
+    """The few facts a run list shows: the pull request, its build, or the review verdict."""
+    if not result:
+        return None
+    outcome = {}
+    if pr := result.get("pull_request"):
+        outcome["pull_request"] = {k: pr.get(k) for k in ("id", "url", "draft", "updated")}
+    if ci := result.get("ci"):
+        outcome["build"] = {"state": ci.get("state"), "number": (ci.get("build") or {}).get("number"), "follow_up_run": ci.get("follow_up_run")}
+    if review := result.get("review"):
+        outcome["verdict"] = review.get("verdict")
+    return outcome or None
+
+
+@router.get("/teams/{team_id}/workflows/{workflow_id}/pull-requests")
+async def open_pull_requests(
+    team_id: str, workflow_id: str, identity: Identity = Depends(current_identity), platform: Platform = Depends(get_platform)
+) -> list[dict]:
+    """Open pull requests a workflow can work on, read with the caller's own credential when they have one."""
+    if team_id not in platform.registry.teams_of(identity.sub):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Team not found")
+    workflow = platform.registry.definition(team_id, "workflows", workflow_id)
+    if workflow is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Workflow not found")
+    options = workflow.options or {}
+    scm_options = options.get("scm") or ({**options["pull_request"], "credentials": options["repository"].get("credentials")} if options.get("pull_request") else None)
+    if not scm_options or not scm_options.get("credentials"):
+        return []
+    secret = platform.credentials.for_user(identity.sub).get(scm_options["credentials"])
+    if not secret:
+        return []
+    provider = scm.provider(scm_options["provider"], secret)
+    try:
+        items = await run_in_threadpool(provider.open_pull_requests, scm_options["repository"])
+    except httpx.HTTPError:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Could not list pull requests") from None
+    return [{"id": pr.id, "title": pr.title, "author": pr.author, "branch": pr.source_branch} for pr in sorted(items, key=lambda p: -p.id)]
+
+
 @router.get("/runs")
 def runs(
     team: str | None = None,
@@ -228,7 +269,11 @@ def runs(
     names = _workflow_names(platform, {run["team_id"] for run in items})
     return [
         {k: v for k, v in run.items() if k != "result"}
-        | {"has_result": bool(run["result"]), "workflow_name": names.get((run["team_id"], run["workflow_id"]), run["workflow_id"])}
+        | {
+            "has_result": bool(run["result"]),
+            "outcome": _outcome(run["result"]),
+            "workflow_name": names.get((run["team_id"], run["workflow_id"]), run["workflow_id"]),
+        }
         for run in items
     ]
 

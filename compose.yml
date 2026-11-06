@@ -77,6 +77,15 @@ services:
     networks: [opencode-net]
     restart: unless-stopped
 
+  mcp-jenkins:
+    image: opencode-platform/mcp-jenkins:dev
+    build: ./images/mcp-jenkins
+    read_only: true
+    environment:
+      JENKINS_URL: ${JENKINS_URL:-}
+    networks: [opencode-net]
+    restart: unless-stopped
+
 networks:
   opencode-net:
     name: opencode-net

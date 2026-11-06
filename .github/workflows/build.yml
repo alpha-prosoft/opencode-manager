@@ -100,6 +100,23 @@ jobs:
           labels: ${{ steps.mcp-meta.outputs.labels }}
           cache-from: type=gha,scope=mcp-bitbucket
           cache-to: type=gha,mode=max,scope=mcp-bitbucket
+      - id: mcp-jenkins-meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE }}-mcp-jenkins
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=sha
+      - uses: docker/build-push-action@v7
+        with:
+          context: images/mcp-jenkins
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.mcp-jenkins-meta.outputs.tags }}
+          labels: ${{ steps.mcp-jenkins-meta.outputs.labels }}
+          cache-from: type=gha,scope=mcp-jenkins
+          cache-to: type=gha,mode=max,scope=mcp-jenkins
       - uses: actions/upload-artifact@v7
         if: github.event_name == 'pull_request'
         with:

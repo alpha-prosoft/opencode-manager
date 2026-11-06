@@ -3,6 +3,7 @@ import time
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
+from ..platform.handlers import HandlerError
 from ..platform.registry import PlatformRegistry
 from ..platform.runner import ModelUnavailable, RunError, RunService
 from ..platform.triggers import TriggerService
@@ -60,7 +61,7 @@ class RunActivities:
     def run_prepare(self, run_id: str) -> dict:
         try:
             return self.runner.prepare(run_id)
-        except RunError as error:
+        except (RunError, HandlerError) as error:
             raise ApplicationError(str(error), non_retryable=True) from error
 
     @activity.defn(name="run_start_conversation")
@@ -94,12 +95,35 @@ class RunActivities:
     def run_complete(self, run_id: str) -> None:
         self.runner.complete(run_id)
 
+    @activity.defn(name="run_ci_start")
+    def run_ci_start(self, run_id: str) -> int:
+        return self.runner.ci_start(run_id)
+
+    @activity.defn(name="run_ci_poll")
+    def run_ci_poll(self, run_id: str) -> str:
+        return self.runner.ci_poll(run_id)
+
+    @activity.defn(name="run_ci_timeout")
+    def run_ci_timeout(self, run_id: str) -> None:
+        self.runner.ci_timeout(run_id)
+
+    @activity.defn(name="run_ci_failure")
+    def run_ci_failure(self, run_id: str) -> str | None:
+        try:
+            return self.runner.ci_failure(run_id)
+        except RunError as error:
+            raise ApplicationError(str(error), non_retryable=True) from error
+
     @activity.defn(name="run_fail")
     def run_fail(self, run_id: str, message: str) -> None:
         self.runner.fail(run_id, message)
 
     def all(self) -> list:
         return [
+            self.run_ci_start,
+            self.run_ci_poll,
+            self.run_ci_timeout,
+            self.run_ci_failure,
             self.run_prepare,
             self.run_start_conversation,
             self.run_wait,

@@ -58,13 +58,17 @@ async def submit_review(
     description="Submit the finished implementation. Call exactly once after the changes are in the working tree.",
 )
 async def submit_implementation(
+    title: str,
     summary: str,
+    verified: bool,
     ctx: Context,
     changes: list[str] = Field(default=[]),
     tests: list[str] = Field(default=[]),
     notes: str = "",
 ) -> str:
-    return await _submit(ctx, "submit_implementation", {"summary": summary, "changes": changes, "tests": tests, "notes": notes})
+    """title: short imperative title (max 120 characters). verified: true only if the tests or checks ran and passed."""
+    payload = {"title": title, "summary": summary, "verified": verified, "changes": changes, "tests": tests, "notes": notes}
+    return await _submit(ctx, "submit_implementation", payload)
 
 
 @server.tool(name="submit_document", description="Submit the finished document as Markdown. Call exactly once.")

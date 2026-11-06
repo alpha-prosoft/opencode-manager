@@ -20,10 +20,13 @@ class SessionOptions(Options):
     instructions_file: str | None = Field(default=None, description="Team repo file appended to the agent prompt")
 
 
+BRANCH = r"^[A-Za-z0-9._/-]{1,200}$"
+
+
 class SessionInputs(Options):
     title: str = Field(default="", max_length=100, description="Name shown in the session list")
-    branch: str | None = Field(default=None, description="Override the repository branch")
     prompt: str | None = Field(default=None, max_length=20000, description="First message sent to the agent")
+    branch: str | None = Field(default=None, pattern=BRANCH, description="Check out this branch instead of the default one")
 
 
 class ReviewOptions(Options):
@@ -37,14 +40,40 @@ class ReviewInputs(Options):
     pull_request: int = Field(ge=1, description="Pull request number")
 
 
+class PullRequestDelivery(Options):
+    provider: Literal["bitbucket", "github"]
+    repository: str = Field(pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", description="workspace/repository on the provider")
+    target_branch: str | None = Field(default=None, description="Branch the pull request targets (default: the branch worked on)")
+
+
+class CiFollow(Options):
+    mcp_server: str = Field(description="MCP server whose get_build tool reads the CI system (e.g. jenkins)")
+    job: str = Field(
+        description="Job that builds the pull request; {pr} is replaced by its number, e.g. folder/repo/PR-{pr}",
+        pattern=r"\{pr\}",
+    )
+    timeout_minutes: int = Field(default=120, ge=5, le=720, description="Give up waiting for the build after this long")
+    on_failure: str | None = Field(
+        default=None, description="Workflow (analysis or session) started with the failure details when the build fails"
+    )
+
+
 class ImplementOptions(Options):
     repository: GitSource = Field(description="Repository the change is made in")
+    pull_request: PullRequestDelivery | None = Field(
+        default=None,
+        description="Push the change to a new branch and open a pull request (never merged), using the repository credential",
+    )
     guidelines_file: str | None = Field(default=None, description="Team repo file with coding guidelines")
+    ci: CiFollow | None = Field(default=None, description="Follow the pull request's build after it is pushed")
 
 
 class ImplementInputs(Options):
     task: str = Field(min_length=10, max_length=20000, description="What to implement")
-    branch: str | None = Field(default=None, description="Base branch (defaults to the repository branch)")
+    pull_request: int | None = Field(
+        default=None, ge=1, description="Continue on this open pull request: its branch is checked out and the change is pushed to it"
+    )
+    branch: str | None = Field(default=None, pattern=BRANCH, description="Base branch (defaults to the repository branch)")
 
 
 class AnalysisOptions(Options):
@@ -113,7 +142,10 @@ CATALOG: dict[str, Activity] = {
             id="implement",
             name="Implementation",
             category="Engineering",
-            description="Implements a task in a repository and returns a reviewed patch. Nothing is pushed.",
+            description=(
+                "Implements a task in a repository and returns a reviewed patch. Optionally the platform opens or updates "
+                "a pull request (never merged) and follows its build."
+            ),
             icon="build",
             interactive=False,
             result_tool="submit_implementation",

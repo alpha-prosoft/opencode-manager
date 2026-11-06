@@ -1,6 +1,7 @@
 export type SessionStatus = "running" | "starting" | "stopped" | "error";
 export type Visibility = "private" | "team" | "public";
-export type RunStatus = "queued" | "preparing" | "running" | "awaiting_result" | "finalizing" | "completed" | "failed" | "cancelled";
+export type RunStatus =
+  "queued" | "preparing" | "running" | "awaiting_result" | "finalizing" | "following_ci" | "completed" | "failed" | "cancelled";
 
 export interface Usage {
   calls: number;
@@ -128,6 +129,38 @@ export interface Run {
   updated_at: string;
   has_result?: boolean;
   workflow_name?: string;
+  outcome?: RunOutcome | null;
+}
+
+export interface RunOutcome {
+  pull_request?: { id: number; url: string; draft?: boolean; updated?: boolean };
+  build?: { state: BuildState; number: number | null; follow_up_run?: string | null };
+  verdict?: string;
+}
+
+export type BuildState = "waiting" | "running" | "passed" | "failed" | "timeout";
+
+export interface BuildInfo {
+  job: string;
+  state: BuildState;
+  detail?: string | null;
+  checked_at?: string;
+  follow_up_run?: string | null;
+  build: {
+    number: number;
+    result: string | null;
+    building: boolean;
+    url: string;
+    duration_ms: number | null;
+    stages: { name: string; status: string; duration_ms: number | null }[] | null;
+  } | null;
+}
+
+export interface OpenPullRequest {
+  id: number;
+  title: string;
+  author: string;
+  branch: string;
 }
 
 export interface RunDetail extends Run {
@@ -346,6 +379,7 @@ export const api = {
   deleteMyCredential: (id: string) => request<void>(`/me/credentials/${id}`, { method: "DELETE" }),
   markCredentialsSeen: (ids: string[]) => post<void>("/me/credentials/seen", { credentials: ids }),
   cancelRun: (id: string) => post<Run>(`/runs/${id}/cancel`),
+  openPullRequests: (team: string, workflow: string) => request<OpenPullRequest[]>(`/teams/${team}/workflows/${workflow}/pull-requests`),
   retryRun: (id: string) => post<Run>(`/runs/${id}/retry`),
   admin: {
     overview: () => request<AdminOverview>("/admin/overview"),

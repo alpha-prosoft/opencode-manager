@@ -7,6 +7,7 @@ import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -171,13 +172,34 @@ class Credentials:
     def test(self, spec: CredentialSpec, value: dict) -> tuple[bool, str]:
         if spec.test is None:
             return True, "Saved. This credential has no automatic check."
+        if spec.test.mcp_tool:
+            return self._test_through_mcp(spec, value)
+        host = urlsplit(spec.test.url).hostname
+        scheme = "bearer" if spec.kind == "token" else "basic"
         try:
-            response = httpx.get(spec.test.url, headers={"Authorization": authorization("bearer" if spec.kind == "token" else "basic", value)}, timeout=15)
+            response = httpx.get(spec.test.url, headers={"Authorization": authorization(scheme, value)}, timeout=10)
+        except httpx.TimeoutException:
+            return False, f"Could not reach {host} from the platform (timed out). Is it only reachable through a VPN?"
         except httpx.HTTPError as error:
-            return False, f"Could not reach {spec.test.url}: {error}"
+            return False, f"Could not reach {host} from the platform ({type(error).__name__})."
+        if response.is_redirect and "login" in response.headers.get("location", "").lower():
+            return False, f"{host} redirected to its login page: the credential was not accepted."
         if response.is_success:
             return True, "Checked: the service accepted it."
         return False, f"The service rejected it (HTTP {response.status_code})."
+
+    def _test_through_mcp(self, spec: CredentialSpec, value: dict) -> tuple[bool, str]:
+        from .mcp_client import ToolFailed, call_tool
+
+        server = next((m for m in self.platform().mcp_servers if m.credential == spec.id), None)
+        if server is None:
+            return False, f"No MCP server uses {spec.name}, so it can't be checked through one."
+        try:
+            answer = call_tool(server, value, spec.test.mcp_tool, {}, timeout=20)
+        except ToolFailed as error:
+            return False, str(error)
+        detail = json.dumps(answer) if isinstance(answer, (dict, list)) else str(answer)
+        return True, f"Checked through {server.name}: {detail[:200]}"
 
 
 class UserSecrets:

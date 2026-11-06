@@ -29,6 +29,9 @@ class Provider:
     def pull_request(self, repository: str, number: int) -> PullRequest: ...
     def diff(self, repository: str, number: int) -> str: ...
     def comment(self, repository: str, number: int, content: str, path: str | None, line: int | None) -> int: ...
+    def create_pull_request(
+        self, repository: str, source: str, destination: str, title: str, description: str, draft: bool = False
+    ) -> PullRequest: ...
 
 
 class Bitbucket(Provider):
@@ -83,6 +86,22 @@ class Bitbucket(Provider):
             response = http.post(f"/repositories/{repository}/pullrequests/{number}/comments", json=body)
             response.raise_for_status()
             return response.json()["id"]
+
+    def create_pull_request(
+        self, repository: str, source: str, destination: str, title: str, description: str, draft: bool = False
+    ) -> PullRequest:
+        body = {
+            "draft": draft,
+            "title": title,
+            "description": description,
+            "source": {"branch": {"name": source}},
+            "destination": {"branch": {"name": destination}},
+            "close_source_branch": True,
+        }
+        with self._client() as http:
+            response = http.post(f"/repositories/{repository}/pullrequests", json=body)
+            response.raise_for_status()
+            return self._parse(repository, response.json())
 
 
 class GitHub(Provider):
@@ -143,6 +162,15 @@ class GitHub(Provider):
                 response = http.post(f"/repos/{repository}/issues/{number}/comments", json={"body": content})
             response.raise_for_status()
             return response.json()["id"]
+
+    def create_pull_request(
+        self, repository: str, source: str, destination: str, title: str, description: str, draft: bool = False
+    ) -> PullRequest:
+        payload = {"title": title, "body": description, "head": source, "base": destination, "draft": draft}
+        with self._client() as http:
+            response = http.post(f"/repos/{repository}/pulls", json=payload)
+            response.raise_for_status()
+            return self._parse(repository, response.json())
 
 
 PROVIDERS: dict[str, type[Provider]] = {"bitbucket": Bitbucket, "github": GitHub}

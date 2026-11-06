@@ -8,6 +8,7 @@ from temporalio.workflow import ParentClosePolicy
 
 MODEL_UNAVAILABLE = "ModelUnavailable"
 NUDGES = 2
+CI_POLL_SECONDS = 60
 
 QUICK = {"start_to_close_timeout": timedelta(minutes=1)}
 SLOW = {
@@ -93,10 +94,35 @@ class RunWorkflow:
             return model
         return None
 
+    async def _follow_ci(self, run_id: str) -> None:
+        minutes: int = await workflow.execute_activity("run_ci_start", run_id, **QUICK)
+        if not minutes:
+            return
+        deadline = workflow.now() + timedelta(minutes=minutes)
+        state = "waiting"
+        while workflow.now() < deadline:
+            state = await workflow.execute_activity("run_ci_poll", run_id, **QUICK)
+            if state in ("passed", "failed"):
+                break
+            await asyncio.sleep(CI_POLL_SECONDS)
+        else:
+            await workflow.execute_activity("run_ci_timeout", run_id, **QUICK)
+            return
+        if state == "failed":
+            follow_up = await workflow.execute_activity("run_ci_failure", run_id, **QUICK)
+            if follow_up:
+                try:
+                    await workflow.start_child_workflow(
+                        RunWorkflow.run, follow_up, id=run_workflow_id(follow_up), parent_close_policy=ParentClosePolicy.ABANDON
+                    )
+                except WorkflowAlreadyStartedError:
+                    pass
+
     @workflow.run
     async def run(self, run_id: str) -> dict:
         session_id = None
         interactive = False
+        stopped = False
         try:
             info: dict = await workflow.execute_activity("run_prepare", run_id, **SLOW)
             session_id, interactive = info["session_id"], info["interactive"]
@@ -111,12 +137,15 @@ class RunWorkflow:
                     reason = "; ".join(self.unavailable) or "the agent finished without submitting a result"
                     raise ApplicationError(f"No result: {reason}", non_retryable=True)
                 await workflow.execute_activity("run_finalize", args=[run_id, self.submission["payload"]], **SLOW)
+                await workflow.execute_activity("stop_session", session_id, **QUICK)
+                stopped = True
+                await self._follow_ci(run_id)
         except (ActivityError, ApplicationError) as error:
             cause = error.cause if isinstance(error, ActivityError) and error.cause else error
             await workflow.execute_activity("run_fail", args=[run_id, str(getattr(cause, "message", cause))], **QUICK)
             raise
         finally:
-            if session_id and not interactive:
+            if session_id and not interactive and not stopped:
                 await workflow.execute_activity("stop_session", session_id, **QUICK)
         await workflow.execute_activity("run_complete", run_id, **QUICK)
         return {"session_id": session_id, "model": model}

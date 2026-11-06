@@ -1,4 +1,5 @@
 import logging
+from datetime import UTC, datetime
 
 import httpx
 from pydantic import ValidationError
@@ -9,7 +10,9 @@ from ..models import Identity, SessionRecord, Visibility
 from ..sessions import CONVERSATION_LABEL, SessionService
 from . import harness as harness_builder
 from .catalog import get_activity
+from .catalog import CiFollow
 from .handlers import HANDLERS, SUBMISSIONS, RunContext
+from .mcp_client import ToolFailed, call_tool
 from .registry import PlatformRegistry
 from .runs import RunStore
 from .secrets import SecretStore
@@ -101,7 +104,14 @@ class RunService:
             session_url=session_url,
             secret_host_allowed=self.registry.secret_host_allowed,
             local_roots=self.settings.local_repo_roots,
+            author=self._author(run),
         )
+
+    def _author(self, run: dict) -> tuple[str, str]:
+        person = self.person(run)
+        if person is None:
+            return ("Agent Platform", f"agent-platform@{self.settings.email_domain}")
+        return (f"{person} (via Agent Platform)", f"{person}@{self.settings.email_domain}")
 
     @staticmethod
     def person(run: dict) -> str | None:
@@ -290,6 +300,100 @@ class RunService:
         run = self.runs.get(run_id)
         trigger = {**run["trigger"], "retry_of": run_id, "by": username}
         return self.create(run["team_id"], run["workflow_id"], trigger, run["inputs"], username)
+
+    # ---- following CI ----------------------------------------------------------------
+
+    def _ci(self, run: dict):
+        workflow = self._workflow(run["team_id"], run["workflow_id"])
+        ci = (workflow.options or {}).get("ci")
+        pull_request = (run.get("result") or {}).get("pull_request")
+        return (CiFollow.model_validate(ci), pull_request) if ci and pull_request else (None, None)
+
+    def _ci_update(self, run: dict, **changes) -> dict:
+        result = dict(run["result"])
+        result["ci"] = {**(result.get("ci") or {}), **changes, "checked_at": datetime.now(UTC).isoformat()}
+        self.runs.update(run["id"], result=result)
+        return result["ci"]
+
+    def _ci_tool(self, run: dict, ci: CiFollow, tool: str, arguments: dict):
+        server = self.registry.platform().mcp_server(ci.mcp_server)
+        if server is None:
+            raise ToolFailed(f"MCP server {ci.mcp_server} is not configured")
+        resolved = self.credentials.resolve(server.credential, self.person(run)) if server.credential else None
+        if server.credential and resolved is None:
+            raise ToolFailed(f"credential {server.credential} is not set up")
+        return call_tool(server, resolved.value if resolved else None, tool, arguments)
+
+    def ci_start(self, run_id: str) -> int:
+        """Minutes to follow the build for, or 0 when there is nothing to follow."""
+        run = self.runs.get(run_id)
+        ci, pull_request = self._ci(run)
+        if ci is None:
+            return 0
+        self._ci_update(run, job=ci.job.replace("{pr}", str(pull_request["id"])), state="waiting", build=None)
+        self.runs.update(run_id, status="following_ci")
+        return ci.timeout_minutes
+
+    def ci_poll(self, run_id: str) -> str:
+        run = self.runs.get(run_id)
+        ci, pull_request = self._ci(run)
+        job = run["result"]["ci"]["job"]
+        try:
+            build = self._ci_tool(run, ci, "get_build", {"job": job, "number": "lastBuild"})
+        except ToolFailed as error:
+            if "not found" in str(error).lower():
+                self._ci_update(run, state="waiting", detail="The build job doesn't exist yet")
+                return "waiting"
+            self._ci_update(run, state="waiting", detail=str(error)[:300])
+            return "waiting"
+        pushed = datetime.fromisoformat(pull_request["pushed_at"]).timestamp() * 1000
+        if not isinstance(build, dict) or (build.get("started") or 0) < pushed - 60_000:
+            self._ci_update(run, state="waiting", detail="No build of the pushed change yet")
+            return "waiting"
+        outcome = build.get("result")
+        state = "running" if build.get("building") else "passed" if outcome == "SUCCESS" else "failed"
+        self._ci_update(run, state=state, build=build, detail=None)
+        return state
+
+    def ci_timeout(self, run_id: str) -> None:
+        run = self.runs.get(run_id)
+        self._ci_update(run, state="timeout", detail="Stopped waiting for the build")
+
+    def ci_failure(self, run_id: str) -> str | None:
+        """Start the workflow that analyses a failed build; returns its run id."""
+        run = self.runs.get(run_id)
+        ci, pull_request = self._ci(run)
+        if not ci or not ci.on_failure:
+            return None
+        build = run["result"]["ci"]["build"]
+        job = run["result"]["ci"]["job"]
+        try:
+            log = self._ci_tool(run, ci, "get_build_log", {"job": job, "number": str(build["number"]), "tail_lines": 150})
+        except ToolFailed as error:
+            log = f"(log unavailable: {error})"
+        failed = [s["name"] for s in build.get("stages") or [] if s.get("status") not in ("SUCCESS", "NOT_EXECUTED", "SKIPPED")]
+        context = "\n".join(
+            [
+                f"The build of pull request #{pull_request['id']} ({pull_request['url']}) failed.",
+                f"Jenkins job `{job}`, build #{build['number']}: {build.get('result')} — {build.get('url')}",
+                f"Failed stage(s): {', '.join(failed) or 'unknown'}.",
+                f"The change is on branch `{pull_request['branch']}` (commit {pull_request['commit'][:12]}).",
+                "",
+                "Find the cause of the failure and propose a fix. Use the Jenkins tools for more of the log or other builds.",
+                "",
+                "Last lines of the console log:",
+                "```",
+                str(log)[-8000:],
+                "```",
+            ]
+        )
+        follow_up = self._workflow(run["team_id"], ci.on_failure)
+        title = f"Build failure: PR #{pull_request['id']}, build #{build['number']}"
+        inputs = {"brief": context} if follow_up.activity == "analysis" else {"title": title, "prompt": context, "branch": pull_request["branch"]}
+        trigger = {"type": "ci_failure", "run": run_id, "build": build["number"], "by": run["created_by"]}
+        created = self.create(run["team_id"], ci.on_failure, trigger, inputs, run["created_by"])
+        self._ci_update(run, follow_up_run=created["id"])
+        return created["id"]
 
     def _check_session_limit(self, team_id: str) -> None:
         team = self.registry.team(team_id)

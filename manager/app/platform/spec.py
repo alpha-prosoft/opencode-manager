@@ -77,7 +77,16 @@ class LlmConnection(Strict):
 
 
 class CredentialTest(Strict):
-    url: str = Field(pattern=r"^https?://", description="Endpoint called with the credential; a 2xx answer means it works")
+    url: str | None = Field(default=None, pattern=r"^https?://", description="Endpoint called with the credential; a 2xx answer means it works")
+    mcp_tool: str | None = Field(
+        default=None, description="Instead of a URL: a tool (without arguments) of the MCP server using this credential, called through it"
+    )
+
+    @model_validator(mode="after")
+    def _one(self) -> "CredentialTest":
+        if bool(self.url) == bool(self.mcp_tool):
+            raise ValueError("set exactly one of url or mcp_tool")
+        return self
 
 
 class CredentialSpec(Strict):

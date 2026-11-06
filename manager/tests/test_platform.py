@@ -409,3 +409,31 @@ def test_private_sessions_are_not_visible_to_team_members():
     assert service.open_blocked(team_record, who("member")) == "personal"
     locked = record.model_copy(update={"locked_at": stamp})
     assert service.open_blocked(locked, who("owner")) == "locked"
+
+
+def test_pull_request_titles_are_cut_at_a_word():
+    from app.platform.handlers import short_title
+
+    assert short_title("Add tests") == "Add tests"
+    cut = short_title("word " * 40, limit=30)
+    assert cut.endswith("…") and len(cut) <= 31 and not cut[:-1].endswith(" ")
+
+
+def test_ci_following_needs_a_pull_request_and_allowed_tools(platform_env):
+    build, platform, roots = platform_env
+    spec = platform(secrets=["GIT_TOKEN"])
+    spec["credentials"] = [{"id": "CI", "name": "CI", "hosts": ["ci.internal"]}]
+    spec["mcp_servers"] = [{"id": "ci", "name": "CI", "url": "http://ci.internal/", "credential": "CI", "tools": ["get_build"]}]
+    ci = {"mcp_server": "ci", "job": "repo/PR-{pr}", "on_failure": "missing"}
+    workflow = {
+        "name": "Change", "activity": "implement", "agent": "a", "harness": "h",
+        "options": {"repository": {"url": f"file://{roots}/team"}, "ci": ci},
+    }
+    registry, _ = build(
+        spec,
+        {"agents/a.json": json.dumps(AGENT), "harnesses/h.json": json.dumps(HARNESS), "workflows/w.json": json.dumps(workflow)},
+    )
+    problems = " ".join(errors(registry, "workflows", "w"))
+    assert "needs options.pull_request" in problems
+    assert "must allow the tools" in problems
+    assert "missing does not exist" in problems
