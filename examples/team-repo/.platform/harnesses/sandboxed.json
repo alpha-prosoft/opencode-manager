@@ -17,5 +17,14 @@
     "cpus": 1,
     "memory_mb": 2048
   },
-  "idle_minutes": 15
+  "idle_minutes": 15,
+  "policy": {
+    "deny_commands": [
+      "\\bgit\\s+push\\b",
+      "\\bcurl\\b.*\\|\\s*(ba)?sh\\b"
+    ],
+    "deny_paths": [
+      "(^|/)\\.env$"
+    ]
+  }
 }

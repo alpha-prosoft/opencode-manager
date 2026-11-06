@@ -6,6 +6,7 @@ from datetime import timedelta
 from temporalio import activity
 from temporalio.client import (
     Client,
+    WorkflowExecutionStatus,
     Schedule,
     ScheduleActionStartWorkflow,
     ScheduleAlreadyRunningError,
@@ -39,6 +40,7 @@ REAP_SCHEDULE_ID = "reap-sessions"
 SYNC_SCHEDULE_ID = "platform-sync"
 TRIGGER_PREFIX = "trigger-"
 LEGACY_SCHEDULES = ("poll-bitbucket",)
+RECONCILE_SECONDS = 120
 CONNECT_ATTEMPTS = 30
 TRIGGER_WORKFLOWS = {"pull_request": PollPullRequestsWorkflow, "schedule": ScheduledRunWorkflow}
 
@@ -67,6 +69,7 @@ class TemporalEngine:
     ):
         self.settings = settings
         self.sessions = sessions
+        self.runner = runner
         self.triggers = triggers
         self.client = client
         self._executor = ThreadPoolExecutor(max_workers=32)
@@ -103,6 +106,41 @@ class TemporalEngine:
         await self.client.start_workflow(
             RunWorkflow.run, run_id, id=run_workflow_id(run_id), task_queue=self.settings.temporal_task_queue
         )
+
+    async def cancel_run(self, run_id: str) -> None:
+        try:
+            await self.client.get_workflow_handle(run_workflow_id(run_id)).cancel()
+        except RPCError as error:
+            if error.status != RPCStatusCode.NOT_FOUND:
+                raise
+
+    async def reconcile_runs(self) -> list[str]:
+        """Fail runs whose workflow ended without reporting (terminated, timed out, lost)."""
+        repaired = []
+        for run in await asyncio.to_thread(self.runner.runs.active):
+            try:
+                description = await self.client.get_workflow_handle(run_workflow_id(run["id"])).describe()
+            except RPCError as error:
+                if error.status != RPCStatusCode.NOT_FOUND:
+                    continue
+                state = "not found"
+            else:
+                if description.status == WorkflowExecutionStatus.RUNNING:
+                    continue
+                state = description.status.name.lower()
+            await asyncio.to_thread(self.runner.fail, run["id"], f"Run workflow ended unexpectedly ({state})")
+            repaired.append(run["id"])
+        return repaired
+
+    async def _reconcile_forever(self) -> None:
+        while True:
+            try:
+                repaired = await self.reconcile_runs()
+                if repaired:
+                    log.warning("Marked %d orphaned run(s) as failed: %s", len(repaired), repaired)
+            except Exception:
+                log.exception("Run reconciliation failed")
+            await asyncio.sleep(RECONCILE_SECONDS)
 
     async def sync_now(self) -> dict:
         return await self.client.execute_workflow(
@@ -167,7 +205,11 @@ class TemporalEngine:
             except RPCError as error:
                 log.warning("Schedules not created yet (%s), retrying", error.message)
                 await asyncio.sleep(5)
-        await self.worker.run()
+        reconciler = asyncio.create_task(self._reconcile_forever(), name="run-reconciler")
+        try:
+            await self.worker.run()
+        finally:
+            reconciler.cancel()
 
     async def shutdown(self) -> None:
         await self.worker.shutdown()

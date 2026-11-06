@@ -1,5 +1,6 @@
 import logging
 
+import httpx
 from pydantic import ValidationError
 
 from .. import opencode
@@ -68,6 +69,7 @@ class RunService:
             raise PermissionError(f"{identity.sub} is not a member of team {team_id}")
         trigger = {"type": "manual", "by": identity.sub}
         workflow = self._workflow(team_id, workflow_id)
+        self._check_session_limit(team_id)
         if isinstance(workflow.trigger, PullRequestTrigger):
             source = workflow.trigger
             trigger["scm"] = {"provider": source.provider, "repository": source.repository, "credentials": source.credentials}
@@ -115,6 +117,7 @@ class RunService:
         if run.get("session_id") and self.sessions.get(run["session_id"]):
             record = self.sessions.get(run["session_id"])
         else:
+            self._check_session_limit(run["team_id"])
             title = run["inputs"].get("title") or workflow.name
             if run["inputs"].get("pull_request"):
                 title = f"{workflow.name} · PR #{run['inputs']['pull_request']}"
@@ -154,7 +157,15 @@ class RunService:
             harness_builder.derive_key(self.signing_key, "llm", record.id),
             harness_builder.derive_key(self.signing_key, "mcp", record.id) if result_tool else None,
         )
-        sandbox = harness_builder.sandbox(self.settings, harness, config, record.secret_key, run["team_id"], run_id)
+        sandbox = harness_builder.sandbox(
+            self.settings,
+            harness,
+            config,
+            record.secret_key,
+            run["team_id"],
+            run_id,
+            harness_builder.derive_key(self.signing_key, "telemetry", record.id),
+        )
         self.sessions.storage.write_sandbox(record.id, sandbox)
         self.runs.update(run_id, status="running")
         return {"session_id": record.id, "interactive": activity.interactive, "models": list(harness.llm.models)}
@@ -221,8 +232,54 @@ class RunService:
 
     def complete(self, run_id: str) -> None:
         run = self.runs.get(run_id)
+        if run["status"] == "cancelled":
+            return
         result = run["result"] or {"session_id": run["session_id"]}
         self.runs.update(run_id, status="completed", result=result)
+        self.notify(run_id)
 
     def fail(self, run_id: str, message: str) -> None:
+        if self.runs.get(run_id)["status"] == "cancelled":
+            return
         self.runs.update(run_id, status="failed", error=message[:4000])
+        self.notify(run_id)
+
+    def cancel(self, run_id: str, username: str) -> None:
+        run = self.runs.get(run_id)
+        self.runs.update(run_id, status="cancelled", error=f"Cancelled by {username}", cancelled_by=username)
+        if run["session_id"] and self.sessions.get(run["session_id"]):
+            record = self.sessions.get(run["session_id"])
+            if record.activity != "session":
+                self.sessions.stop(record.id)
+
+    def retry(self, run_id: str, username: str) -> dict:
+        run = self.runs.get(run_id)
+        trigger = {**run["trigger"], "retry_of": run_id, "by": username}
+        return self.create(run["team_id"], run["workflow_id"], trigger, run["inputs"], username)
+
+    def _check_session_limit(self, team_id: str) -> None:
+        team = self.registry.team(team_id)
+        limit = team.budget.max_running_sessions if team else None
+        if not limit:
+            return
+        running = set(self.sessions.running_session_ids())
+        count = sum(1 for record in self.sessions.store.list() if record.team_id == team_id and record.id in running)
+        if count >= limit:
+            raise RunError(f"Team {team_id} already has {count} running sessions (limit {limit}). Stop one and retry.")
+
+    def notify(self, run_id: str) -> None:
+        run = self.runs.get(run_id)
+        team = self.registry.team(run["team_id"])
+        if not team or not team.notifications.webhook or run["status"] not in team.notifications.on:
+            return
+        url = self.secrets.get(team.notifications.webhook)
+        if not url:
+            return
+        link = self.settings.public_url(self.settings.domain) + f"/runs/{run_id}"
+        verdict = ((run.get("result") or {}).get("review") or {}).get("verdict")
+        text = f"{run['team_id']}/{run['workflow_id']} {run['status']}" + (f" ({verdict})" if verdict else "") + f": {link}"
+        payload = {"text": text, "run": {k: run[k] for k in ("id", "team_id", "workflow_id", "activity", "status", "error")}}
+        try:
+            httpx.post(url, json=payload, timeout=10)
+        except httpx.HTTPError as error:
+            log.warning("Webhook for run %s failed: %s", run_id, error)

@@ -110,6 +110,22 @@ MIGRATIONS = [
     CREATE TRIGGER audit_events_no_delete BEFORE DELETE ON audit_events
         BEGIN SELECT RAISE(ABORT, 'audit events are append-only'); END;
     """,
+    """
+    CREATE TABLE telemetry (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        team_id TEXT,
+        ts TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        tool TEXT,
+        call_id TEXT,
+        conversation TEXT,
+        duration_ms INTEGER,
+        detail TEXT NOT NULL
+    );
+    CREATE INDEX telemetry_session ON telemetry (session_id, id);
+    ALTER TABLE runs ADD COLUMN cancelled_by TEXT;
+    """,
 ]
 
 

@@ -108,6 +108,25 @@ def main() -> int:
     _, catalog = alice.call("GET", "/api/marketplace")
     check("marketplace lists the activities", {a["id"] for a in catalog} >= {"session", "review", "implement", "analysis"})
 
+    print("Roles and administration")
+    dave, erin = Client(base, "dave"), Client(base, "erin")
+    personas = {p["username"]: p["roles"] for p in alice.call("GET", "/api/auth/personas")[1]}
+    check("login offers personas with their roles", "Platform admin" in personas.get("alice", []) and any("Payments" in r for r in personas.get("dave", [])), str(personas))
+    teams = {t["id"]: t for t in alice.call("GET", "/api/teams")[1]}
+    check("teams can be synced from a local path", teams.get("payments", {}).get("status") == "ok" and str(teams["payments"]["commit"]).startswith("files:"), str(teams.get("payments")))
+    check("team admins see only their team", [t["id"] for t in dave.call("GET", "/api/me")[1]["teams"]] == ["payments"])
+    check("team members cannot use the admin API", erin.call("GET", "/api/admin/overview")[0] == 403)
+    status, overview = alice.call("GET", "/api/admin/overview")
+    check("platform admins get an overview", status == 200 and overview["teams"] >= 3, str(overview))
+    users = {u["username"]: u for u in alice.call("GET", "/api/admin/users")[1]}
+    check("admin user matrix shows team roles", users.get("dave", {}).get("teams", {}).get("payments") == "admin", str(users.get("dave")))
+    secrets = alice.call("GET", "/api/admin/secrets")[1]
+    check("secret status never includes values", secrets and all(set(s) == {"name", "configured", "used_by", "hosts"} for s in secrets), str(secrets))
+    connection = alice.call("GET", "/api/platform")[1]["llm_connections"][0]["id"]
+    status, tested = alice.call("POST", f"/api/admin/llm/{connection}/test")
+    check("admins can test an LLM connection", status == 200 and tested.get("ok"), str(tested))
+    check("admins can list Temporal schedules", any(s["id"] == "platform-sync" for s in alice.call("GET", "/api/admin/schedules")[1]))
+
     print("Activities")
     analysis = start(alice, "demo", "requirements", {"brief": "Members get 5% off orders over 100 EUR, stackable with other discounts up to 20% in total."})
     implement = start(
@@ -123,6 +142,33 @@ def main() -> int:
         review = (team_id, start(alice, team_id, workflow_id, {"pull_request": int(number)}))
 
     run = wait_for_run(bob, workspace)
+
+    print("Monitoring and policy")
+    policy = start(bob, "demo", "workspace", {"title": "e2e policy", "prompt": "Use the bash tool to run exactly: git push origin main --dry-run   Then use the bash tool to run: ls repo. Report what happened."})
+    watched = wait_for_run(bob, policy)
+    activity = {}
+    for _ in range(60):
+        activity = bob.call("GET", f"/api/sessions/{watched['session_id']}/activity")[1]
+        if activity.get("state") == "idle" and activity.get("tools"):
+            break
+        time.sleep(3)
+    check("monitor plugin reports tool calls", any(t["tool"] == "bash" for t in activity.get("tools", [])), str(activity.get("tools")))
+    check("harness policy blocks denied commands", activity.get("blocked", 0) >= 1, str(activity.get("blocked")))
+    check("carol cannot read the session activity", carol.call("GET", f"/api/sessions/{watched['session_id']}/activity")[0] == 404)
+    output = sh("docker", "exec", f"opencode-{watched['session_id']}", "sh", "-c", "echo x >> /etc/opencode/opencode/plugins/platform-monitor.js 2>&1 || echo denied").stdout
+    check("monitor plugin is read-only", "denied" in output or "Permission" in output, output)
+    bob.call("POST", f"/api/sessions/{watched['session_id']}/stop")
+
+    cancel = start(alice, "demo", "requirements", {"brief": "This run is cancelled straight away by the e2e test."})
+    check("other users cannot cancel a run", erin.call("POST", f"/api/runs/{cancel}/cancel")[0] == 404)
+    status, cancelled = alice.call("POST", f"/api/runs/{cancel}/cancel")
+    time.sleep(10)
+    cancelled_run = alice.call("GET", f"/api/runs/{cancel}")[1]
+    check("runs can be cancelled", status == 200 and cancelled_run["status"] == "cancelled", cancelled_run.get("error") or cancelled_run["status"])
+    status, retried = alice.call("POST", f"/api/runs/{cancel}/retry")
+    check("runs can be retried", status == 201 and retried["trigger"].get("retry_of") == cancel, str(retried))
+    if status == 201:
+        alice.call("POST", f"/api/runs/{retried['id']}/cancel")
     check("interactive session launches", run["status"] == "completed", run.get("error") or run["status"])
     session = run.get("session") or {}
     check("interactive session is private to its owner", session.get("visibility") == "private" and session.get("sub") == "bob")

@@ -143,7 +143,7 @@ def test_specs_reject_unknown_fields_and_bad_values():
     with pytest.raises(ValidationError):
         WorkflowSpec.model_validate({"name": "x", "activity": "review", "agent": "a", "harness": "h", "trigger": {"type": "schedule", "every_minutes": 1}})
     with pytest.raises(ValidationError):
-        PlatformSpec.model_validate({"teams": [{"id": "t", "name": "T", "repository": {"url": "ssh://git@x/y"}}]})
+        PlatformSpec.model_validate({"teams": [{"id": "t", "name": "T", "repository": {"url": "ftp://x/y"}}]})
 
 
 def test_harness_config_is_locked_down():
@@ -153,7 +153,7 @@ def test_harness_config_is_locked_down():
     assert config["enabled_providers"] == ["platform"] and config["plugin"] == []
     assert config["permission"]["question"] == "deny" and config["permission"]["webfetch"] == "deny"
     assert config["provider"]["platform"]["options"]["baseURL"].endswith("/llm/v1")
-    sandbox = harness.sandbox(settings, spec, config, "pw", "team", "run")
+    sandbox = harness.sandbox(settings, spec, config, "pw", "team", "run", "telemetry-key")
     assert sandbox.env["OPENCODE_DISABLE_PROJECT_CONFIG"] == "1" and sandbox.env["XDG_CONFIG_HOME"] == harness.CONFIG_MOUNT
     assert "llm-key" not in json.dumps(sandbox.env)
 
@@ -200,3 +200,103 @@ def test_review_plan_respects_limits_and_diff_lines():
     assert changed_lines(DIFF) == {"a.py": {1, 2, 3}}
     assert len(plan.comments) == 3 and plan.inline_count == 2 and plan.folded_count == 2
     assert [c.line for c in plan.comments[1:]] == [3, 1]
+
+
+def test_team_source_types_default_to_git():
+    from app.platform.spec import TeamEntry
+
+    kinds = [
+        TeamEntry.model_validate({"id": "t", "name": "T", "repository": repository}).repository.type
+        for repository in (
+            {"url": "https://git.example.com/x.git"},
+            {"type": "git", "url": "git@git.example.com:org/x.git"},
+            {"type": "url", "url": "https://artifacts.example.com/x.tar.gz"},
+            {"type": "path", "location": "/repos/x"},
+        )
+    ]
+    assert kinds == ["git", "git", "url", "path"]
+    with pytest.raises(ValidationError):
+        TeamEntry.model_validate({"id": "t", "name": "T", "repository": {"type": "url", "url": "http://insecure/x.tgz"}})
+
+
+def test_path_source_must_stay_under_local_roots(platform_env):
+    build, platform, roots = platform_env
+    registry, report = build(
+        {**platform(), "teams": [{"id": "team", "name": "T", "repository": {"type": "path", "location": "/etc"}}]},
+        {"agents/a.json": json.dumps(AGENT)},
+    )
+    assert "must live under" in report["teams"]["team"]["error"]
+
+
+def test_path_source_syncs_definitions(platform_env, tmp_path):
+    build, platform, roots = platform_env
+    registry, _ = build(platform(), {"agents/a.json": json.dumps(AGENT)})
+    spec = {**platform(), "teams": [{"id": "team", "name": "T", "repository": {"type": "path", "location": str(roots / "team")}}]}
+    git_repo(roots / "onboarding2", {"platform.json": json.dumps(spec)})
+    registry.settings.onboarding_url = f"file://{roots}/onboarding2"
+    report = registry.sync()
+    assert report["teams"]["team"]["commit"].startswith("files:")
+    assert [d.id for d in registry.definitions("team", "agents")] == ["a"]
+
+
+def test_archive_extraction_blocks_path_traversal(tmp_path):
+    import io
+    import tarfile
+    import zipfile
+
+    from app.platform import sources
+
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        data = b"owned"
+        info = tarfile.TarInfo("../../escaped.txt")
+        info.size = len(data)
+        archive.addfile(info, io.BytesIO(data))
+    with pytest.raises(sources.SourceError):
+        sources._extract(buffer.getvalue(), tmp_path / "t1")
+    assert not (tmp_path / "escaped.txt").exists()
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("../escaped.txt", "owned")
+    with pytest.raises(sources.SourceError):
+        sources._extract(buffer.getvalue(), tmp_path / "t2")
+
+
+def test_ssh_urls_are_bound_to_their_host(platform_env):
+    from app.platform import git
+
+    assert git.host_of("git@bitbucket.org:acme/repo.git") == "bitbucket.org"
+    assert git.host_of("ssh://git@github.com/acme/repo.git") == "github.com"
+    build, platform, _ = platform_env
+    workflow = {
+        "name": "Clone",
+        "activity": "implement",
+        "agent": "a",
+        "harness": "h",
+        "options": {"repository": {"url": "git@attacker.example:x/y.git", "credentials": "GIT_TOKEN"}},
+    }
+    registry, _ = build(
+        platform(secrets=["GIT_TOKEN"]),
+        {"agents/a.json": json.dumps(AGENT), "harnesses/h.json": json.dumps(HARNESS), "workflows/w.json": json.dumps(workflow)},
+    )
+    assert any("attacker.example" in e for e in errors(registry, "workflows", "w"))
+
+
+def test_harness_policy_rejects_invalid_regex():
+    with pytest.raises(ValidationError):
+        HarnessSpec.model_validate({**HARNESS, "policy": {"deny_commands": ["("]}})
+
+
+def test_monitor_plugin_is_generated_with_policy_and_scoped_key():
+    settings = Settings()
+    spec = HarnessSpec.model_validate({**HARNESS, "policy": {"deny_commands": ["\\bgit\\s+push\\b"]}})
+    key = harness.derive_key("signing", "telemetry", "s1")
+    config = harness.opencode_config(settings, "s1", "a", AgentSpec(prompt="p"), "p", spec, True, "llm", None)
+    sandbox = harness.sandbox(settings, spec, config, "pw", "team", "run", key)
+    plugin = sandbox.files["opencode/plugins/platform-monitor.js"]
+    assert "__" not in plugin.split("WATCHED")[0]
+    assert json.dumps(key) in plugin and "git\\\\s+push" in plugin
+    assert harness.verify_key("signing", "telemetry", key) == "s1"
+    assert harness.verify_key("signing", "llm", key) is None
+    assert "OPENCODE_PURE" not in sandbox.env and sandbox.env["OPENCODE_DISABLE_DEFAULT_PLUGINS"] == "1"

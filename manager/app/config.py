@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     email_domain: str = "users.local"
 
     onboarding_url: str | None = None
+    onboarding_type: Literal["git", "url", "path"] | None = None
     onboarding_branch: str = "main"
     onboarding_credentials: str | None = None
     onboarding_username: str = "x-token-auth"

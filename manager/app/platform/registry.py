@@ -9,10 +9,21 @@ from pydantic import ValidationError
 from ..config import Settings
 from ..db import Database
 from ..store import now
-from . import git
+from . import git, sources
 from .catalog import CATALOG
 from .secrets import SecretStore
-from .spec import DEFINITION_KINDS, AgentSpec, HarnessSpec, PlatformSpec, PullRequestTrigger, TeamEntry, WorkflowSpec
+from .spec import (
+    DEFINITION_KINDS,
+    AgentSpec,
+    ArchiveSource,
+    GitSource,
+    HarnessSpec,
+    PathSource,
+    PlatformSpec,
+    PullRequestTrigger,
+    TeamEntry,
+    WorkflowSpec,
+)
 
 log = logging.getLogger(__name__)
 
@@ -88,10 +99,44 @@ class PlatformRegistry:
         return row["role"] if row else None
 
     def secret_host_allowed(self, secret: str, url: str, platform: PlatformSpec | None = None) -> bool:
-        host = urlsplit(url).hostname or ""
         if urlsplit(url).scheme == "file":
             return True
-        return host in (platform or self.platform()).secret_hosts.get(secret, [])
+        return git.host_of(url) in (platform or self.platform()).secret_hosts.get(secret, [])
+
+    def _token(self, secret: str | None, url: str, platform: PlatformSpec | None) -> str | None:
+        if not secret:
+            return None
+        if not self.secret_host_allowed(secret, url, platform):
+            raise sources.SourceError(f"secret {secret} may not be sent to {git.host_of(url)} (see secret_hosts)")
+        return self.secrets.require(secret)
+
+    def _source_root(self, key: str, source) -> Path:
+        if isinstance(source, PathSource):
+            return Path(source.location).resolve()
+        return self.repos_dir / key
+
+    def _fetch(self, key: str, source, platform: PlatformSpec | None) -> str:
+        roots = self.settings.local_repo_roots
+        if isinstance(source, PathSource):
+            return sources.fingerprint(sources.local_directory(source.location, roots))
+        if isinstance(source, ArchiveSource):
+            return sources.fetch_archive(source.url, self.repos_dir / key, self._token(source.credentials, source.url, platform))
+        token = self._token(source.credentials, source.url, platform)
+        return git.checkout(source.url, source.branch, self.repos_dir / key, source.username, token, local_roots=roots)
+
+    def onboarding_source(self):
+        location, settings = self.settings.onboarding_url, self.settings
+        kind = settings.onboarding_type or (
+            "path" if location.startswith("/") else "url" if location.endswith((".tar.gz", ".tgz", ".zip")) else "git"
+        )
+        if kind == "path":
+            return PathSource(type="path", location=location, path=".")
+        if kind == "url":
+            return ArchiveSource(type="url", url=location, credentials=settings.onboarding_credentials, path=".")
+        return GitSource(
+            url=location, branch=settings.onboarding_branch, credentials=settings.onboarding_credentials,
+            username=settings.onboarding_username, path=".",
+        )
 
     def is_platform_admin(self, username: str) -> bool:
         return username in self.platform().admins
@@ -125,7 +170,9 @@ class PlatformRegistry:
 
     def team_dir(self, team_id: str) -> Path:
         team = self.team(team_id)
-        return self.repos_dir / "teams" / team_id / (team.repository.path if team else ".platform")
+        if team is None:
+            return self.repos_dir / "teams" / team_id / ".platform"
+        return self._source_root(f"teams/{team_id}", team.repository) / team.repository.path
 
     def read_team_file(self, team_id: str, relative: str) -> str:
         base = self.team_dir(team_id).resolve()
@@ -140,20 +187,20 @@ class PlatformRegistry:
         if not self.configured:
             return {"error": "No onboarding repository configured (MANAGER_ONBOARDING_URL)"}
         try:
+            source = self.onboarding_source()
             token = self.secrets.get(self.settings.onboarding_credentials) if self.settings.onboarding_credentials else None
-            target = self.repos_dir / "onboarding"
-            commit = git.checkout(
-                self.settings.onboarding_url,
-                self.settings.onboarding_branch,
-                target,
-                self.settings.onboarding_username,
-                token,
-                local_roots=self.settings.local_repo_roots,
-            )
+            roots = self.settings.local_repo_roots
+            if isinstance(source, PathSource):
+                commit = sources.fingerprint(sources.local_directory(source.location, roots))
+            elif isinstance(source, ArchiveSource):
+                commit = sources.fetch_archive(source.url, self.repos_dir / "onboarding", token)
+            else:
+                commit = git.checkout(source.url, source.branch, self.repos_dir / "onboarding", source.username, token, local_roots=roots)
+            target = self._source_root("onboarding", source)
             raw = json.loads((target / self.settings.onboarding_file).read_text())
             raw.pop("$schema", None)
             platform = PlatformSpec.model_validate(raw)
-        except (git.GitError, OSError, ValueError, ValidationError) as error:
+        except (git.GitError, sources.SourceError, OSError, ValueError, ValidationError) as error:
             message = "; ".join(_errors(error)) if isinstance(error, ValidationError) else str(error)
             log.warning("Onboarding sync failed: %s", message)
             with self.db.connect() as db:
@@ -177,21 +224,9 @@ class PlatformRegistry:
     def _sync_team(self, platform: PlatformSpec, team: TeamEntry) -> dict:
         commit, error, definitions = None, None, []
         try:
-            token = None
-            if team.repository.credentials:
-                if not self.secret_host_allowed(team.repository.credentials, team.repository.url, platform):
-                    raise git.GitError(f"secret {team.repository.credentials} may not be sent to {team.repository.url}")
-                token = self.secrets.get(team.repository.credentials)
-            commit = git.checkout(
-                team.repository.url,
-                team.repository.branch,
-                self.repos_dir / "teams" / team.id,
-                team.repository.username,
-                token,
-                local_roots=self.settings.local_repo_roots,
-            )
+            commit = self._fetch(f"teams/{team.id}", team.repository, platform)
             definitions = self._load_definitions(platform, team)
-        except (git.GitError, OSError) as failure:
+        except (git.GitError, sources.SourceError, LookupError, OSError) as failure:
             error = str(failure)
             log.warning("Sync of team %s failed: %s", team.id, error)
 
@@ -221,7 +256,7 @@ class PlatformRegistry:
         return {"commit": commit, "error": error, "definitions": len(definitions), "invalid": invalid}
 
     def _load_definitions(self, platform: PlatformSpec, team: TeamEntry) -> list[Definition]:
-        base = self.repos_dir / "teams" / team.id / team.repository.path
+        base = self._source_root(f"teams/{team.id}", team.repository) / team.repository.path
         loaded: dict[str, dict[str, Definition]] = {kind: {} for kind in DEFINITION_KINDS}
         for kind, model in DEFINITION_KINDS.items():
             for path in sorted((base / kind).glob("*.json")) if (base / kind).is_dir() else []:
@@ -291,7 +326,7 @@ class PlatformRegistry:
             if repository.credentials and not self.secret_host_allowed(repository.credentials, repository.url, platform):
                 errors.append(
                     f"options.repository: secret {repository.credentials} may not be sent to "
-                    f"{urlsplit(repository.url).hostname} (see secret_hosts in the onboarding repository)"
+                    f"{git.host_of(repository.url)} (see secret_hosts in the onboarding repository)"
                 )
         used_secrets = {s for s in (_credentials(options), _trigger_credentials(workflow)) if s}
         for secret in used_secrets - set(team.secrets):

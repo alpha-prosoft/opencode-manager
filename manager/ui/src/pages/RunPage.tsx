@@ -1,4 +1,5 @@
-import { Link as RouterLink, useParams } from "react-router";
+import { useState } from "react";
+import { Link as RouterLink, useNavigate, useParams } from "react-router";
 import {
   Alert,
   Box,
@@ -16,6 +17,8 @@ import {
   Typography,
 } from "@mui/material";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
+import ReplayIcon from "@mui/icons-material/Replay";
+import StopIcon from "@mui/icons-material/Stop";
 import { api, type RunDetail } from "../api";
 import { ActivityChip, RunStatusChip, SessionStatusChip } from "../components/Chips";
 import Markdown from "../components/Markdown";
@@ -25,7 +28,7 @@ import UsageStats from "../components/UsageStats";
 import { relativeTime, triggerLabel } from "../components/format";
 import { useLoad } from "../hooks";
 
-const FINISHED = new Set(["completed", "failed"]);
+const FINISHED = new Set(["completed", "failed", "cancelled"]);
 
 function Result({ run }: { run: RunDetail }) {
   const result = run.result;
@@ -65,10 +68,13 @@ function Result({ run }: { run: RunDetail }) {
 
 export default function RunPage() {
   const { runId = "" } = useParams();
-  const { data: run, error } = useLoad(() => api.run(runId), [runId], 4000);
+  const navigate = useNavigate();
+  const { data: run, error, reload } = useLoad(() => api.run(runId), [runId], 4000);
+  const [actionError, setActionError] = useState<string | null>(null);
   if (error) return <Alert severity="error">{error}</Alert>;
   if (!run) return null;
   const busy = !FINISHED.has(run.status);
+  const act = (action: () => Promise<unknown>) => action().catch((e: Error) => setActionError(e.message));
 
   return (
     <Stack spacing={3}>
@@ -78,6 +84,16 @@ export default function RunPage() {
           {run.workflow_name ?? run.workflow_id}
         </Typography>
         <RunStatusChip status={run.status} />
+        {busy && (
+          <Button color="warning" startIcon={<StopIcon />} onClick={() => act(() => api.cancelRun(run.id).then(reload))}>
+            Cancel
+          </Button>
+        )}
+        {!busy && run.activity !== "session" && (
+          <Button startIcon={<ReplayIcon />} onClick={() => act(() => api.retryRun(run.id).then((next) => navigate(`/runs/${next.id}`)))}>
+            Run again
+          </Button>
+        )}
         {run.session && (
           <Button variant="outlined" startIcon={<OpenInNewIcon />} href={run.session.open_url} target="_blank" rel="noopener">
             Open session
@@ -94,7 +110,8 @@ export default function RunPage() {
           </Typography>
         </Box>
       )}
-      {run.error && <Alert severity="error">{run.error}</Alert>}
+      {run.error && <Alert severity={run.status === "cancelled" ? "warning" : "error"}>{run.error}</Alert>}
+      {actionError && <Alert severity="error">{actionError}</Alert>}
 
       <Paper variant="outlined" sx={{ p: 2 }}>
         <Table size="small">

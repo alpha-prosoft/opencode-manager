@@ -3,6 +3,7 @@ import { Link as RouterLink, useNavigate, useParams } from "react-router";
 import { Alert, Box, MenuItem, Paper, Stack, Tab, Table, TableBody, TableCell, TableRow, Tabs, TextField, Typography } from "@mui/material";
 import { api, type Visibility } from "../api";
 import AuditTimeline from "../components/AuditTimeline";
+import LiveActivity from "../components/LiveActivity";
 import { ActivityChip, SessionStatusChip, VisibilityChip } from "../components/Chips";
 import SessionActions from "../components/SessionActions";
 import UsageStats from "../components/UsageStats";
@@ -41,6 +42,7 @@ export default function SessionPage() {
 
       <Tabs value={tab} onChange={(_, value) => setTab(value)}>
         <Tab label="Overview" />
+        <Tab label="Live activity" />
         <Tab label={`Audit trail (${session.audit_events})`} />
       </Tabs>
 
@@ -102,7 +104,8 @@ export default function SessionPage() {
           </Box>
         </Stack>
       )}
-      {tab === 1 && <AuditTimeline sessionId={session.id} />}
+      {tab === 1 && <LiveActivity sessionId={session.id} />}
+      {tab === 2 && <AuditTimeline sessionId={session.id} />}
     </Stack>
   );
 }

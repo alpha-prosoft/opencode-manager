@@ -1,6 +1,14 @@
 export type SessionStatus = "running" | "starting" | "stopped" | "error";
 export type Visibility = "private" | "team" | "public";
-export type RunStatus = "queued" | "preparing" | "running" | "awaiting_result" | "finalizing" | "completed" | "failed";
+export type RunStatus =
+  | "queued"
+  | "preparing"
+  | "running"
+  | "awaiting_result"
+  | "finalizing"
+  | "completed"
+  | "failed"
+  | "cancelled";
 
 export interface Usage {
   calls: number;
@@ -78,7 +86,7 @@ export interface TeamSummary {
   id: string;
   name: string;
   description: string;
-  repository: { url: string; branch: string; path: string };
+  repository: { type: "git" | "url" | "path"; url?: string; location?: string; branch?: string; path: string };
   commit: string | null;
   synced_at: string | null;
   status: string;
@@ -149,6 +157,61 @@ export interface AuditEvent {
   payload: Record<string, any>;
 }
 
+export interface Persona {
+  username: string;
+  roles: string[];
+}
+
+export interface ActivityEvent {
+  id: number;
+  ts: string;
+  kind: "tool.start" | "tool.end" | "tool.blocked" | "event";
+  tool: string | null;
+  call_id: string | null;
+  duration_ms: number | null;
+  detail: Record<string, any>;
+}
+
+export interface SessionActivity {
+  state: "busy" | "idle" | "unknown";
+  current: ActivityEvent | null;
+  events: ActivityEvent[];
+  tools: { tool: string; calls: number; avg_ms: number; max_ms: number }[];
+  blocked: number;
+  files_edited: string[];
+  last_seen: string | null;
+}
+
+export interface AdminOverview {
+  status: { commit: string | null; synced_at: string | null; error: string | null };
+  teams: number;
+  users: number;
+  sessions: { total: number; running: number };
+  runs_today: Record<string, number>;
+  tokens_today: number;
+  cost_today: number | null;
+}
+
+export interface AdminUser {
+  username: string;
+  platform_admin: boolean;
+  teams: Record<string, "admin" | "member">;
+  runs_30d: number;
+  tokens_30d: number;
+}
+
+export interface UsageRow {
+  team_id: string;
+  connection: string;
+  model: string;
+  calls: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cached_tokens: number;
+  errors: number;
+  cost: number | null;
+}
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -177,6 +240,7 @@ const post = <T>(path: string, body?: unknown) =>
 
 export const api = {
   login: (username: string) => post<Me>("/auth/login", { username }),
+  personas: () => request<Persona[]>("/auth/personas"),
   logout: () => post<void>("/auth/logout"),
   me: () => request<Me>("/me"),
   platform: () => request<PlatformStatus>("/platform"),
@@ -195,6 +259,19 @@ export const api = {
   startSession: (id: string) => post<Session>(`/sessions/${id}/start`),
   stopSession: (id: string) => post<Session>(`/sessions/${id}/stop`),
   deleteSession: (id: string) => request<void>(`/sessions/${id}`, { method: "DELETE" }),
+  activity: (id: string) => request<SessionActivity>(`/sessions/${id}/activity`),
+  cancelRun: (id: string) => post<Run>(`/runs/${id}/cancel`),
+  retryRun: (id: string) => post<Run>(`/runs/${id}/retry`),
+  admin: {
+    overview: () => request<AdminOverview>("/admin/overview"),
+    users: () => request<AdminUser[]>("/admin/users"),
+    usage: (days: number) => request<UsageRow[]>(`/admin/usage?days=${days}`),
+    secrets: () => request<{ name: string; configured: boolean; used_by: string[]; hosts: string[] }[]>("/admin/secrets"),
+    testConnection: (id: string) =>
+      post<{ ok: boolean; model?: string; latency_ms?: number; error?: string }>(`/admin/llm/${id}/test`),
+    schedules: () => request<{ id: string; next_run: string | null; last_run: string | null; paused: boolean }[]>("/admin/schedules"),
+    stopIdle: () => post<{ stopped: string[] }>("/admin/sessions/stop-idle"),
+  },
   audit: (id: string, after = 0) => request<AuditEvent[]>(`/sessions/${id}/audit?after=${after}&limit=500`),
   verifyAudit: (id: string) => request<{ valid: boolean; checked: number; broken_at?: number }>(`/sessions/${id}/audit/verify`),
 };

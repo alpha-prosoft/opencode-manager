@@ -16,7 +16,23 @@
         "claude-sonnet-5.5",
         "claude-opus-5.5",
         "gemini-3.5-flash"
-      ]
+      ],
+      "pricing": {
+        "claude-sonnet-5.5": {
+          "input": 3.0,
+          "output": 15.0,
+          "cached_input": 0.3
+        },
+        "claude-opus-5.5": {
+          "input": 15.0,
+          "output": 75.0,
+          "cached_input": 1.5
+        },
+        "gemini-3.5-flash": {
+          "input": 0.3,
+          "output": 2.5
+        }
+      }
     }
   ],
   "secret_hosts": {
@@ -43,6 +59,48 @@
       "secrets": [],
       "budget": {
         "daily_tokens": 5000000
+      }
+    },
+    {
+      "id": "payments",
+      "name": "Payments",
+      "description": "Dummy team (local path source) for testing team roles.",
+      "repository": {
+        "type": "path",
+        "location": "/repos/demo-team",
+        "path": ".platform"
+      },
+      "members": [
+        "erin"
+      ],
+      "admins": [
+        "dave"
+      ],
+      "secrets": [],
+      "budget": {
+        "daily_tokens": 2000000,
+        "max_running_sessions": 2
+      }
+    },
+    {
+      "id": "data",
+      "name": "Data Science",
+      "description": "Dummy team (git source) for testing team roles.",
+      "repository": {
+        "type": "git",
+        "url": "file:///repos/demo-team",
+        "branch": "main"
+      },
+      "members": [
+        "grace",
+        "bob"
+      ],
+      "admins": [
+        "frank"
+      ],
+      "secrets": [],
+      "budget": {
+        "daily_tokens": 1000000
       }
     }
   ]

@@ -14,19 +14,47 @@ class Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+SCP_LIKE = re.compile(r"^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:[^/].*$")
+
+
 class GitSource(Strict):
-    url: str = Field(description="https:// or file:// URL of the repository")
+    type: Literal["git"] = "git"
+    url: str = Field(description="https://, ssh (git@host:org/repo.git) or file:// URL of the repository")
     branch: str = "main"
-    credentials: SecretName | None = Field(default=None, description="Platform secret holding a token for https URLs")
+    credentials: SecretName | None = Field(
+        default=None, description="Platform secret: a token for https URLs, a private key for ssh URLs"
+    )
     username: str = Field(default="x-token-auth", description="Username sent with the token (Basic auth)")
     path: str = Field(default=".platform", description="Directory inside the repository with the definitions")
 
     @field_validator("url")
     @classmethod
     def _scheme(cls, url: str) -> str:
-        if not url.startswith(("https://", "file://")):
-            raise ValueError("only https:// and file:// repositories are supported")
+        if not (url.startswith(("https://", "file://", "ssh://")) or SCP_LIKE.match(url)):
+            raise ValueError("use an https://, ssh (git@host:org/repo.git) or file:// repository URL")
         return url
+
+
+class ArchiveSource(Strict):
+    type: Literal["url"]
+    url: str = Field(pattern=r"^https://", description="https:// URL of a .tar.gz or .zip archive")
+    credentials: SecretName | None = Field(default=None, description="Platform secret sent as a Bearer token")
+    path: str = Field(default=".platform", description="Directory inside the archive with the definitions")
+
+
+class PathSource(Strict):
+    type: Literal["path"]
+    location: str = Field(description="Absolute directory on the platform host (must be under an allowed root)")
+    path: str = Field(default=".platform", description="Directory inside location with the definitions")
+
+
+TeamSource = Annotated[GitSource | ArchiveSource | PathSource, Field(discriminator="type")]
+
+
+class ModelPrice(Strict):
+    input: float = Field(ge=0, description="Price per million prompt tokens")
+    output: float = Field(ge=0, description="Price per million completion tokens")
+    cached_input: float | None = Field(default=None, ge=0, description="Price per million cached prompt tokens")
 
 
 class LlmConnection(Strict):
@@ -36,6 +64,7 @@ class LlmConnection(Strict):
     secret: SecretName = Field(description="Platform secret with the API key or OAuth token")
     models: list[str] = Field(min_length=1, description="Models teams may use through this connection")
     teams: list[Identifier] | Literal["*"] = "*"
+    pricing: dict[str, ModelPrice] = Field(default={}, description="Optional prices per model, for cost estimates")
 
     def upstream(self) -> str:
         if self.base_url:
@@ -47,17 +76,33 @@ class LlmConnection(Strict):
 
 class TeamBudget(Strict):
     daily_tokens: int | None = Field(default=None, ge=1000, description="Prompt + completion tokens per UTC day")
+    max_running_sessions: int | None = Field(default=None, ge=1, le=1000, description="Concurrent running sessions")
+
+
+class TeamNotifications(Strict):
+    webhook: SecretName | None = Field(
+        default=None, description="Platform secret holding a webhook URL (e.g. Slack) called when runs finish"
+    )
+    on: list[Literal["completed", "failed"]] = ["completed", "failed"]
 
 
 class TeamEntry(Strict):
     id: Identifier
     name: str
     description: str = ""
-    repository: GitSource
+    repository: TeamSource
     members: list[Username] = []
     admins: list[Username] = []
     secrets: list[SecretName] = Field(default=[], description="Platform secrets this team's workflows may use")
     budget: TeamBudget = TeamBudget()
+    notifications: TeamNotifications = TeamNotifications()
+
+    @model_validator(mode="before")
+    @classmethod
+    def _default_source_type(cls, data):
+        if isinstance(data, dict) and isinstance(data.get("repository"), dict) and "type" not in data["repository"]:
+            data = {**data, "repository": {**data["repository"], "type": "git"}}
+        return data
 
 
 class PlatformSpec(Strict):
@@ -111,6 +156,21 @@ class HarnessResources(Strict):
     pids: int = Field(default=512, ge=64, le=4096)
 
 
+class HarnessPolicy(Strict):
+    deny_commands: list[str] = Field(default=[], description="Regular expressions; matching bash commands are blocked")
+    deny_paths: list[str] = Field(default=[], description="Regular expressions; matching file paths are blocked for file tools")
+
+    @field_validator("deny_commands", "deny_paths")
+    @classmethod
+    def _regex(cls, patterns: list[str]) -> list[str]:
+        for pattern in patterns:
+            try:
+                re.compile(pattern)
+            except re.error as error:
+                raise ValueError(f"invalid regular expression {pattern!r}: {error}") from None
+        return patterns
+
+
 class HarnessSpec(Strict):
     """.platform/harnesses/<id>.json — the sandbox an agent runs in."""
 
@@ -125,6 +185,9 @@ class HarnessSpec(Strict):
     )
     resources: HarnessResources = HarnessResources()
     idle_minutes: int = Field(default=15, ge=1, le=1440)
+    policy: HarnessPolicy = Field(
+        default=HarnessPolicy(), description="Guardrails enforced by the platform plugin before a tool runs"
+    )
 
     @field_validator("permissions")
     @classmethod

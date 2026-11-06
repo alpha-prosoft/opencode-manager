@@ -19,9 +19,11 @@ from .platform.registry import PlatformRegistry
 from .platform.runner import RunService
 from .platform.runs import RunStore
 from .platform.secrets import SecretStore
+from .platform.telemetry import TelemetryStore
+from .platform.telemetry import router as telemetry_router
 from .platform.triggers import TriggerService
 from .platform.usage import UsageStore
-from .routes import api, gateway
+from .routes import admin, api, gateway
 from .routing import FORWARD_AUTH_PATH, create_route_provider
 from .sessions import SessionService
 from .storage import SharedStorage
@@ -83,6 +85,7 @@ def build_platform() -> Platform:
         usage=UsageStore(db),
         audit=audit,
         collector=AuditCollector(audit, sessions),
+        telemetry=TelemetryStore(db),
     )
 
 
@@ -128,8 +131,10 @@ async def wake_session_hosts(request: Request, call_next):
 
 app.include_router(api.router)
 app.include_router(api.metrics_router)
+app.include_router(admin.router)
 app.include_router(gateway.router)
 app.include_router(llm_router)
+app.include_router(telemetry_router)
 app.mount("/mcp", tools.mcp_app())
 
 

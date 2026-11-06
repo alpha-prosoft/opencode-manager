@@ -4,7 +4,7 @@ from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 from ..platform.registry import PlatformRegistry
-from ..platform.runner import ModelUnavailable, RunService
+from ..platform.runner import ModelUnavailable, RunError, RunService
 from ..platform.triggers import TriggerService
 from ..sessions import SessionService
 from .workflows import MODEL_UNAVAILABLE
@@ -58,7 +58,10 @@ class RunActivities:
 
     @activity.defn(name="run_prepare")
     def run_prepare(self, run_id: str) -> dict:
-        return self.runner.prepare(run_id)
+        try:
+            return self.runner.prepare(run_id)
+        except RunError as error:
+            raise ApplicationError(str(error), non_retryable=True) from error
 
     @activity.defn(name="run_start_conversation")
     def run_start_conversation(self, run_id: str, model: str) -> str | None:

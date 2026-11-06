@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from ..config import Settings
 from .spec import AgentSpec, HarnessSpec
@@ -12,13 +13,14 @@ OPENCODE_GITIGNORE = "node_modules\npackage.json\npackage-lock.json\nbun.lock\n.
 LOCKDOWN_ENV = {
     "XDG_CONFIG_HOME": CONFIG_MOUNT,
     "OPENCODE_DISABLE_PROJECT_CONFIG": "1",
-    "OPENCODE_PURE": "1",
+    "OPENCODE_DISABLE_DEFAULT_PLUGINS": "1",
     "OPENCODE_DISABLE_MODELS_FETCH": "1",
     "OPENCODE_DISABLE_AUTOUPDATE": "1",
     "OPENCODE_DISABLE_CLAUDE_CODE": "1",
     "OPENCODE_DISABLE_EXTERNAL_SKILLS": "1",
     "OPENCODE_DISABLE_LSP_DOWNLOAD": "1",
 }
+MONITOR_PLUGIN = (Path(__file__).parent / "monitor_plugin.js").read_text()
 BASE_PERMISSIONS = {"*": "allow", "external_directory": "allow", "webfetch": "deny", "websearch": "deny"}
 
 
@@ -103,8 +105,22 @@ def opencode_config(
     return config
 
 
+def monitor_plugin(settings: Settings, telemetry_key: str, harness: HarnessSpec) -> str:
+    return (
+        MONITOR_PLUGIN.replace("__ENDPOINT__", json.dumps(f"{settings.manager_service_url}/api/telemetry"))
+        .replace("__KEY__", json.dumps(telemetry_key))
+        .replace("__POLICY__", json.dumps(harness.policy.model_dump()))
+    )
+
+
 def sandbox(
-    settings: Settings, harness: HarnessSpec, config: dict, password: str, team_id: str, run_id: str | None
+    settings: Settings,
+    harness: HarnessSpec,
+    config: dict,
+    password: str,
+    team_id: str,
+    run_id: str | None,
+    telemetry_key: str,
 ) -> Sandbox:
     return Sandbox(
         image=harness.image or settings.session_image,
@@ -118,5 +134,9 @@ def sandbox(
         run_id=run_id,
         idle_minutes=harness.idle_minutes,
         env={**LOCKDOWN_ENV, "OPENCODE_SERVER_PASSWORD": password},
-        files={"opencode/opencode.json": json.dumps(config, indent=2), "opencode/.gitignore": OPENCODE_GITIGNORE},
+        files={
+            "opencode/opencode.json": json.dumps(config, indent=2),
+            "opencode/.gitignore": OPENCODE_GITIGNORE,
+            "opencode/plugins/platform-monitor.js": monitor_plugin(settings, telemetry_key, harness),
+        },
     )

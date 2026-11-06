@@ -67,6 +67,21 @@ def login(data: LoginRequest, response: Response, settings: Settings = Depends(g
     return identity
 
 
+@router.get("/auth/personas")
+def personas(settings: Settings = Depends(get_settings), platform: Platform = Depends(get_platform)) -> list[dict]:
+    if settings.auth_mode != "login":
+        return []
+    spec = platform.registry.platform()
+    people: dict[str, list[str]] = {user: ["Platform admin"] for user in spec.admins}
+    for team in spec.teams:
+        for user in team.admins:
+            people.setdefault(user, []).append(f"Team admin · {team.name}")
+        for user in team.members:
+            if user not in team.admins:
+                people.setdefault(user, []).append(f"Member · {team.name}")
+    return [{"username": user, "roles": roles} for user, roles in sorted(people.items())]
+
+
 @router.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT)
 def logout(response: Response) -> None:
     clear_auth_cookie(response)
@@ -120,7 +135,9 @@ def _team_summary(platform: Platform, team: dict, username: str) -> dict:
         "id": team["id"],
         "name": team["spec"]["name"],
         "description": team["spec"]["description"],
-        "repository": {k: team["spec"]["repository"][k] for k in ("url", "branch", "path")},
+        "repository": {
+            k: v for k, v in team["spec"]["repository"].items() if k in ("type", "url", "location", "branch", "path")
+        },
         "commit": team["commit_id"],
         "synced_at": team["synced_at"],
         "status": team["status"],
@@ -214,6 +231,34 @@ def runs(
     ]
 
 
+def _manageable_run(platform: Platform, identity: Identity, run_id: str) -> dict:
+    run = _visible_run(platform, identity, run_id)
+    if run["created_by"] != identity.sub and platform.registry.role(identity.sub, run["team_id"]) != "admin":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the run's creator or a team admin can do that")
+    return run
+
+
+@router.post("/runs/{run_id}/cancel")
+async def cancel_run(run_id: str, identity: Identity = Depends(current_identity), platform: Platform = Depends(get_platform)) -> dict:
+    run = _manageable_run(platform, identity, run_id)
+    if run["status"] in ("completed", "failed", "cancelled"):
+        raise HTTPException(status.HTTP_409_CONFLICT, f"Run is already {run['status']}")
+    await platform.engine.cancel_run(run_id)
+    await run_in_threadpool(platform.runner.cancel, run_id, identity.sub)
+    return platform.runs.get(run_id)
+
+
+@router.post("/runs/{run_id}/retry", status_code=status.HTTP_201_CREATED)
+async def retry_run(run_id: str, identity: Identity = Depends(current_identity), platform: Platform = Depends(get_platform)) -> dict:
+    _visible_run(platform, identity, run_id)
+    try:
+        run = await run_in_threadpool(platform.runner.retry, run_id, identity.sub)
+    except RunError as error:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)) from error
+    await platform.engine.start_run(run["id"])
+    return run
+
+
 @router.get("/runs/{run_id}")
 def run(run_id: str, identity: Identity = Depends(current_identity), platform: Platform = Depends(get_platform)) -> dict:
     item = _visible_run(platform, identity, run_id)
@@ -279,6 +324,11 @@ def delete_session(record: SessionRecord = Depends(managed_session), platform: P
     platform.sessions.delete(record.id)
 
 
+@router.get("/sessions/{session_id}/activity")
+def activity(record: SessionRecord = Depends(visible_session), platform: Platform = Depends(get_platform)) -> dict:
+    return platform.telemetry.activity(record.id)
+
+
 @router.get("/sessions/{session_id}/audit")
 def audit(
     after: int = 0,
@@ -331,6 +381,15 @@ def metrics(identity: Identity = Depends(platform_admin), platform: Platform = D
     lines += ["# HELP opencode_runs_total Activity runs by status.", "# TYPE opencode_runs_total counter"]
     for row in platform.runs.counts():
         lines.append(f"opencode_runs_total{{{_labels(team=row['team_id'], activity=row['activity'], status=row['status'])}}} {row['runs']}")
+    lines += ["# HELP opencode_tool_calls_total Tool calls reported by the session monitor.", "# TYPE opencode_tool_calls_total counter"]
+    tools = platform.telemetry.metrics()
+    for row in tools:
+        name = "opencode_tool_calls_total" if row["kind"] == "tool.end" else "opencode_tool_blocked_total"
+        lines.append(f"{name}{{{_labels(team=row['team_id'], tool=row['tool'])}}} {row['n']}")
+    lines += ["# HELP opencode_tool_duration_ms_total Total tool execution time.", "# TYPE opencode_tool_duration_ms_total counter"]
+    for row in tools:
+        if row["kind"] == "tool.end":
+            lines.append(f"opencode_tool_duration_ms_total{{{_labels(team=row['team_id'], tool=row['tool'])}}} {row['total_ms']}")
     lines += ["# HELP opencode_sessions_running Running sessions.", "# TYPE opencode_sessions_running gauge"]
     lines.append(f"opencode_sessions_running {len(platform.sessions.running_session_ids())}")
     return PlainTextResponse("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")

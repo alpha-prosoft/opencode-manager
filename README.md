@@ -128,9 +128,31 @@ under `local/` is gitignored. Point the platform at the onboarding repo with `ON
    - *Automated* workflows run to completion; you watch the run page update live.
 4. **Runs → a run.** Status, inputs, LLM usage and the typed result: a review with findings, a patch with test
    results, or an analysis document. *Open session* shows exactly what the agent saw and did.
-5. **Sessions → a session.** Owner, visibility, usage and the **audit trail** (every message and tool call,
-   with an integrity check and JSONL export).
-6. **Admin** (platform admins). Onboarding sync status, *Sync now*, LLM connections and team health.
+   Active runs can be **cancelled**; finished automated runs can be **run again** with the same inputs.
+5. **Sessions → a session.** Owner, visibility and usage, plus two tabs:
+   - **Live activity**: what the agent is doing right now, its tool calls with durations, files edited, and any
+     tool call the harness policy blocked.
+   - **Audit trail**: every message and tool call, with an integrity check and JSONL export.
+6. **Admin** (platform admins):
+   - *Overview*: *Sync now*, *Stop idle sessions*, running sessions, today's runs, tokens and estimated cost.
+   - *Users & roles*: who is in which team with which role, with runs and tokens over 30 days.
+   - *Usage & cost*: tokens and cost per team and model over 1 to 90 days.
+   - *Secrets*: which secrets are configured or missing and who uses them. Values are never shown.
+   - *LLM connections*: a one-click test of each connection.
+   - *Schedules* (sync, reaper, pull request triggers) and *Teams* (source, sync state, invalid definitions).
+
+### Roles
+
+| Role | Defined in `platform.json` | Can |
+|---|---|---|
+| Platform admin | `admins` | Everything: every team, the Admin page, `/metrics`, *Sync now*. |
+| Team admin | `teams[].admins` | Run the team's workflows; stop, delete or re-share any team session; cancel any team run. |
+| Team member | `teams[].members` | Run the team's workflows; see team and public sessions; manage their own sessions and runs. |
+
+Anyone else can log in but sees only public sessions. With `MANAGER_AUTH_MODE=login` (local testing), the login page
+offers a dropdown of every user in `platform.json`, with their roles. You can also type any other name.
+The examples include dummy teams (*Payments*: `dave` admin, `erin` member; *Data Science*: `frank` admin, `grace`
+and `bob` members) to try this out.
 
 Visibility: interactive sessions are private to their owner by default; runs of automated workflows are visible to
 the team (`"visibility": "team"`) or every user (`"public"`). Session owners and team admins can stop, delete or
@@ -153,7 +175,7 @@ change the visibility of a session. Deleting a session keeps its audit trail.
     {
       "id": "payments",
       "name": "Payments",
-      "repository": { "url": "https://bitbucket.org/acme/payments-agents.git", "branch": "main",
+      "repository": { "type": "git", "url": "https://bitbucket.org/acme/payments-agents.git", "branch": "main",
                       "credentials": "BITBUCKET_TOKEN", "username": "x-bitbucket-api-token-auth" },
       "members": ["bob", "carol"],
       "admins": ["bob"],
@@ -169,10 +191,26 @@ change the visibility of a session. Deleting a session keeps its audit trail.
 | `allowed_images` | The only container images harnesses may use. |
 | `llm_connections` | Upstream LLM endpoints. `secret` names a platform secret; `models` is the allow-list; `teams` restricts which teams may use it. |
 | `secret_hosts` | For each secret, the hosts it may be sent to in Git checkouts (e.g. `{"GITHUB_TOKEN": ["github.com"]}`). A secret is never sent anywhere else, even if a team repo asks for it. |
-| `teams[].repository` | Where the team's definitions live (`path` defaults to `.platform`). `credentials` names a platform secret for private repos. |
+| `teams[].repository` | Where the team's definitions live (see [Team sources](#team-sources)). `path` is the directory with the definitions, `.platform` by default. |
 | `teams[].members` / `admins` | Usernames. Members run workflows and see team sessions; admins also manage team sessions. |
 | `teams[].secrets` | Platform secrets this team's workflows may reference (repository checkouts, pull request triggers). |
 | `teams[].budget.daily_tokens` | Optional cap on prompt + completion tokens per UTC day; the LLM gateway answers `429` once it is reached. |
+| `teams[].budget.max_running_sessions` | Optional cap on concurrently running sessions; new runs are refused until one stops. |
+| `teams[].notifications.webhook` | Optional platform secret holding a webhook URL (e.g. a Slack incoming webhook). The platform POSTs `{"text": …, "run": …}` when a run ends with a status listed in `on` (default `completed` and `failed`). |
+| `llm_connections[].pricing` | Optional prices per million tokens per model (`input`, `output`, `cached_input`), for the cost estimates on the Admin page. |
+
+### Team sources
+
+| `type` | Example | Notes |
+|---|---|---|
+| `git` (default) | `{"url": "https://bitbucket.org/acme/agents.git", "branch": "main", "credentials": "BITBUCKET_TOKEN"}` | https (token as Basic auth), ssh (`git@host:org/repo.git`, `credentials` holds a private key) or `file://` under an allowed local root. |
+| `url` | `{"type": "url", "url": "https://artifacts.acme.com/agents.tar.gz", "credentials": "ARTIFACT_TOKEN"}` | A `.tar.gz` or `.zip` over https (max 50 MB), token sent as Bearer. Entries that would escape the directory are rejected. A single top-level folder is stripped. |
+| `path` | `{"type": "path", "location": "/repos/payments"}` | A directory on the platform host. It must be under `MANAGER_LOCAL_REPO_ROOTS` (default `/repos`). It is read in place; its version is a hash of its contents. |
+
+Credentials are only sent to the hosts listed for that secret in `secret_hosts`, for every source type. The
+onboarding repository itself can use the same types: `MANAGER_ONBOARDING_URL` with an optional
+`MANAGER_ONBOARDING_TYPE` (`git`, `url` or `path`, guessed from the location otherwise).
+
 
 The platform syncs the onboarding repo and all team repos every `MANAGER_SYNC_INTERVAL_MINUTES` (default 10),
 and on *Sync now*. Teams removed from `platform.json` disappear; their history stays.
@@ -227,7 +265,8 @@ Set exactly one of `prompt` (inline) or `prompt_file` (relative to `.platform/`)
   "network": "none",
   "permissions": { "edit": "deny", "bash": "allow" },
   "resources": { "cpus": 1, "memory_mb": 2048, "pids": 512 },
-  "idle_minutes": 15
+  "idle_minutes": 15,
+  "policy": { "deny_commands": ["\\bgit\\s+push\\b"], "deny_paths": ["(^|/)\\.env$"] }
 }
 ```
 
@@ -238,6 +277,8 @@ Set exactly one of `prompt` (inline) or `prompt_file` (relative to `.platform/`)
 | `permissions` | OpenCode tool permissions (`allow` / `ask` / `deny`) for `bash`, `edit`, `read`, `webfetch`, … Automated runs never ask questions. |
 | `image` | Must be in the onboarding repo's `allowed_images`. Defaults to the platform image. |
 | `idle_minutes` | Idle sessions are stopped after this long (they wake up when opened again). |
+| `policy.deny_commands` | Regular expressions. A `bash` call whose command matches one is blocked before it runs; the agent sees *Blocked by platform policy* and the block shows up in *Live activity*. |
+| `policy.deny_paths` | Regular expressions matched against the file path of `read`, `edit`, `write` and similar tools. |
 
 The harness is turned into an OpenCode configuration that is **mounted read-only** into the session, so the agent
 cannot change its own model, permissions or tools.
@@ -360,6 +401,12 @@ The test suite probes these controls from inside a real session (`tests/e2e.py`)
 - **Usage.** The LLM gateway records prompt, completion and cached tokens, latency and errors for every call, per
   session, run, team and model. These numbers come from the upstream response, not from the agent. They are shown
   on runs, sessions and teams.
+- **Live monitoring.** Every session loads a platform plugin from the read-only config mount. It uses OpenCode's
+  hooks (`tool.execute.before` / `after` and the event bus) to report tool calls, durations, file edits, status
+  changes and permission requests to `POST /api/telemetry`, and to enforce the harness `policy`. It authenticates
+  with a key scoped to that session and to telemetry only. The agent cannot change or disable the plugin: the config
+  mount is read-only, and project and user plugins are disabled. Live activity is a convenience view. The audit
+  trail, collected outside the sandbox, remains the record of truth.
 - **Prometheus.** `GET /metrics` (platform admins) exposes `opencode_llm_tokens_total`,
   `opencode_llm_requests_total`, `opencode_llm_errors_total`, `opencode_runs_total` and `opencode_sessions_running`.
 

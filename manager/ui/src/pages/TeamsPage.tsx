@@ -33,9 +33,10 @@ export default function TeamsPage() {
                   </Typography>
                 </TableCell>
                 <TableCell sx={{ fontFamily: "monospace", fontSize: "0.85rem" }}>
-                  {team.repository.url}
+                  {team.repository.type}: {team.repository.url ?? team.repository.location}
                   <br />
-                  {team.repository.branch} · {team.commit?.slice(0, 8)}
+                  {team.repository.branch ? `${team.repository.branch} · ` : ""}
+                  {team.commit?.slice(0, 16)}
                 </TableCell>
                 <TableCell>
                   <Stack direction="row" spacing={0.5} useFlexGap sx={{ flexWrap: "wrap" }}>

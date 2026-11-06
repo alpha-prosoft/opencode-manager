@@ -55,6 +55,25 @@ class UsageStore:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def by_team_model(self, since: str) -> list[dict]:
+        with self.db.connect() as db:
+            rows = db.execute(
+                "SELECT COALESCE(team_id, '') AS team_id, connection, model, COUNT(*) AS calls, SUM(prompt_tokens) AS prompt_tokens, "
+                "SUM(completion_tokens) AS completion_tokens, SUM(cached_tokens) AS cached_tokens, SUM(status >= 400) AS errors "
+                "FROM llm_usage WHERE ts >= ? GROUP BY team_id, connection, model ORDER BY team_id, model",
+                (since,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def by_user(self, since: str) -> list[dict]:
+        with self.db.connect() as db:
+            rows = db.execute(
+                "SELECT r.created_by AS username, COUNT(DISTINCT r.id) AS runs, COALESCE(SUM(u.prompt_tokens + u.completion_tokens), 0) AS tokens "
+                "FROM runs r LEFT JOIN llm_usage u ON u.run_id = r.id WHERE r.created_at >= ? GROUP BY r.created_by ORDER BY tokens DESC",
+                (since,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
     def totals_for_metrics(self) -> list[dict]:
         with self.db.connect() as db:
             rows = db.execute(

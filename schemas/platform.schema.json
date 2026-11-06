@@ -1,11 +1,59 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$defs": {
+    "ArchiveSource": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "url",
+          "title": "Type",
+          "type": "string"
+        },
+        "url": {
+          "description": "https:// URL of a .tar.gz or .zip archive",
+          "pattern": "^https://",
+          "title": "Url",
+          "type": "string"
+        },
+        "credentials": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Platform secret sent as a Bearer token",
+          "title": "Credentials"
+        },
+        "path": {
+          "default": ".platform",
+          "description": "Directory inside the archive with the definitions",
+          "title": "Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "url"
+      ],
+      "title": "ArchiveSource",
+      "type": "object"
+    },
     "GitSource": {
       "additionalProperties": false,
       "properties": {
+        "type": {
+          "const": "git",
+          "default": "git",
+          "title": "Type",
+          "type": "string"
+        },
         "url": {
-          "description": "https:// or file:// URL of the repository",
+          "description": "https://, ssh (git@host:org/repo.git) or file:// URL of the repository",
           "title": "Url",
           "type": "string"
         },
@@ -25,7 +73,7 @@
             }
           ],
           "default": null,
-          "description": "Platform secret holding a token for https URLs",
+          "description": "Platform secret: a token for https URLs, a private key for ssh URLs",
           "title": "Credentials"
         },
         "username": {
@@ -108,6 +156,15 @@
           ],
           "default": "*",
           "title": "Teams"
+        },
+        "pricing": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelPrice"
+          },
+          "default": {},
+          "description": "Optional prices per model, for cost estimates",
+          "title": "Pricing",
+          "type": "object"
         }
       },
       "required": [
@@ -116,6 +173,70 @@
         "models"
       ],
       "title": "LlmConnection",
+      "type": "object"
+    },
+    "ModelPrice": {
+      "additionalProperties": false,
+      "properties": {
+        "input": {
+          "description": "Price per million prompt tokens",
+          "minimum": 0,
+          "title": "Input",
+          "type": "number"
+        },
+        "output": {
+          "description": "Price per million completion tokens",
+          "minimum": 0,
+          "title": "Output",
+          "type": "number"
+        },
+        "cached_input": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Price per million cached prompt tokens",
+          "title": "Cached Input"
+        }
+      },
+      "required": [
+        "input",
+        "output"
+      ],
+      "title": "ModelPrice",
+      "type": "object"
+    },
+    "PathSource": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "path",
+          "title": "Type",
+          "type": "string"
+        },
+        "location": {
+          "description": "Absolute directory on the platform host (must be under an allowed root)",
+          "title": "Location",
+          "type": "string"
+        },
+        "path": {
+          "default": ".platform",
+          "description": "Directory inside location with the definitions",
+          "title": "Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "location"
+      ],
+      "title": "PathSource",
       "type": "object"
     },
     "TeamBudget": {
@@ -134,6 +255,21 @@
           "default": null,
           "description": "Prompt + completion tokens per UTC day",
           "title": "Daily Tokens"
+        },
+        "max_running_sessions": {
+          "anyOf": [
+            {
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Concurrent running sessions",
+          "title": "Max Running Sessions"
         }
       },
       "title": "TeamBudget",
@@ -157,7 +293,26 @@
           "type": "string"
         },
         "repository": {
-          "$ref": "#/$defs/GitSource"
+          "discriminator": {
+            "mapping": {
+              "git": "#/$defs/GitSource",
+              "path": "#/$defs/PathSource",
+              "url": "#/$defs/ArchiveSource"
+            },
+            "propertyName": "type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/GitSource"
+            },
+            {
+              "$ref": "#/$defs/ArchiveSource"
+            },
+            {
+              "$ref": "#/$defs/PathSource"
+            }
+          ],
+          "title": "Repository"
         },
         "members": {
           "default": [],
@@ -190,7 +345,18 @@
         "budget": {
           "$ref": "#/$defs/TeamBudget",
           "default": {
-            "daily_tokens": null
+            "daily_tokens": null,
+            "max_running_sessions": null
+          }
+        },
+        "notifications": {
+          "$ref": "#/$defs/TeamNotifications",
+          "default": {
+            "webhook": null,
+            "on": [
+              "completed",
+              "failed"
+            ]
           }
         }
       },
@@ -200,6 +366,42 @@
         "repository"
       ],
       "title": "TeamEntry",
+      "type": "object"
+    },
+    "TeamNotifications": {
+      "additionalProperties": false,
+      "properties": {
+        "webhook": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Platform secret holding a webhook URL (e.g. Slack) called when runs finish",
+          "title": "Webhook"
+        },
+        "on": {
+          "default": [
+            "completed",
+            "failed"
+          ],
+          "items": {
+            "enum": [
+              "completed",
+              "failed"
+            ],
+            "type": "string"
+          },
+          "title": "On",
+          "type": "array"
+        }
+      },
+      "title": "TeamNotifications",
       "type": "object"
     }
   },

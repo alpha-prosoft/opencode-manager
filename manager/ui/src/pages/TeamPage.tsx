@@ -70,7 +70,8 @@ export default function TeamPage() {
         <Typography variant="h4">{t.name}</Typography>
         <Typography color="text.secondary">{t.description}</Typography>
         <Typography variant="body2" color="text.secondary" sx={{ fontFamily: "monospace", mt: 1 }}>
-          {t.repository.url} · {t.repository.branch} · {t.commit?.slice(0, 8)} · synced {relativeTime(t.synced_at)}
+          {t.repository.type}: {t.repository.url ?? t.repository.location}
+          {t.repository.branch ? ` · ${t.repository.branch}` : ""} · {t.commit?.slice(0, 16)} · synced {relativeTime(t.synced_at)}
         </Typography>
         {t.error && <Alert severity="error" sx={{ mt: 1 }}>{t.error}</Alert>}
       </Box>
@@ -140,7 +141,7 @@ export default function TeamPage() {
                 <TableCell>Harness</TableCell>
                 <TableCell>LLM</TableCell>
                 <TableCell>Network</TableCell>
-                <TableCell>Permissions</TableCell>
+                <TableCell>Permissions & policy</TableCell>
                 <TableCell>Resources</TableCell>
               </TableRow>
             </TableHead>
@@ -162,6 +163,9 @@ export default function TeamPage() {
                   </TableCell>
                   <TableCell sx={{ fontFamily: "monospace", fontSize: "0.85rem" }}>
                     {Object.entries(h.spec?.permissions ?? {}).map(([tool, value]) => `${tool}:${value}`).join(" ") || "defaults"}
+                    {[...(h.spec?.policy?.deny_commands ?? []), ...(h.spec?.policy?.deny_paths ?? [])].map((rule: string) => (
+                      <Chip key={rule} size="small" color="warning" variant="outlined" label={`deny ${rule}`} sx={{ mt: 0.5, mr: 0.5 }} />
+                    ))}
                   </TableCell>
                   <TableCell>
                     {h.spec?.resources.cpus} CPU · {h.spec?.resources.memory_mb} MB · idle {h.spec?.idle_minutes} min

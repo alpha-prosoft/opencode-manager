@@ -5,6 +5,7 @@ from ..db import Database
 from ..store import now
 
 ACTIVE = ("queued", "preparing", "running", "awaiting_result", "finalizing")
+FINISHED = ("completed", "failed", "cancelled")
 
 
 class RunStore:
@@ -50,9 +51,18 @@ class RunStore:
             if column in changes and changes[column] is not None:
                 changes[column] = json.dumps(changes[column])
         changes["updated_at"] = now()
-        assignments = ", ".join(f"{column} = :{column}" for column in changes)
+        assignments = ", ".join(
+            f"{column} = CASE WHEN status = 'cancelled' THEN status ELSE :{column} END" if column == "status" else f"{column} = :{column}"
+            for column in changes
+        )
         with self.db.connect() as db:
             db.execute(f"UPDATE runs SET {assignments} WHERE id = :id", {**changes, "id": run_id})
+
+    def active(self) -> list[dict]:
+        marks = ",".join("?" * len(ACTIVE))
+        with self.db.connect() as db:
+            rows = db.execute(f"SELECT * FROM runs WHERE status IN ({marks})", ACTIVE).fetchall()
+        return [self._row(r) for r in rows]
 
     def counts(self) -> list[dict]:
         with self.db.connect() as db:

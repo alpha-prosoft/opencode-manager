@@ -7,6 +7,7 @@ from .registry import PlatformRegistry
 from .runner import RunService
 from .runs import RunStore
 from .secrets import SecretStore
+from .telemetry import TelemetryStore
 from .triggers import TriggerService
 from .usage import UsageStore
 
@@ -24,6 +25,7 @@ class Platform:
     usage: UsageStore
     audit: AuditStore
     collector: AuditCollector
+    telemetry: TelemetryStore
     engine: object = None
 
     @property

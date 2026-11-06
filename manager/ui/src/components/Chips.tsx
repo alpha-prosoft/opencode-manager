@@ -24,6 +24,7 @@ const RUN_COLORS: Record<RunStatus, ChipProps["color"]> = {
   finalizing: "info",
   completed: "success",
   failed: "error",
+  cancelled: "warning",
 };
 
 export const ACTIVITY_ICONS: Record<string, typeof TerminalIcon> = {
