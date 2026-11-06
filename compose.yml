@@ -70,6 +70,13 @@ services:
       - temporal
     restart: unless-stopped
 
+  mcp-bitbucket:
+    image: opencode-platform/mcp-bitbucket:dev
+    build: ./images/mcp-bitbucket
+    read_only: true
+    networks: [opencode-net]
+    restart: unless-stopped
+
 networks:
   opencode-net:
     name: opencode-net

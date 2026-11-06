@@ -48,6 +48,9 @@ class SessionRecord(SessionAttributes):
     created_at: datetime
     last_activity_at: datetime
     stopped_at: datetime | None = None
+    locked_by: str | None = None
+    locked_at: datetime | None = None
+    forked_from: str | None = None
 
 
 class Session(SessionRecord):
@@ -56,6 +59,9 @@ class Session(SessionRecord):
     open_url: str
     is_owner: bool
     can_manage: bool
+    can_open: bool
+    open_blocked: str | None = None
+    personal: bool = False
 
 
 class Identity(BaseModel):

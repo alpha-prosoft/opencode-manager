@@ -83,6 +83,23 @@ jobs:
           outputs: ${{ github.event_name == 'pull_request' && 'type=docker,dest=/tmp/manager-image.tar' || '' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - id: mcp-meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE }}-mcp-bitbucket
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=sha
+      - uses: docker/build-push-action@v7
+        with:
+          context: images/mcp-bitbucket
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.mcp-meta.outputs.tags }}
+          labels: ${{ steps.mcp-meta.outputs.labels }}
+          cache-from: type=gha,scope=mcp-bitbucket
+          cache-to: type=gha,mode=max,scope=mcp-bitbucket
       - uses: actions/upload-artifact@v7
         if: github.event_name == 'pull_request'
         with:

@@ -53,17 +53,20 @@ flowchart LR
 | **Onboarding repo** | One Git repo, owned by platform admins | `platform.json`: platform admins, LLM connections, allowed images, and the list of teams with their repositories, members and granted secrets. |
 | **Team repo** | One Git repo per team | A `.platform/` directory with the team's agents, harnesses and workflows. |
 | **Agent** | `.platform/agents/<id>.json` | Persona and system prompt (OpenCode agent). |
-| **Harness** | `.platform/harnesses/<id>.json` | The sandbox: LLM connection and models, network access, tool permissions, image, CPU and memory. |
+| **Harness** | `.platform/harnesses/<id>.json` | The sandbox: LLM connection and models, network access, tool permissions, MCP servers, skills, image, CPU and memory. |
+| **Credential** | Declared in `platform.json`, values set in the UI | A token or password tools need: shared by the platform, personal per user, or both. Stored encrypted; never sent into a sandbox. |
+| **MCP server** | Declared in `platform.json` | A tool server sandboxes reach only through the platform's MCP gateway, which adds the right credential to each call. |
 | **Workflow** | `.platform/workflows/<id>.json` | A trigger (manual, schedule, pull request) wired to an activity, with an agent, a harness and options. |
 | **Activity** | Built into the platform | What a run does: interactive session, code review, implementation, business analysis. |
 | **Run** | Platform | One execution of a workflow. It creates a sandboxed session, collects a typed result and meters usage. |
-| **Session** | Platform | A running (or stopped) OpenCode sandbox you can open in the browser. |
+| **Session** | Platform | One OpenCode instance (a sandbox) owned by one person. It can hold many conversations. It can be forked into someone else's copy and locked. |
 
 ```mermaid
 flowchart TB
     workflow["Workflow<br/>trigger + options"] --> activity["Activity"]
     workflow --> agent["Agent<br/>prompt, temperature"]
-    workflow --> harness["Harness<br/>LLM, network, permissions, resources"]
+    workflow --> harness["Harness<br/>LLM, network, permissions, MCP, skills"]
+    harness --> mcp["MCP servers"] --> credential["Credentials<br/>platform or personal"]
     trigger(("manual · schedule · pull request")) --> run["Run"]
     workflow --> run
     run --> session["Sandboxed OpenCode session"]
@@ -120,8 +123,13 @@ under `local/` is gitignored. Point the platform at the onboarding repo with `ON
 
 ## Using the platform
 
-The sidebar groups pages by what you are doing: **Work** (Home, Runs, Sessions), **Library** (Teams, Activities)
-and, for platform admins, **Platform** (Admin).
+The sidebar groups pages by what you are doing: **Work** (Home, Runs, Sessions), **Library** (Teams, Harnesses,
+Activities), **You** (Accounts) and, for platform admins, **Platform** (Admin).
+
+When you log in and your teams' tools need credentials you haven't seen yet, you first land on **Connect your
+accounts**: one step per credential, with a *Check and save* that tests the value against the service before it is
+stored. Personal-only credentials can be skipped, but tools that need them won't work for you until you add them;
+they are offered again at your next login. Credentials an admin adds later are offered at the next login too.
 
 1. **Home.** A short *How it works*, then every workflow you can start, grouped by team, and your recent runs.
    Workflows with problems are hidden here and explained on the team page.
@@ -133,18 +141,41 @@ and, for platform admins, **Platform** (Admin).
 3. **Runs → a run.** The result first: review findings, a patch with test results, or a document. Then the
    inputs, details and LLM usage. *Open session* shows exactly what the agent saw and did. Active runs can be
    cancelled; finished automated runs can be run again with the same inputs.
-4. **Sessions → a session.** *Open* starts and opens it in OpenCode. Three tabs:
-   - **Overview**: owner, team, sharing (only you, the team, or everyone) and LLM usage.
+4. **Sessions → a session.** *Open* starts and opens it in OpenCode. Four tabs:
+   - **Overview**: owner, team, sharing (only the owner, the team, or everyone), fork and lock history, LLM usage.
+   - **Conversations**: every chat in this instance, each with its own *Open*.
    - **Live activity**: what the agent is doing now, tools used with durations, files edited, and any tool call
      the harness policy blocked.
    - **Audit trail**: every message and tool call, verified against tampering, downloadable as JSONL.
 5. **Teams → a team.** Workflows, runs, *Agents & harnesses* (what each sandbox may do, in plain words, including
    blocked commands) and *People & usage* (members, daily budget, usage per model).
-6. **Activities.** Reference for workflow authors: what each activity does, its options and inputs, and an
+6. **Harnesses.** Every kind of sandbox your teams offer: model, network, MCP tools and skills, and whether it is
+   **ready for you** or which credential you still need to add.
+7. **Activities.** Reference for workflow authors: what each activity does, its options and inputs, and an
    example workflow file.
-7. **Admin** (platform admins): *Overview* (sync now, stop idle sessions, today's numbers and cost), *People*,
-   *Usage & cost*, *Teams*, *LLM connections* (one-click test), *Secrets* (set or missing; values are never
-   shown) and *Background jobs*.
+8. **Accounts.** Your own credentials: add, replace or remove them. You see a short hint, never the value.
+9. **Admin** (platform admins): *Overview* (sync now, stop idle sessions, today's numbers and cost), *People*,
+   *Usage & cost*, *Teams*, *LLM connections* (one-click test), *Credentials* (set the shared values; see how many
+   people use their own), *MCP servers* (reachable, credential set, which harnesses use them) and *Background
+   jobs*. Platform admins can see every session of every user.
+
+### Fork and lock
+
+Who may **work in** a live session is stricter than who may **see** it:
+
+| Session | Owner | Team admins, platform admins | Team members |
+|---|---|---|---|
+| Private | Open | See | — |
+| Shared with the team | Open | Open | Open |
+| Uses the owner's personal credentials | Open | See | See (if shared) |
+| Locked | See | See | See (if shared) |
+
+Anyone who can see a session can **Fork** it (if they are in its team): the platform copies the workspace and all
+conversations into a new private session owned by them, which runs with *their* credentials. This is how a
+teammate continues work that used someone else's Jira or Bitbucket account.
+
+The owner can **Lock** a session. It stops and can never be continued again, the owner included; everyone who
+can see it can still read it and fork it. Locking can't be undone.
 
 ### Roles
 
@@ -220,6 +251,47 @@ onboarding repository itself can use the same types: `MANAGER_ONBOARDING_URL` wi
 The platform syncs the onboarding repo and all team repos every `MANAGER_SYNC_INTERVAL_MINUTES` (default 10),
 and on *Sync now*. Teams removed from `platform.json` disappear; their history stays.
 
+### Credentials and MCP servers
+
+```json
+"credentials": [
+  { "id": "BITBUCKET_TOKEN", "name": "Bitbucket", "kind": "token",
+    "hosts": ["bitbucket.org", "api.bitbucket.org", "mcp-bitbucket"],
+    "provided_by": "platform_or_user",
+    "help": "Create an API token under Personal settings → API tokens.",
+    "test": { "url": "https://api.bitbucket.org/2.0/user" } },
+  { "id": "JIRA_TOKEN", "name": "Jira", "kind": "basic", "hosts": ["acme.atlassian.net"], "provided_by": "user" }
+],
+"mcp_servers": [
+  { "id": "bitbucket", "name": "Bitbucket (read-only)", "url": "http://mcp-bitbucket:8000/",
+    "credential": "BITBUCKET_TOKEN",
+    "tools": ["whoami", "list_pull_requests", "get_pull_request", "get_pull_request_diff"] }
+]
+```
+
+| Field | Meaning |
+|---|---|
+| `credentials[].provided_by` | `platform`: admins set one value. `platform_or_user`: admins set a shared value; people may use their own instead. `user`: no shared value; everyone adds their own. |
+| `credentials[].kind` | `token` (one secret), `basic` (username and password, e.g. Atlassian e-mail and API token) or `ssh_key`. |
+| `credentials[].hosts` | The only hosts the value is ever sent to, for MCP servers, Git checkouts and pull request APIs alike. |
+| `credentials[].test` | Optional URL called with the value when someone saves it; a non-2xx answer rejects it. |
+| `credentials[].teams` | Restrict which teams may use it (default: all). |
+| `mcp_servers[].url` | A Streamable HTTP MCP endpoint reachable from the manager only (a cluster service, or the Docker network in compose). MCP servers that only speak stdio can be wrapped as an HTTP service. |
+| `mcp_servers[].credential` | Added by the gateway to every request (`auth.header`, `auth.scheme`: `bearer`, `basic` or `raw`). |
+| `mcp_servers[].tools` | Allow-list. Other tools are hidden from `tools/list` and refused on `tools/call`. |
+
+How a credential is chosen for a call: the session **owner's own value** when the credential allows personal values
+and they have added one; otherwise the **platform value**; otherwise the call fails with "add your credential under
+Accounts". Automated runs (pull request triggers, schedules) have no person, so they always use the platform value;
+a workflow that runs automatically and needs a `user`-only credential is rejected at sync time.
+
+Credential values are stored in the manager database, encrypted with AES-GCM under `MANAGER_CREDENTIALS_KEY` (32
+bytes, base64; generated on the data volume if unset) and bound to their credential and owner. The API returns
+only a short hint. Values in `/config/secrets` keep working as platform values.
+
+`images/mcp-bitbucket` is a small read-only Bitbucket Cloud MCP server used by the examples. It holds no credentials
+of its own: it forwards the `Authorization` header the gateway adds.
+
 ### LLM connections
 
 | `type` | Upstream | Secret |
@@ -271,7 +343,9 @@ Set exactly one of `prompt` (inline) or `prompt_file` (relative to `.platform/`)
   "permissions": { "edit": "deny", "bash": "allow" },
   "resources": { "cpus": 1, "memory_mb": 2048, "pids": 512 },
   "idle_minutes": 15,
-  "policy": { "deny_commands": ["\\bgit\\s+push\\b"], "deny_paths": ["(^|/)\\.env$"] }
+  "policy": { "deny_commands": ["\\bgit\\s+push\\b"], "deny_paths": ["(^|/)\\.env$"] },
+  "mcp": ["bitbucket"],
+  "skills": ["skills/pr-triage"]
 }
 ```
 
@@ -284,6 +358,8 @@ Set exactly one of `prompt` (inline) or `prompt_file` (relative to `.platform/`)
 | `idle_minutes` | Idle sessions are stopped after this long (they wake up when opened again). |
 | `policy.deny_commands` | Regular expressions. A `bash` call whose command matches one is blocked before it runs; the agent sees *Blocked by platform policy* and the block shows up in *Live activity*. |
 | `policy.deny_paths` | Regular expressions matched against the file path of `read`, `edit`, `write` and similar tools. |
+| `mcp` | MCP servers (from `platform.json`) this harness's sessions get, through the platform gateway. |
+| `skills` | Directories in the team repo, each with a `SKILL.md` ([Agent Skills](https://opencode.ai/docs/skills/) format). They are copied into the read-only config at session start; text files only, no links, 1 MB in total. |
 
 The harness is turned into an OpenCode configuration that is **mounted read-only** into the session, so the agent
 cannot change its own model, permissions or tools.
@@ -372,9 +448,13 @@ flowchart LR
     manager["Manager"] -. "event stream" .-> audit[("Host-side audit trail")]
 ```
 
-- **No credentials in sessions.** LLM API keys, Git tokens and SCM tokens stay in the manager. Sessions authenticate
-  to the LLM gateway and the result tools with per-session keys derived from the platform signing key. A key only
-  works for its own session, its harness's models and its run's result tool.
+- **No credentials in sessions.** LLM API keys, Git tokens, SCM tokens and MCP credentials (shared or personal)
+  stay in the manager. Sessions authenticate to the LLM gateway, the MCP gateway and the result tools with
+  per-session keys derived from the platform signing key. A key only works for its own session, its harness's
+  models and MCP servers, and its run's result tool. Every MCP tool call is written to the session's audit trail,
+  with which credential was used (personal or platform).
+- **Personal credentials stay personal.** Only the owner can work in a session that uses their own credentials;
+  others fork it and continue with theirs.
 - **Network isolation.** Sessions run on an internal-only network: no internet, only the manager (gateway, result
   tools) and the HTTP gateway (for you). `network: internet` opts a harness into outbound access. On Kubernetes the
   same rules are enforced by NetworkPolicies.
@@ -427,8 +507,14 @@ helm install platform charts/opencode-manager -n agents \
   --set domain=agents.example.com \
   --set onboarding.url=https://git.example.com/platform/onboarding.git \
   --set onboarding.credentials=GIT_TOKEN \
-  --set platformSecrets.existingSecret=platform-secrets
+  --set platformSecrets.existingSecret=platform-secrets \
+  --set credentialsKey.existingSecret=opencode-credentials-key
 ```
+
+Create the credentials key once (`kubectl -n agents create secret generic opencode-credentials-key
+--from-literal=key=$(openssl rand -base64 32)`) and keep it: it decrypts every stored credential. Run MCP
+servers as ordinary cluster services; sessions with internet access are kept away from private address ranges
+(`networkPolicies.internetExcept`), so they reach MCP servers only through the gateway.
 
 The chart installs:
 - the manager (with Temporal and Traefik as sub-charts);

@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     jwt_cookie: str = "access_token"
     email_domain: str = "users.local"
 
+    credentials_key: str | None = None
     onboarding_url: str | None = None
     onboarding_type: Literal["git", "url", "path"] | None = None
     onboarding_branch: str = "main"

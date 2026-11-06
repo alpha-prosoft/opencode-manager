@@ -26,6 +26,12 @@ export interface Session {
   open_url: string;
   is_owner: boolean;
   can_manage: boolean;
+  can_open: boolean;
+  open_blocked: "locked" | "personal" | "private" | "hidden" | null;
+  personal: boolean;
+  locked_by: string | null;
+  locked_at: string | null;
+  forked_from: string | null;
   created_at: string;
   last_activity_at: string;
   stopped_at: string | null;
@@ -204,6 +210,83 @@ export interface UsageRow {
   cost: number | null;
 }
 
+export type ProvidedBy = "platform" | "platform_or_user" | "user";
+
+export interface CredentialStatus {
+  id: string;
+  name: string;
+  description: string;
+  kind: "token" | "basic" | "ssh_key";
+  hosts: string[];
+  provided_by: ProvidedBy;
+  help: string;
+  test: { url: string } | null;
+  state: "own" | "platform" | "missing";
+  required: boolean;
+  hint: string | null;
+  updated_at: string | null;
+  verified_at: string | null;
+}
+
+export interface AdminCredential {
+  id: string;
+  name: string;
+  description: string;
+  kind: CredentialStatus["kind"];
+  provided_by: ProvidedBy;
+  declared: boolean;
+  hosts: string[];
+  platform_value: "admin" | "file" | null;
+  hint: string | null;
+  updated_at: string | null;
+  updated_by: string | null;
+  personal_values: number;
+  used_by: string[];
+}
+
+export interface McpServerStatus {
+  id: string;
+  name: string;
+  description: string;
+  url: string;
+  credential: string | null;
+  tools: string[] | null;
+  reachable: boolean;
+  detail: string;
+  harnesses: string[];
+  credential_ready: boolean;
+}
+
+export interface HarnessCard {
+  team_id: string;
+  team_name: string;
+  id: string;
+  valid: boolean;
+  errors: string[];
+  description: string;
+  network: "none" | "internet";
+  models: string[];
+  skills: string[];
+  mcp_servers: { id: string; name: string; description: string; tools: string[] | null }[];
+  credentials: { id: string; name: string; provided_by: ProvidedBy; source: "user" | "platform" | null }[];
+  ready: boolean;
+  workflows: { id: string; name: string }[];
+}
+
+export interface Conversation {
+  id: string;
+  title: string;
+  messages: number;
+  started: string | null;
+  last: string | null;
+  open_path: string;
+}
+
+export interface CredentialInput {
+  secret: string;
+  username?: string;
+}
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -230,6 +313,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 const post = <T>(path: string, body?: unknown) =>
   request<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) });
 
+const put = <T>(path: string, body: unknown) => request<T>(path, { method: "PUT", body: JSON.stringify(body) });
+
 export const api = {
   login: (username: string) => post<Me>("/auth/login", { username }),
   personas: () => request<Persona[]>("/auth/personas"),
@@ -252,16 +337,27 @@ export const api = {
   stopSession: (id: string) => post<Session>(`/sessions/${id}/stop`),
   deleteSession: (id: string) => request<void>(`/sessions/${id}`, { method: "DELETE" }),
   activity: (id: string) => request<SessionActivity>(`/sessions/${id}/activity`),
+  conversations: (id: string) => request<Conversation[]>(`/sessions/${id}/conversations`),
+  forkSession: (id: string) => post<Session>(`/sessions/${id}/fork`),
+  lockSession: (id: string) => post<Session>(`/sessions/${id}/lock`),
+  harnesses: () => request<HarnessCard[]>("/harnesses"),
+  myCredentials: () => request<{ credentials: CredentialStatus[]; pending: string[] }>("/me/credentials"),
+  setMyCredential: (id: string, value: CredentialInput) => put<{ message: string }>(`/me/credentials/${id}`, value),
+  deleteMyCredential: (id: string) => request<void>(`/me/credentials/${id}`, { method: "DELETE" }),
+  markCredentialsSeen: (ids: string[]) => post<void>("/me/credentials/seen", { credentials: ids }),
   cancelRun: (id: string) => post<Run>(`/runs/${id}/cancel`),
   retryRun: (id: string) => post<Run>(`/runs/${id}/retry`),
   admin: {
     overview: () => request<AdminOverview>("/admin/overview"),
     users: () => request<AdminUser[]>("/admin/users"),
     usage: (days: number) => request<UsageRow[]>(`/admin/usage?days=${days}`),
-    secrets: () => request<{ name: string; configured: boolean; used_by: string[]; hosts: string[] }[]>("/admin/secrets"),
     testConnection: (id: string) => post<{ ok: boolean; model?: string; latency_ms?: number; error?: string }>(`/admin/llm/${id}/test`),
     schedules: () => request<{ id: string; next_run: string | null; last_run: string | null; paused: boolean }[]>("/admin/schedules"),
     stopIdle: () => post<{ stopped: string[] }>("/admin/sessions/stop-idle"),
+    credentials: () => request<AdminCredential[]>("/admin/credentials"),
+    setCredential: (id: string, value: CredentialInput) => put<{ message: string }>(`/admin/credentials/${id}`, value),
+    deleteCredential: (id: string) => request<void>(`/admin/credentials/${id}`, { method: "DELETE" }),
+    mcpServers: () => request<McpServerStatus[]>("/admin/mcp-servers"),
   },
   audit: (id: string, after = 0) => request<AuditEvent[]>(`/sessions/${id}/audit?after=${after}&limit=500`),
   verifyAudit: (id: string) => request<{ valid: boolean; checked: number; broken_at?: number }>(`/sessions/${id}/audit/verify`),

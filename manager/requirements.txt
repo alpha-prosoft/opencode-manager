@@ -4,6 +4,7 @@ pydantic-settings==2.16.2
 httpx==0.28.1
 pyyaml==6.0.3
 pyjwt[crypto]==2.15.1
+cryptography==50.0.2
 docker==7.2.0
 kubernetes==37.0.1
 temporalio==1.35.0

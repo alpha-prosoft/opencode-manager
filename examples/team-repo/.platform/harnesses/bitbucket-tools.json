@@ -1,0 +1,10 @@
+{
+  "description": "No internet. Bitbucket read-only tools through the platform gateway, with your own credential when you have set one.",
+  "image": "opencode-platform/opencode-dev:1.19.5",
+  "llm": { "connection": "copilot", "models": ["claude-sonnet-5.5", "gemini-3.5-flash"] },
+  "network": "none",
+  "permissions": { "bash": "allow", "edit": "allow" },
+  "mcp": ["bitbucket"],
+  "skills": ["skills/pr-triage"],
+  "idle_minutes": 15
+}

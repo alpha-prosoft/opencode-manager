@@ -5,7 +5,9 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, st
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import PlainTextResponse, StreamingResponse
 
+from .. import opencode
 from ..auth import clear_auth_cookie, current_identity, login_identity, set_auth_cookie
+from ..backends.base import WORKSPACE_DIR
 from ..config import Settings, get_settings
 from ..models import Identity, LoginRequest, Session, SessionRecord, SessionUpdate
 from ..platform.catalog import CATALOG
@@ -305,8 +307,59 @@ async def start_session(
     identity: Identity = Depends(current_identity),
     platform: Platform = Depends(get_platform),
 ) -> Session:
+    blocked = platform.sessions.open_blocked(record, identity)
+    if blocked:
+        raise HTTPException(status.HTTP_409_CONFLICT, BLOCKED_REASONS[blocked])
     await platform.engine.start_session(record.id)
     return await run_in_threadpool(platform.sessions.describe, record, identity)
+
+
+BLOCKED_REASONS = {
+    "locked": "This session is locked. Fork it to continue.",
+    "personal": "This session uses its owner's personal credentials. Fork it to continue with yours.",
+    "private": "This session is private to its owner. Fork it to continue.",
+    "hidden": "You can't open this session.",
+}
+
+
+@router.post("/sessions/{session_id}/lock")
+def lock_session(
+    record: SessionRecord = Depends(visible_session),
+    identity: Identity = Depends(current_identity),
+    platform: Platform = Depends(get_platform),
+) -> Session:
+    if record.sub != identity.sub:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the owner can lock a session")
+    if record.locked_at:
+        raise HTTPException(status.HTTP_409_CONFLICT, "The session is already locked")
+    platform.sessions.lock(record, identity)
+    return platform.sessions.describe(platform.sessions.get(record.id), identity)
+
+
+@router.post("/sessions/{session_id}/fork", status_code=status.HTTP_201_CREATED)
+async def fork_session(
+    record: SessionRecord = Depends(visible_session),
+    identity: Identity = Depends(current_identity),
+    platform: Platform = Depends(get_platform),
+) -> Session:
+    try:
+        fork = await run_in_threadpool(platform.runner.fork, record, identity)
+    except PermissionError as error:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(error)) from error
+    except RunError as error:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)) from error
+    await run_in_threadpool(
+        platform.audit.append, record.id, "fork", f"fork:{fork.id}", {"forked_to": fork.id, "by": identity.sub}
+    )
+    return await run_in_threadpool(platform.sessions.describe, fork, identity)
+
+
+@router.get("/sessions/{session_id}/conversations")
+def conversations(record: SessionRecord = Depends(visible_session), platform: Platform = Depends(get_platform)) -> list[dict]:
+    items = platform.audit.conversations(record.id)
+    for item in items:
+        item["open_path"] = opencode.web_path(WORKSPACE_DIR, item["id"])
+    return items
 
 
 @router.post("/sessions/{session_id}/stop")

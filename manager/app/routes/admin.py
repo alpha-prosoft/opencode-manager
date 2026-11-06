@@ -7,7 +7,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from ..models import Identity, SessionStatus
 from ..platform.context import Platform
-from ..platform.spec import ArchiveSource, GitSource, PlatformSpec
+from ..platform.spec import PlatformSpec
 from . import get_platform
 from .api import platform_admin
 
@@ -73,28 +73,6 @@ def users(platform: Platform = Depends(get_platform)) -> list[dict]:
 def usage(days: int = Query(default=7, ge=1, le=90), platform: Platform = Depends(get_platform)) -> list[dict]:
     spec = platform.registry.platform()
     return [{**row, "cost": _price(spec, row)} for row in platform.usage.by_team_model(_since(days))]
-
-
-@router.get("/secrets")
-def secrets(platform: Platform = Depends(get_platform)) -> list[dict]:
-    spec = platform.registry.platform()
-    used: dict[str, set[str]] = {}
-    for connection in spec.llm_connections:
-        used.setdefault(connection.secret, set()).add(f"llm connection {connection.id}")
-    for team in spec.teams:
-        for secret in team.secrets:
-            used.setdefault(secret, set()).add(f"granted to {team.id}")
-        if isinstance(team.repository, (GitSource, ArchiveSource)) and team.repository.credentials:
-            used.setdefault(team.repository.credentials, set()).add(f"repository of {team.id}")
-        if team.notifications.webhook:
-            used.setdefault(team.notifications.webhook, set()).add(f"webhook of {team.id}")
-    if platform.settings.onboarding_credentials:
-        used.setdefault(platform.settings.onboarding_credentials, set()).add("onboarding repository")
-    available = platform.secrets.available()
-    return [
-        {"name": name, "configured": name in available, "used_by": sorted(uses), "hosts": spec.secret_hosts.get(name, [])}
-        for name, uses in sorted(used.items())
-    ]
 
 
 @router.post("/llm/{connection_id}/test")

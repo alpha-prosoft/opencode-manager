@@ -35,6 +35,50 @@
       }
     }
   ],
+  "credentials": [
+    {
+      "id": "BITBUCKET_TOKEN",
+      "name": "Bitbucket",
+      "description": "Read access to Bitbucket Cloud repositories and pull requests.",
+      "kind": "token",
+      "hosts": [
+        "bitbucket.org",
+        "api.bitbucket.org",
+        "mcp-bitbucket"
+      ],
+      "provided_by": "platform_or_user",
+      "help": "Use your own Bitbucket API token to act as yourself; otherwise the platform's read-only account is used. Create one under Bitbucket \u2192 Personal settings \u2192 API tokens (read scopes are enough).",
+      "test": {
+        "url": "https://api.bitbucket.org/2.0/user"
+      }
+    },
+    {
+      "id": "JIRA_TOKEN",
+      "name": "Jira",
+      "description": "Your Atlassian account for Jira tools. Each person uses their own, so issues are read and written as you.",
+      "kind": "basic",
+      "hosts": [
+        "your-company.atlassian.net"
+      ],
+      "provided_by": "user",
+      "help": "Username is your Atlassian e-mail. Create an API token at id.atlassian.com \u2192 Security \u2192 API tokens."
+    }
+  ],
+  "mcp_servers": [
+    {
+      "id": "bitbucket",
+      "name": "Bitbucket (read-only)",
+      "description": "Pull requests, diffs and repository details from Bitbucket Cloud.",
+      "url": "http://mcp-bitbucket:8000/",
+      "credential": "BITBUCKET_TOKEN",
+      "tools": [
+        "whoami",
+        "list_pull_requests",
+        "get_pull_request",
+        "get_pull_request_diff"
+      ]
+    }
+  ],
   "secret_hosts": {
     "GITHUB_TOKEN": [
       "github.com"

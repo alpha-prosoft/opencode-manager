@@ -30,7 +30,9 @@ export default function LoginPage() {
       return;
     }
     const next = safeNext(params.get("next"));
-    if (isSessionEntry(next)) window.location.assign(next);
+    const { pending } = await api.myCredentials().catch(() => ({ pending: [] as string[] }));
+    if (pending.length > 0) navigate(`/setup?next=${encodeURIComponent(next)}`, { replace: true });
+    else if (isSessionEntry(next)) window.location.assign(next);
     else navigate(next, { replace: true });
   };
 

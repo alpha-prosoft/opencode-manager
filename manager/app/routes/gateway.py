@@ -1,6 +1,6 @@
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, RedirectResponse
 
@@ -47,7 +47,7 @@ def authorize_session_request(
     handoff = dict(parse_qsl(urlsplit(uri).query)).get(HANDOFF_PARAM)
     if handoff:
         identity = read_handoff(handoff, record.id, settings)
-        if identity is None or not service.can_view(record, identity):
+        if identity is None or not service.can_open(record, identity):
             raise GatewayResponse(Response(status_code=status.HTTP_401_UNAUTHORIZED))
         target = service.session_url(record) + without_handoff(uri)
         redirect = RedirectResponse(target, status_code=status.HTTP_302_FOUND)
@@ -57,8 +57,8 @@ def authorize_session_request(
     identity = resolve_identity(request, settings)
     if identity is None:
         raise GatewayResponse(RedirectResponse(service.entry_url(record), status_code=status.HTTP_302_FOUND))
-    if not service.can_view(record, identity):
-        raise GatewayResponse(Response(status_code=status.HTTP_404_NOT_FOUND))
+    if not service.can_open(record, identity):
+        raise GatewayResponse(RedirectResponse(service.manager_page(record), status_code=status.HTTP_302_FOUND))
     return record
 
 
@@ -76,6 +76,7 @@ def enter_session(
     sub: str,
     session_id: str,
     request: Request,
+    conversation: str | None = Query(default=None, pattern=r"^ses_[A-Za-z0-9]{8,64}$"),
     settings: Settings = Depends(get_settings),
     service: SessionService = Depends(get_service),
 ) -> Response:
@@ -86,7 +87,9 @@ def enter_session(
     record = service.get(session_id)
     if record is None or record.sub != sub or not service.can_view(record, identity):
         return Response(status_code=status.HTTP_404_NOT_FOUND)
-    target = f"{service.session_url(record)}{service.open_path(record)}?{HANDOFF_PARAM}={handoff_token(identity, record.id)}"
+    if not service.can_open(record, identity):
+        return RedirectResponse(f"/sessions/{record.id}", status_code=status.HTTP_303_SEE_OTHER)
+    target = f"{service.session_url(record)}{service.open_path(record, conversation)}?{HANDOFF_PARAM}={handoff_token(identity, record.id)}"
     return RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)
 
 

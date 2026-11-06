@@ -51,6 +51,26 @@ class AuditStore:
             ).fetchall()
         return [{**dict(r), "payload": json.loads(r["payload"])} for r in rows]
 
+    def conversations(self, session_id: str) -> list[dict]:
+        with self.db.connect() as db:
+            titles = {
+                row["id"]: row["title"]
+                for row in db.execute(
+                    "SELECT json_extract(payload, '$.id') AS id, json_extract(payload, '$.title') AS title "
+                    "FROM audit_events WHERE session_id = ? AND type = 'conversation'",
+                    (session_id,),
+                )
+            }
+            rows = db.execute(
+                "SELECT json_extract(payload, '$.sessionID') AS id, COUNT(*) AS messages, MIN(ts) AS started, MAX(ts) AS last "
+                "FROM audit_events WHERE session_id = ? AND type = 'message' GROUP BY 1 ORDER BY last DESC",
+                (session_id,),
+            ).fetchall()
+        seen = {row["id"] for row in rows}
+        items = [{**dict(row), "title": titles.get(row["id"]) or "Untitled conversation"} for row in rows if row["id"]]
+        items += [{"id": cid, "title": title, "messages": 0, "started": None, "last": None} for cid, title in titles.items() if cid not in seen]
+        return items
+
     def count(self, session_id: str) -> int:
         with self.db.connect() as db:
             return db.execute("SELECT COUNT(*) FROM audit_events WHERE session_id = ?", (session_id,)).fetchone()[0]

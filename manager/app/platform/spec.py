@@ -3,6 +3,8 @@
 import re
 from typing import Annotated, Any, Literal
 
+from urllib.parse import urlsplit
+
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
 Identifier = Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")]
@@ -74,6 +76,47 @@ class LlmConnection(Strict):
         raise ValueError(f"LLM connection {self.id} needs base_url")
 
 
+class CredentialTest(Strict):
+    url: str = Field(pattern=r"^https?://", description="Endpoint called with the credential; a 2xx answer means it works")
+
+
+class CredentialSpec(Strict):
+    id: SecretName = Field(description="Referenced by MCP servers, repositories and triggers")
+    name: str = Field(min_length=1, max_length=80)
+    description: str = ""
+    kind: Literal["token", "basic", "ssh_key"] = Field(
+        default="token", description="token: one secret; basic: username and password; ssh_key: a private key"
+    )
+    hosts: list[str] = Field(default=[], description="The only hosts this credential may be sent to")
+    provided_by: Literal["platform", "platform_or_user", "user"] = Field(
+        default="platform",
+        description="platform: admins set one value; platform_or_user: users may use their own instead; user: every user sets their own",
+    )
+    teams: list[Identifier] | Literal["*"] = "*"
+    help: str = Field(default="", description="Shown to people when they enter the value, e.g. where to create a token")
+    test: CredentialTest | None = None
+
+    @property
+    def personal(self) -> bool:
+        return self.provided_by != "platform"
+
+
+class McpAuth(Strict):
+    header: str = Field(default="Authorization", pattern=r"^[A-Za-z0-9-]{1,64}$")
+    scheme: Literal["bearer", "basic", "raw"] = "bearer"
+
+
+class McpServerSpec(Strict):
+    id: Identifier
+    name: str = Field(min_length=1, max_length=80)
+    description: str = ""
+    url: str = Field(pattern=r"^https?://", description="Streamable HTTP endpoint of the MCP server, reached from the platform only")
+    credential: SecretName | None = Field(default=None, description="Credential the platform adds to every request")
+    auth: McpAuth = McpAuth()
+    tools: list[str] | None = Field(default=None, description="Allow-list of tool names; all tools when omitted")
+    teams: list[Identifier] | Literal["*"] = "*"
+
+
 class TeamBudget(Strict):
     daily_tokens: int | None = Field(default=None, ge=1000, description="Prompt + completion tokens per UTC day")
     max_running_sessions: int | None = Field(default=None, ge=1, le=1000, description="Concurrent running sessions")
@@ -115,15 +158,45 @@ class PlatformSpec(Strict):
     secret_hosts: dict[SecretName, list[str]] = Field(
         default={}, description="Hosts each secret may be sent to when used for Git checkouts"
     )
+    credentials: list[CredentialSpec] = Field(default=[], description="Credentials people and admins fill in")
+    mcp_servers: list[McpServerSpec] = Field(default=[], description="MCP servers run behind the platform gateway")
     teams: list[TeamEntry] = []
 
     @model_validator(mode="after")
     def _unique(self) -> "PlatformSpec":
-        for label, ids in (("team", [t.id for t in self.teams]), ("llm connection", [c.id for c in self.llm_connections])):
+        for label, ids in (
+            ("team", [t.id for t in self.teams]),
+            ("llm connection", [c.id for c in self.llm_connections]),
+            ("credential", [c.id for c in self.credentials]),
+            ("MCP server", [m.id for m in self.mcp_servers]),
+        ):
             duplicates = {i for i in ids if ids.count(i) > 1}
             if duplicates:
                 raise ValueError(f"duplicate {label} ids: {sorted(duplicates)}")
+        for server in self.mcp_servers:
+            if server.credential is None:
+                continue
+            credential = self.credential(server.credential)
+            if credential is None:
+                raise ValueError(f"MCP server {server.id} uses undeclared credential {server.credential}")
+            host = urlsplit(server.url).hostname
+            if host not in credential.hosts:
+                raise ValueError(f"MCP server {server.id}: credential {credential.id} may not be sent to {host} (add it to its hosts)")
+        llm_secrets = {c.secret for c in self.llm_connections}
+        for credential in self.credentials:
+            if credential.personal and credential.id in llm_secrets:
+                raise ValueError(f"credential {credential.id} is used by an LLM connection and must be provided_by platform")
         return self
+
+    def credential(self, credential_id: str) -> CredentialSpec | None:
+        return next((c for c in self.credentials if c.id == credential_id), None)
+
+    def credential_hosts(self, credential_id: str) -> list[str]:
+        declared = self.credential(credential_id)
+        return list(dict.fromkeys([*(declared.hosts if declared else []), *self.secret_hosts.get(credential_id, [])]))
+
+    def mcp_server(self, server_id: str) -> McpServerSpec | None:
+        return next((m for m in self.mcp_servers if m.id == server_id), None)
 
 
 class AgentSpec(Strict):
@@ -187,6 +260,10 @@ class HarnessSpec(Strict):
     idle_minutes: int = Field(default=15, ge=1, le=1440)
     policy: HarnessPolicy = Field(
         default=HarnessPolicy(), description="Guardrails enforced by the platform plugin before a tool runs"
+    )
+    mcp: list[Identifier] = Field(default=[], description="MCP servers from the onboarding repository this harness may use")
+    skills: list[str] = Field(
+        default=[], description="Skill directories (each with a SKILL.md) in the team definitions, copied read-only into the sandbox"
     )
 
     @field_validator("permissions")

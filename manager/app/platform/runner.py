@@ -5,7 +5,7 @@ from pydantic import ValidationError
 
 from .. import opencode
 from ..config import Settings
-from ..models import Identity, Visibility
+from ..models import Identity, SessionRecord, Visibility
 from ..sessions import CONVERSATION_LABEL, SessionService
 from . import harness as harness_builder
 from .catalog import get_activity
@@ -41,12 +41,14 @@ class RunService:
         runs: RunStore,
         secrets: SecretStore,
         signing_key: str,
+        credentials=None,
     ):
         self.settings = settings
         self.registry = registry
         self.sessions = sessions
         self.runs = runs
         self.secrets = secrets
+        self.credentials = credentials
         self.signing_key = signing_key
 
     def _workflow(self, team_id: str, workflow_id: str) -> WorkflowSpec:
@@ -94,12 +96,16 @@ class RunService:
             options=activity.options.model_validate(options),
             inputs=activity.inputs.model_validate(run["inputs"]),
             workspace=workspace,
-            secrets=self.secrets,
+            secrets=self.credentials.for_user(self.person(run)),
             read_team_file=lambda relative: self.registry.read_team_file(run["team_id"], relative),
             session_url=session_url,
             secret_host_allowed=self.registry.secret_host_allowed,
             local_roots=self.settings.local_repo_roots,
         )
+
+    @staticmethod
+    def person(run: dict) -> str | None:
+        return None if run["created_by"].startswith(PLATFORM_ACTOR) else run["created_by"]
 
     def _owner(self, run: dict) -> Identity:
         sub = run["created_by"] if not run["created_by"].startswith(PLATFORM_ACTOR) else PLATFORM_ACTOR
@@ -141,11 +147,16 @@ class RunService:
         HANDLERS[workflow.activity].prepare(ctx)
         self.sessions.storage.hand_over(record.id)
 
-        prompt = agent.prompt or self.registry.read_team_file(run["team_id"], agent.prompt_file)
         instructions = getattr(ctx.options, "instructions_file", None)
+        self._write_sandbox(record, run["team_id"], workflow, agent, harness, activity.interactive, bool(activity.result_tool), run_id, instructions)
+        self.runs.update(run_id, status="running")
+        return {"session_id": record.id, "interactive": activity.interactive, "models": list(harness.llm.models)}
+
+    def _write_sandbox(self, record, team_id, workflow, agent, harness, interactive, result_tool, run_id, instructions=None) -> None:
+        prompt = agent.prompt or self.registry.read_team_file(team_id, agent.prompt_file)
         if instructions:
-            prompt += "\n\n" + self.registry.read_team_file(run["team_id"], instructions)
-        result_tool = activity.result_tool
+            prompt += "\n\n" + self.registry.read_team_file(team_id, instructions)
+        key = lambda purpose: harness_builder.derive_key(self.signing_key, purpose, record.id)  # noqa: E731
         config = harness_builder.opencode_config(
             self.settings,
             record.id,
@@ -153,22 +164,45 @@ class RunService:
             agent,
             prompt,
             harness,
-            activity.interactive,
-            harness_builder.derive_key(self.signing_key, "llm", record.id),
-            harness_builder.derive_key(self.signing_key, "mcp", record.id) if result_tool else None,
+            interactive,
+            key("llm"),
+            key("mcp") if result_tool else None,
+            key("tools"),
         )
         sandbox = harness_builder.sandbox(
-            self.settings,
-            harness,
-            config,
-            record.secret_key,
-            run["team_id"],
-            run_id,
-            harness_builder.derive_key(self.signing_key, "telemetry", record.id),
+            self.settings, harness, config, record.secret_key, team_id, run_id, key("telemetry"), self.registry.read_skills(team_id, harness.skills)
         )
         self.sessions.storage.write_sandbox(record.id, sandbox)
-        self.runs.update(run_id, status="running")
-        return {"session_id": record.id, "interactive": activity.interactive, "models": list(harness.llm.models)}
+
+    def fork(self, source: SessionRecord, identity: Identity) -> SessionRecord:
+        """A private copy of a session (files and conversations) that continues as `identity`, with their credentials."""
+        run = self.runs.get(source.run_id) if source.run_id else None
+        workflow_id = (run or {}).get("workflow_id") or source.labels.get("workflow")
+        if not source.team_id or not workflow_id:
+            raise RunError("This session was not started from a workflow, so it can't be forked")
+        if source.team_id not in self.registry.teams_of(identity.sub):
+            raise PermissionError(f"Only members of team {source.team_id} can fork this session")
+        workflow = self._workflow(source.team_id, workflow_id)
+        agent: AgentSpec = self.registry.definition(source.team_id, "agents", workflow.agent)
+        harness: HarnessSpec = self.registry.definition(source.team_id, "harnesses", workflow.harness)
+        if agent is None or harness is None:
+            raise RunError("The workflow's agent or harness is missing or invalid")
+        self._check_session_limit(source.team_id)
+        labels = {k: v for k, v in source.labels.items() if k in ("workflow", CONVERSATION_LABEL)}
+        record = self.sessions.create(
+            identity,
+            f"{source.name} (fork)"[:100],
+            source.description,
+            Visibility.PRIVATE,
+            source.team_id,
+            None,
+            "session",
+            {**labels, "workflow": workflow_id, "forked_from": source.id},
+        )
+        self.sessions.store.update(record.id, {"forked_from": source.id})
+        self.sessions.storage.copy_session(source.id, record.id)
+        self._write_sandbox(record, source.team_id, workflow, agent, harness, True, False, None)
+        return self.sessions.get(record.id)
 
     def start_conversation(self, run_id: str, model: str) -> str | None:
         run = self.runs.get(run_id)

@@ -43,6 +43,115 @@
       "title": "ArchiveSource",
       "type": "object"
     },
+    "CredentialSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "Referenced by MCP servers, repositories and triggers",
+          "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "kind": {
+          "default": "token",
+          "description": "token: one secret; basic: username and password; ssh_key: a private key",
+          "enum": [
+            "token",
+            "basic",
+            "ssh_key"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "hosts": {
+          "default": [],
+          "description": "The only hosts this credential may be sent to",
+          "items": {
+            "type": "string"
+          },
+          "title": "Hosts",
+          "type": "array"
+        },
+        "provided_by": {
+          "default": "platform",
+          "description": "platform: admins set one value; platform_or_user: users may use their own instead; user: every user sets their own",
+          "enum": [
+            "platform",
+            "platform_or_user",
+            "user"
+          ],
+          "title": "Provided By",
+          "type": "string"
+        },
+        "teams": {
+          "anyOf": [
+            {
+              "items": {
+                "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "const": "*",
+              "type": "string"
+            }
+          ],
+          "default": "*",
+          "title": "Teams"
+        },
+        "help": {
+          "default": "",
+          "description": "Shown to people when they enter the value, e.g. where to create a token",
+          "title": "Help",
+          "type": "string"
+        },
+        "test": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CredentialTest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "title": "CredentialSpec",
+      "type": "object"
+    },
+    "CredentialTest": {
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "description": "Endpoint called with the credential; a 2xx answer means it works",
+          "pattern": "^https?://",
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "title": "CredentialTest",
+      "type": "object"
+    },
     "GitSource": {
       "additionalProperties": false,
       "properties": {
@@ -173,6 +282,117 @@
         "models"
       ],
       "title": "LlmConnection",
+      "type": "object"
+    },
+    "McpAuth": {
+      "additionalProperties": false,
+      "properties": {
+        "header": {
+          "default": "Authorization",
+          "pattern": "^[A-Za-z0-9-]{1,64}$",
+          "title": "Header",
+          "type": "string"
+        },
+        "scheme": {
+          "default": "bearer",
+          "enum": [
+            "bearer",
+            "basic",
+            "raw"
+          ],
+          "title": "Scheme",
+          "type": "string"
+        }
+      },
+      "title": "McpAuth",
+      "type": "object"
+    },
+    "McpServerSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "url": {
+          "description": "Streamable HTTP endpoint of the MCP server, reached from the platform only",
+          "pattern": "^https?://",
+          "title": "Url",
+          "type": "string"
+        },
+        "credential": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Credential the platform adds to every request",
+          "title": "Credential"
+        },
+        "auth": {
+          "$ref": "#/$defs/McpAuth",
+          "default": {
+            "header": "Authorization",
+            "scheme": "bearer"
+          }
+        },
+        "tools": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Allow-list of tool names; all tools when omitted",
+          "title": "Tools"
+        },
+        "teams": {
+          "anyOf": [
+            {
+              "items": {
+                "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "const": "*",
+              "type": "string"
+            }
+          ],
+          "default": "*",
+          "title": "Teams"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "url"
+      ],
+      "title": "McpServerSpec",
       "type": "object"
     },
     "ModelPrice": {
@@ -454,6 +674,24 @@
       },
       "title": "Secret Hosts",
       "type": "object"
+    },
+    "credentials": {
+      "default": [],
+      "description": "Credentials people and admins fill in",
+      "items": {
+        "$ref": "#/$defs/CredentialSpec"
+      },
+      "title": "Credentials",
+      "type": "array"
+    },
+    "mcp_servers": {
+      "default": [],
+      "description": "MCP servers run behind the platform gateway",
+      "items": {
+        "$ref": "#/$defs/McpServerSpec"
+      },
+      "title": "Mcp Servers",
+      "type": "array"
     },
     "teams": {
       "default": [],

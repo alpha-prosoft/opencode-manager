@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from ..config import Settings
 from ..sessions import SessionService
 from .audit import AuditCollector, AuditStore
+from .credentials import Credentials
 from .registry import PlatformRegistry
 from .runner import RunService
 from .runs import RunStore
@@ -17,6 +18,7 @@ class Platform:
     settings: Settings
     signing_key: str
     secrets: SecretStore
+    credentials: Credentials
     registry: PlatformRegistry
     sessions: SessionService
     runs: RunStore

@@ -1,0 +1,7 @@
+{
+  "name": "Bitbucket workspace",
+  "description": "Interactive workspace with read-only Bitbucket tools and a pull request triage skill.",
+  "activity": "session",
+  "agent": "engineer",
+  "harness": "bitbucket-tools"
+}

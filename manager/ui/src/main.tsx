@@ -7,7 +7,10 @@ import { theme } from "./theme";
 import AdminPage from "./pages/AdminPage";
 import DashboardPage from "./pages/DashboardPage";
 import LoginPage from "./pages/LoginPage";
+import AccountsPage from "./pages/AccountsPage";
 import ActivitiesPage from "./pages/ActivitiesPage";
+import HarnessesPage from "./pages/HarnessesPage";
+import SetupPage from "./pages/SetupPage";
 import RunPage from "./pages/RunPage";
 import RunsPage from "./pages/RunsPage";
 import SessionPage from "./pages/SessionPage";
@@ -23,6 +26,9 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <DashboardPage /> },
       { path: "activities", element: <ActivitiesPage /> },
+      { path: "harnesses", element: <HarnessesPage /> },
+      { path: "accounts", element: <AccountsPage /> },
+      { path: "setup", element: <SetupPage /> },
       { path: "marketplace", element: <Navigate to="/activities" replace /> },
       { path: "teams", element: <TeamsPage /> },
       { path: "teams/:teamId", element: <TeamPage /> },

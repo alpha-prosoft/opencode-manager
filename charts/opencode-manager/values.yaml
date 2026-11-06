@@ -36,6 +36,14 @@ onboarding:
 platformSecrets:
   existingSecret: ""
 
+# Key that encrypts credential values (platform and personal) in the manager database.
+# Create it once and keep it: losing it makes stored credentials unreadable.
+#   kubectl create secret generic opencode-credentials-key --from-literal=key=$(openssl rand -base64 32)
+# Without it the manager generates a key on its data volume.
+credentialsKey:
+  existingSecret: ""
+  key: key
+
 # Default image for sessions; onboarding's allowed_images may permit others.
 sessionImage: ghcr.io/anomalyco/opencode:1.19.5
 
@@ -46,6 +54,14 @@ reaper:
 # reach them, and they reach only the manager unless their harness sets network: internet.
 networkPolicies:
   enabled: true
+  # Sessions with network: internet may reach any address except these, so they can't bypass the
+  # platform gateway to reach in-cluster services such as MCP servers.
+  internetExcept:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+    - 100.64.0.0/10
+    - 169.254.0.0/16
   ingressFrom:
     - podSelector:
         matchLabels:

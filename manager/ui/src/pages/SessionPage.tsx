@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { Link as RouterLink, useNavigate, useParams } from "react-router";
-import { Alert, Box, Link, MenuItem, Stack, Tab, Tabs, TextField, Typography } from "@mui/material";
-import { api, type Visibility } from "../api";
+import { Alert, Box, Chip, Link, MenuItem, Stack, Tab, Tabs, TextField, Typography } from "@mui/material";
+import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
+import { api, type Session, type Visibility } from "../api";
 import AuditTimeline from "../components/AuditTimeline";
+import Conversations from "../components/Conversations";
 import { ActivityChip, SessionStatusChip, VisibilityChip } from "../components/Chips";
 import { DetailList, Mono, TwoColumns } from "../components/Data";
 import LiveActivity from "../components/LiveActivity";
@@ -13,9 +15,16 @@ import { dateTime, isSessionLive, relativeTime } from "../components/format";
 import { useLoad } from "../hooks";
 
 const SHARING: Record<Visibility, string> = {
-  private: "Only you (and team admins)",
+  private: "Only the owner can work in it; team admins can see it",
   team: "Everyone in the team",
   public: "Everyone on the platform",
+};
+
+const BLOCKED: Record<NonNullable<Session["open_blocked"]>, string> = {
+  locked: "This session is locked, so nobody can continue in it. Fork it to continue in your own copy.",
+  personal: "This session works with its owner's personal credentials, so only they can work in it. Fork it to continue with your own.",
+  private: "This session is private to its owner. Fork it to continue in your own copy.",
+  hidden: "You can't open this session.",
 };
 
 export default function SessionPage() {
@@ -45,6 +54,10 @@ export default function SessionPage() {
             <SessionStatusChip status={session.status} />
             {session.activity && <ActivityChip activity={session.activity} />}
             <VisibilityChip visibility={session.visibility} />
+            {session.locked_at && <Chip variant="outlined" color="warning" icon={<LockOutlinedIcon />} label="Locked" />}
+            {session.personal && (
+              <Chip variant="outlined" label={session.is_owner ? "Uses your credentials" : "Uses the owner's credentials"} />
+            )}
             <Typography variant="body2">Last activity {relativeTime(session.last_activity_at)}</Typography>
           </>
         }
@@ -53,10 +66,12 @@ export default function SessionPage() {
         }
       />
       {actionError && <Alert severity="error">{actionError}</Alert>}
+      {session.open_blocked && <Alert severity="info">{BLOCKED[session.open_blocked]}</Alert>}
 
       <Box>
         <Tabs value={tab} onChange={(_, value) => setTab(value)} variant="scrollable">
           <Tab label="Overview" />
+          <Tab label="Conversations" />
           <Tab label="Live activity" />
           <Tab label={`Audit trail (${session.audit_events})`} />
         </Tabs>
@@ -90,6 +105,19 @@ export default function SessionPage() {
                     ),
                   ],
                   ["Created", dateTime(session.created_at)],
+                  ...(session.forked_from
+                    ? ([
+                        [
+                          "Forked from",
+                          <Link component={RouterLink} to={`/sessions/${session.forked_from}`}>
+                            <Mono>{session.forked_from}</Mono>
+                          </Link>,
+                        ],
+                      ] as [string, React.ReactNode][])
+                    : []),
+                  ...(session.locked_at
+                    ? ([["Locked", `${dateTime(session.locked_at)} by ${session.locked_by}`]] as [string, string][])
+                    : []),
                   ["Address", <Mono>{session.url}</Mono>],
                 ]}
               />
@@ -115,8 +143,9 @@ export default function SessionPage() {
           )}
         </Stack>
       )}
-      {tab === 1 && <LiveActivity sessionId={session.id} live={isSessionLive(session.status)} />}
-      {tab === 2 && <AuditTimeline sessionId={session.id} />}
+      {tab === 1 && <Conversations session={session} />}
+      {tab === 2 && <LiveActivity sessionId={session.id} live={isSessionLive(session.status)} />}
+      {tab === 3 && <AuditTimeline sessionId={session.id} />}
     </PageStack>
   );
 }

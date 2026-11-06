@@ -52,5 +52,9 @@ spec:
       opencode-manager/network: internet
   policyTypes: [Egress]
   egress:
-    - {}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              {{- toYaml .Values.networkPolicies.internetExcept | nindent 14 }}
 {{- end }}

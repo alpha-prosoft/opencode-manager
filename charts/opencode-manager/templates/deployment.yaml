@@ -99,6 +99,13 @@ spec:
             - name: MANAGER_JWT_AUDIENCE
               value: {{ . | quote }}
             {{- end }}
+            {{- if .Values.credentialsKey.existingSecret }}
+            - name: MANAGER_CREDENTIALS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.credentialsKey.existingSecret }}
+                  key: {{ .Values.credentialsKey.key }}
+            {{- end }}
             {{- if .Values.auth.jwtSecret.existingSecret }}
             - name: MANAGER_JWT_SECRET
               valueFrom:

@@ -14,6 +14,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 RESULTS: list[tuple[str, bool, str]] = []
 RUN_TIMEOUT = 900
@@ -88,6 +89,72 @@ def audit_ok(client: Client, session_id: str) -> None:
     check("audit recorded tool calls", len(tools) > 0, str(tools))
 
 
+TOKEN_FILE = Path(__file__).resolve().parent.parent / "local" / "secrets" / "BITBUCKET_TOKEN"
+
+GATEWAY_PROBE = """
+import json, httpx
+from app.main import build_platform
+from app.platform.harness import derive_key
+p = build_platform()
+key = derive_key(p.signing_key, "tools", "{session}")
+def call(name, key=key):
+    body = {{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {{"name": name, "arguments": {{}}}}}}
+    r = httpx.post("http://localhost:8000/mcp-gw/bitbucket", json=body, headers={{"X-Platform-Key": key, "Accept": "application/json, text/event-stream"}})
+    return r.status_code, r.text[:300]
+print(json.dumps({{"allowed": call("whoami"), "blocked": call("delete_repository"), "forged": call("whoami", "{session}.forged")}}))
+"""
+
+
+def credentials_and_tools(base: str, alice: Client, bob: Client, carol: Client) -> None:
+    print("Credentials, MCP gateway, fork and lock")
+    erin = Client(base, "erin")
+    _, mine = erin.call("GET", "/api/me/credentials")
+    states = {c["id"]: c for c in (mine or {}).get("credentials", [])}
+    check("people see the credentials their teams need", "JIRA_TOKEN" in states and states["JIRA_TOKEN"]["required"], str(states.keys()))
+    check("new credentials are offered at login", "JIRA_TOKEN" in (mine or {}).get("pending", []))
+    status, body = bob.call("PUT", "/api/me/credentials/BITBUCKET_TOKEN", {"secret": "definitely-not-a-valid-token"})
+    check("invalid credentials are rejected before saving", status == 422 and "Not saved" in str(body), str(body))
+    status, _ = carol.call("PUT", "/api/admin/credentials/BITBUCKET_TOKEN", {"secret": "x"})
+    check("only admins set platform values", status == 403)
+    if not TOKEN_FILE.is_file():
+        check("Bitbucket token available for the tool checks (local/secrets/BITBUCKET_TOKEN)", False)
+        return
+    status, body = bob.call("PUT", "/api/me/credentials/BITBUCKET_TOKEN", {"secret": TOKEN_FILE.read_text().strip()})
+    check("a valid personal credential is checked and saved", status == 200, str(body))
+    _, admin_view = alice.call("GET", "/api/admin/credentials")
+    leaked = TOKEN_FILE.read_text().strip() in json.dumps(admin_view)
+    check("credential values are never returned by the API", not leaked)
+
+    run = wait_for_run(bob, start(bob, "demo", "bitbucket-workspace", {"title": "e2e tools"}))
+    session_id = run.get("session_id")
+    if not check("a workspace with MCP tools launches", run["status"] == "completed", run.get("error") or run["status"]):
+        return
+    probe = json.loads(manager_python(GATEWAY_PROBE.format(session=session_id)).splitlines()[-1])
+    check("the gateway calls allowed tools with the person's credential", probe["allowed"][0] == 200 and "display_name" in probe["allowed"][1], str(probe["allowed"]))
+    check("the gateway blocks tools outside the allow-list", "not allowed" in probe["blocked"][1], str(probe["blocked"]))
+    check("the gateway rejects forged keys", probe["forged"][0] == 401, str(probe["forged"]))
+    _, events = bob.call("GET", f"/api/sessions/{session_id}/audit?limit=1000")
+    sources = [e["payload"].get("source") for e in events if e["type"] == "mcp"]
+    check("MCP calls are audited with whose credential was used", "user" in sources, str(sources))
+    output = sh("docker", "exec", f"opencode-{session_id}", "sh", "-c", "wget -q -T 5 -O- http://mcp-bitbucket:8000/ >/dev/null 2>&1 && echo reachable || echo blocked").stdout
+    check("sandboxes cannot reach MCP servers directly", "blocked" in output, output)
+    output = sh("docker", "exec", f"opencode-{session_id}", "sh", "-c", "echo x >> /etc/opencode/opencode/skills/pr-triage/SKILL.md 2>/dev/null && echo writable || echo denied").stdout
+    check("skills are mounted read-only", "denied" in output, output)
+
+    _, seen = alice.call("GET", f"/api/sessions/{session_id}")
+    check("others cannot work in a session that uses personal credentials", seen.get("open_blocked") == "personal", str(seen.get("open_blocked")))
+    check("they cannot start it either", alice.call("POST", f"/api/sessions/{session_id}/start")[0] == 409)
+    status, fork = alice.call("POST", f"/api/sessions/{session_id}/fork")
+    check("they can fork it into their own private copy", status == 201 and fork.get("sub") == "alice" and fork.get("visibility") == "private", str(fork))
+    check("non-members cannot fork it", carol.call("POST", f"/api/sessions/{session_id}/fork")[0] == 404)
+    check("only the owner can lock it", alice.call("POST", f"/api/sessions/{session_id}/lock")[0] == 403)
+    status, locked = bob.call("POST", f"/api/sessions/{session_id}/lock")
+    check("the owner can lock it", status == 200 and locked.get("locked_by") == "bob", str(locked))
+    check("nobody can start a locked session", bob.call("POST", f"/api/sessions/{session_id}/start")[0] == 409)
+    check("a locked session can still be forked", bob.call("POST", f"/api/sessions/{session_id}/fork")[0] == 201)
+    bob.call("DELETE", "/api/me/credentials/BITBUCKET_TOKEN")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", default="http://localhost:8080")
@@ -120,8 +187,8 @@ def main() -> int:
     check("platform admins get an overview", status == 200 and overview["teams"] >= 3, str(overview))
     users = {u["username"]: u for u in alice.call("GET", "/api/admin/users")[1]}
     check("admin user matrix shows team roles", users.get("dave", {}).get("teams", {}).get("payments") == "admin", str(users.get("dave")))
-    secrets = alice.call("GET", "/api/admin/secrets")[1]
-    check("secret status never includes values", secrets and all(set(s) == {"name", "configured", "used_by", "hosts"} for s in secrets), str(secrets))
+    credentials = alice.call("GET", "/api/admin/credentials")[1]
+    check("credential status never includes values", credentials and all("secret" not in c and "value" not in c for c in credentials), str(credentials)[:200])
     connection = alice.call("GET", "/api/platform")[1]["llm_connections"][0]["id"]
     status, tested = alice.call("POST", f"/api/admin/llm/{connection}/test")
     check("admins can test an LLM connection", status == 200 and tested.get("ok"), str(tested))
@@ -172,7 +239,8 @@ def main() -> int:
     check("interactive session launches", run["status"] == "completed", run.get("error") or run["status"])
     session = run.get("session") or {}
     check("interactive session is private to its owner", session.get("visibility") == "private" and session.get("sub") == "bob")
-    check("other team members cannot see a private session", alice.call("GET", f"/api/sessions/{session.get('id')}")[0] in (200, 404))
+    status, seen = alice.call("GET", f"/api/sessions/{session.get('id')}")
+    check("team admins see a private session but cannot work in it", status == 200 and seen.get("open_blocked") == "private", str(seen))
     check("non-members cannot see the session", carol.call("GET", f"/api/sessions/{session.get('id')}")[0] == 404)
     status, _ = bob.call("GET", session.get("open_url", "/"))
     check("session entry redirects through the handoff", status == 303)
@@ -235,6 +303,8 @@ def main() -> int:
             plan = run["result"]["plan"]
             check("review is structured and capped", run["result"]["review"]["verdict"] and plan["comments"] <= 100, str(plan))
             check("review posted nothing in dry-run", run["result"]["posted"] == 0 or plan["mode"] == "auto")
+
+    credentials_and_tools(base, alice, bob, carol)
 
     print("Metrics")
     status, body = alice.call("GET", "/metrics", raw=True)

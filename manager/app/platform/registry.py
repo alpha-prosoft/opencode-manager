@@ -101,7 +101,18 @@ class PlatformRegistry:
     def secret_host_allowed(self, secret: str, url: str, platform: PlatformSpec | None = None) -> bool:
         if urlsplit(url).scheme == "file":
             return True
-        return git.host_of(url) in (platform or self.platform()).secret_hosts.get(secret, [])
+        return git.host_of(url) in (platform or self.platform()).credential_hosts(secret)
+
+    @staticmethod
+    def team_may_use(platform: PlatformSpec, team: TeamEntry, credential_id: str) -> bool:
+        declared = platform.credential(credential_id)
+        if declared:
+            return declared.teams == "*" or team.id in declared.teams
+        return credential_id in team.secrets
+
+    def harness_credentials(self, platform: PlatformSpec, harness: HarnessSpec) -> list[str]:
+        servers = [platform.mcp_server(server_id) for server_id in harness.mcp]
+        return sorted({server.credential for server in servers if server and server.credential})
 
     def _token(self, secret: str | None, url: str, platform: PlatformSpec | None) -> str | None:
         if not secret:
@@ -180,6 +191,9 @@ class PlatformRegistry:
         if not path.is_relative_to(base) or not path.is_file():
             raise FileNotFoundError(f"{relative} not found in the team definitions")
         return path.read_text()
+
+    def read_skills(self, team_id: str, skills: list[str]) -> dict[str, str]:
+        return collect_skills(self.team_dir(team_id), skills)
 
     # ---- sync --------------------------------------------------------------------------
 
@@ -278,13 +292,13 @@ class PlatformRegistry:
                     agent.errors.append(f"prompt_file {spec.prompt_file} not found")
         for harness in loaded["harnesses"].values():
             if harness.valid:
-                harness.errors += self._check_harness(platform, team, HarnessSpec.model_validate(harness.spec))
+                harness.errors += self._check_harness(platform, team, base, HarnessSpec.model_validate(harness.spec))
         for workflow in loaded["workflows"].values():
             if workflow.valid:
                 workflow.errors += self._check_workflow(platform, team, base, loaded, WorkflowSpec.model_validate(workflow.spec))
         return [d for group in loaded.values() for d in group.values()]
 
-    def _check_harness(self, platform: PlatformSpec, team: TeamEntry, harness: HarnessSpec) -> list[str]:
+    def _check_harness(self, platform: PlatformSpec, team: TeamEntry, base: Path, harness: HarnessSpec) -> list[str]:
         errors = []
         if harness.image and harness.image not in platform.allowed_images:
             errors.append(f"image {harness.image} is not in the platform's allowed_images")
@@ -297,13 +311,25 @@ class PlatformRegistry:
             unknown = [m for m in harness.llm.models if m not in connection.models]
             if unknown:
                 errors.append(f"models {unknown} are not offered by connection {connection.id}")
+        try:
+            collect_skills(base, harness.skills)
+        except ValueError as error:
+            errors.append(str(error))
+        for server_id in harness.mcp:
+            server = platform.mcp_server(server_id)
+            if server is None:
+                errors.append(f"MCP server {server_id} is not configured in the onboarding repository")
+            elif server.teams != "*" and team.id not in server.teams:
+                errors.append(f"team {team.id} may not use MCP server {server_id}")
+            elif server.credential and not self.team_may_use(platform, team, server.credential):
+                errors.append(f"MCP server {server_id} needs credential {server.credential}, which team {team.id} may not use")
         return errors
 
     def _check_workflow(self, platform: PlatformSpec, team: TeamEntry, base: Path, loaded: dict, workflow: WorkflowSpec) -> list[str]:
         errors = []
         activity = CATALOG.get(workflow.activity)
         if activity is None:
-            return [f"unknown marketplace activity {workflow.activity}"]
+            return [f"unknown activity {workflow.activity}"]
         for kind, ref in (("agents", workflow.agent), ("harnesses", workflow.harness)):
             if ref not in loaded[kind]:
                 errors.append(f"{kind[:-1]} {ref} does not exist")
@@ -329,11 +355,48 @@ class PlatformRegistry:
                     f"{git.host_of(repository.url)} (see secret_hosts in the onboarding repository)"
                 )
         used_secrets = {s for s in (_credentials(options), _trigger_credentials(workflow)) if s}
-        for secret in used_secrets - set(team.secrets):
-            errors.append(f"secret {secret} is not granted to team {team.id} in the onboarding repository")
+        for secret in sorted(used_secrets):
+            if not self.team_may_use(platform, team, secret):
+                errors.append(f"credential {secret} is not granted to team {team.id} in the onboarding repository")
+        if workflow.trigger.type != "manual":
+            harness = loaded["harnesses"].get(workflow.harness)
+            needed = set(used_secrets)
+            if harness and harness.valid:
+                needed |= set(self.harness_credentials(platform, HarnessSpec.model_validate(harness.spec)))
+            for secret in sorted(needed):
+                declared = platform.credential(secret)
+                if declared and declared.provided_by == "user":
+                    errors.append(f"runs automatically, but credential {secret} only has personal values; use provided_by platform_or_user")
         if isinstance(workflow.trigger, PullRequestTrigger) and workflow.activity != "review":
             errors.append("pull_request triggers can only start the review activity")
         return errors
+
+
+SKILLS_MAX_BYTES = 1_000_000
+
+
+def collect_skills(base: Path, skills: list[str]) -> dict[str, str]:
+    """Text files of each skill directory, keyed by <skill>/<relative path>. Refuses links and escapes."""
+    root = base.resolve()
+    files: dict[str, str] = {}
+    total = 0
+    for relative in skills:
+        directory = (root / relative).resolve()
+        if not directory.is_relative_to(root) or not (directory / "SKILL.md").is_file():
+            raise ValueError(f"skill {relative}: no SKILL.md found in the team definitions")
+        for path in sorted(directory.rglob("*")):
+            if path.is_symlink():
+                raise ValueError(f"skill {relative}: links are not allowed ({path.relative_to(directory)})")
+            if not path.is_file():
+                continue
+            total += path.stat().st_size
+            if total > SKILLS_MAX_BYTES:
+                raise ValueError("skills are larger than 1 MB in total")
+            try:
+                files[f"{directory.name}/{path.relative_to(directory)}"] = path.read_text()
+            except UnicodeDecodeError:
+                raise ValueError(f"skill {relative}: {path.name} is not a text file") from None
+    return files
 
 
 def _inside(base: Path, relative: str) -> bool:

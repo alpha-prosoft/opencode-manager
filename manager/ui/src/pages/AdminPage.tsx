@@ -5,6 +5,9 @@ import {
   Box,
   Button,
   Chip,
+  Dialog,
+  DialogContent,
+  DialogTitle,
   Link,
   MenuItem,
   Paper,
@@ -19,11 +22,12 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import SyncIcon from "@mui/icons-material/Sync";
-import { api } from "../api";
+import { api, type AdminCredential, type ProvidedBy } from "../api";
+import { useConfirm } from "../components/ConfirmDialog";
+import CredentialForm from "../components/CredentialForm";
 import { RUN_STATUS } from "../components/Chips";
-import { ListRow, Mono, Row, Stat, StatGrid } from "../components/Data";
+import { EmptyState, ListRow, Mono, Row, Stat, StatGrid } from "../components/Data";
 import { PageHeader, PageStack, Section } from "../components/Page";
 import { dateTime, money, relativeTime, tokens } from "../components/format";
 import { useLoad } from "../hooks";
@@ -207,43 +211,162 @@ function Usage() {
   );
 }
 
-function Secrets() {
-  const secrets = useLoad(() => api.admin.secrets(), []);
+const PROVIDED_BY: Record<ProvidedBy, string> = {
+  platform: "Admins only",
+  platform_or_user: "Admins, people may use their own",
+  user: "Each person",
+};
+
+function Credentials() {
+  const credentials = useLoad(() => api.admin.credentials(), []);
+  const [editing, setEditing] = useState<AdminCredential | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const { confirm, dialog } = useConfirm();
+  const clear = (credential: AdminCredential) =>
+    confirm({
+      title: `Clear the platform value of ${credential.name}?`,
+      body: "Anything using the shared value stops working until it is set again. Values from secret files stay in place.",
+      confirm: "Clear",
+      action: () =>
+        api.admin
+          .deleteCredential(credential.id)
+          .then(credentials.reload)
+          .catch((e: Error) => setError(e.message)),
+    });
   return (
     <Section
-      title="Secrets"
-      description="Values are never shown. Put each secret in a file under /config/secrets, or set PLATFORM_SECRET_<NAME>. Agents never receive them."
+      title="Credentials"
+      description="Declared in platform.json; values are set here and stored encrypted. Values are never shown. Secret files under /config/secrets still work as platform values."
     >
+      {error && <Alert severity="error">{error}</Alert>}
       <Paper sx={{ overflowX: "auto" }}>
         <Table>
           <TableHead>
             <TableRow>
-              <TableCell>Name</TableCell>
-              <TableCell>Status</TableCell>
+              <TableCell>Credential</TableCell>
+              <TableCell>Provided by</TableCell>
+              <TableCell>Platform value</TableCell>
+              <TableCell align="right">Personal values</TableCell>
               <TableCell>Used by</TableCell>
-              <TableCell>May be sent to</TableCell>
+              <TableCell />
             </TableRow>
           </TableHead>
           <TableBody>
-            {(secrets.data ?? []).map((secret) => (
-              <TableRow key={secret.name}>
+            {(credentials.data ?? []).map((credential) => (
+              <TableRow key={credential.id}>
                 <TableCell>
-                  <Mono>{secret.name}</Mono>
+                  <Typography sx={{ fontWeight: 600 }}>{credential.name}</Typography>
+                  <Mono>{credential.id}</Mono>
+                  {credential.hosts.length > 0 && (
+                    <Typography variant="body2" color="text.secondary">
+                      Sent only to <Mono>{credential.hosts.join(", ")}</Mono>
+                    </Typography>
+                  )}
                 </TableCell>
+                <TableCell>{PROVIDED_BY[credential.provided_by]}</TableCell>
                 <TableCell>
-                  {secret.configured ? (
-                    <Chip variant="outlined" color="success" icon={<CheckCircleIcon />} label="Set" />
+                  {credential.provided_by === "user" ? (
+                    "—"
+                  ) : credential.platform_value === "admin" ? (
+                    <Chip variant="outlined" color="success" label={`Set · ${credential.hint}`} />
+                  ) : credential.platform_value === "file" ? (
+                    <Chip variant="outlined" color="success" label="From secret file" />
                   ) : (
                     <Chip variant="outlined" color="error" label="Missing" />
                   )}
                 </TableCell>
-                <TableCell>{secret.used_by.join(", ")}</TableCell>
-                <TableCell>{secret.hosts.length ? <Mono>{secret.hosts.join(", ")}</Mono> : "—"}</TableCell>
+                <TableCell align="right">{credential.provided_by === "platform" ? "—" : credential.personal_values}</TableCell>
+                <TableCell>{credential.used_by.join(", ") || "—"}</TableCell>
+                <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
+                  {credential.provided_by !== "user" && (
+                    <Button size="small" onClick={() => setEditing(credential)}>
+                      {credential.platform_value ? "Replace" : "Set"}
+                    </Button>
+                  )}
+                  {credential.platform_value === "admin" && (
+                    <Button size="small" color="error" onClick={() => clear(credential)}>
+                      Clear
+                    </Button>
+                  )}
+                </TableCell>
               </TableRow>
             ))}
           </TableBody>
         </Table>
       </Paper>
+      <Dialog open={editing !== null} onClose={() => setEditing(null)} fullWidth maxWidth="sm">
+        {editing && (
+          <>
+            <DialogTitle>Platform value of {editing.name}</DialogTitle>
+            <DialogContent>
+              <CredentialForm
+                name={editing.name}
+                kind={editing.kind}
+                help={
+                  editing.provided_by === "platform_or_user"
+                    ? "Used by everyone who hasn't added their own, and by automated runs."
+                    : "Used by everyone and by automated runs."
+                }
+                save={(value) => api.admin.setCredential(editing.id, value)}
+                onSaved={() => {
+                  setEditing(null);
+                  credentials.reload();
+                }}
+                extraActions={<Button onClick={() => setEditing(null)}>Cancel</Button>}
+              />
+            </DialogContent>
+          </>
+        )}
+      </Dialog>
+      {dialog}
+    </Section>
+  );
+}
+
+function McpServers() {
+  const servers = useLoad(() => api.admin.mcpServers(), []);
+  return (
+    <Section
+      title="MCP servers"
+      description="Declared in platform.json. Sandboxes reach them only through the platform gateway, which adds credentials, enforces the tool list and records every call in the audit trail."
+    >
+      {servers.data?.length === 0 && (
+        <EmptyState title="No MCP servers">Add mcp_servers to platform.json in the onboarding repository.</EmptyState>
+      )}
+      {(servers.data?.length ?? 0) > 0 && (
+        <Paper>
+          {(servers.data ?? []).map((server) => (
+            <ListRow key={server.id}>
+              <Box sx={{ flexGrow: 1 }}>
+                <Row>
+                  <Typography variant="h3">{server.name}</Typography>
+                  <Chip
+                    variant="outlined"
+                    color={server.reachable ? "success" : "error"}
+                    label={server.reachable ? "Reachable" : `Unreachable (${server.detail})`}
+                  />
+                  {!server.credential_ready && <Chip variant="outlined" color="error" label={`${server.credential} missing`} />}
+                </Row>
+                <Typography variant="body2" color="text.secondary">
+                  {server.description}
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  <Mono>{server.url}</Mono>
+                  {server.credential && (
+                    <>
+                      {" "}
+                      · credential <Mono>{server.credential}</Mono>
+                    </>
+                  )}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  Tools: {server.tools ? server.tools.join(", ") : "all"} · used by {server.harnesses.join(", ") || "no harness yet"}
+                </Typography>
+              </Box>
+            </ListRow>
+          ))}
+        </Paper>
+      )}
     </Section>
   );
 }
@@ -392,7 +515,8 @@ const TABS = [
   ["Usage & cost", Usage],
   ["Teams", Teams],
   ["LLM connections", Connections],
-  ["Secrets", Secrets],
+  ["Credentials", Credentials],
+  ["MCP servers", McpServers],
   ["Background jobs", Schedules],
 ] as const;
 

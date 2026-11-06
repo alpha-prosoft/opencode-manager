@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import sqlite3
 from dataclasses import asdict
 from pathlib import Path
 
@@ -8,6 +9,8 @@ from .backends.base import SESSION_UID, config_subpath, session_subpath
 from .platform.harness import Sandbox
 
 SESSION_DIRS = ("home", "workspace")
+OPENCODE_DATA = "home/.local/share/opencode"
+OPENCODE_DB_FILES = ("opencode.db", "opencode.db-wal", "opencode.db-shm")
 
 
 class SharedStorage:
@@ -33,6 +36,18 @@ class SharedStorage:
             if not path.is_symlink():
                 os.chown(path, SESSION_UID, SESSION_UID)
 
+    def copy_session(self, source_id: str, target_id: str) -> None:
+        """Copy files and OpenCode's database; the database is copied with SQLite's backup API so a live source is safe."""
+        source, target = self.session_dir(source_id), self.session_dir(target_id)
+        for name in SESSION_DIRS:
+            shutil.copytree(source / name, target / name, symlinks=True, dirs_exist_ok=True, ignore=shutil.ignore_patterns(*OPENCODE_DB_FILES, "log"))
+        database = source / OPENCODE_DATA / "opencode.db"
+        if database.is_file():
+            (target / OPENCODE_DATA).mkdir(parents=True, exist_ok=True)
+            with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as src, sqlite3.connect(target / OPENCODE_DATA / "opencode.db") as dst:
+                src.backup(dst)
+        self.hand_over(target_id)
+
     def write_sandbox(self, session_id: str, sandbox: Sandbox) -> None:
         mount = self.root / config_subpath(session_id)
         shutil.rmtree(mount, ignore_errors=True)
@@ -52,6 +67,10 @@ class SharedStorage:
         if not path.is_file():
             return None
         return Sandbox(**json.loads(path.read_text()))
+
+    def mcp_servers(self, session_id: str) -> list[str]:
+        sandbox = self.load_sandbox(session_id)
+        return sandbox.mcp_servers if sandbox else []
 
     def remove(self, session_id: str) -> None:
         shutil.rmtree(self.session_dir(session_id), ignore_errors=True)

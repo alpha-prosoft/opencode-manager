@@ -9,6 +9,7 @@ from app.config import Settings
 from app.db import Database
 from app.platform import harness
 from app.platform.audit import AuditStore
+from app.platform.credentials import PLATFORM_OWNER
 from app.platform.registry import PlatformRegistry
 from app.platform.secrets import SecretStore
 from app.platform.spec import AgentSpec, HarnessSpec, PlatformSpec, WorkflowSpec
@@ -300,3 +301,111 @@ def test_monitor_plugin_is_generated_with_policy_and_scoped_key():
     assert harness.verify_key("signing", "telemetry", key) == "s1"
     assert harness.verify_key("signing", "llm", key) is None
     assert "OPENCODE_PURE" not in sandbox.env and sandbox.env["OPENCODE_DISABLE_DEFAULT_PLUGINS"] == "1"
+
+
+def vault_env(tmp_path, credentials: list[dict], secret_file: str | None = None):
+    from app.platform.credentials import Credentials, CredentialVault
+
+    settings = Settings(database_path=str(tmp_path / "db.sqlite"), secrets_dir=str(tmp_path / "secrets"))
+    (tmp_path / "secrets").mkdir(exist_ok=True)
+    if secret_file:
+        (tmp_path / "secrets" / "TOKEN").write_text(secret_file)
+    db = Database(settings.database_path)
+    secrets = SecretStore(settings)
+    secrets.vault = CredentialVault(settings, db)
+    spec = PlatformSpec.model_validate({"credentials": credentials})
+    return Credentials(secrets.vault, secrets, lambda: spec), db
+
+
+def test_credentials_are_encrypted_and_bound_to_their_owner(tmp_path):
+    credentials, db = vault_env(tmp_path, [{"id": "TOKEN", "name": "Token", "provided_by": "user"}])
+    credentials.vault.put("TOKEN", "alice", {"secret": "alice-secret-value"}, "alice")
+    assert b"alice-secret-value" not in (tmp_path / "db.sqlite").read_bytes()
+    with db.connect() as conn:
+        conn.execute("UPDATE credential_values SET owner = 'mallory' WHERE owner = 'alice'")
+    with pytest.raises(Exception):
+        credentials.vault.get("TOKEN", "mallory")
+
+
+def test_credential_resolution_follows_provided_by(tmp_path):
+    credentials, _ = vault_env(
+        tmp_path,
+        [
+            {"id": "TOKEN", "name": "Shared", "provided_by": "platform_or_user"},
+            {"id": "MINE", "name": "Mine", "provided_by": "user"},
+            {"id": "ADMIN", "name": "Admin", "provided_by": "platform"},
+        ],
+        secret_file="platform-value",
+    )
+    vault = credentials.vault
+    assert credentials.resolve("TOKEN", "bob").source == "platform"
+    vault.put("TOKEN", "bob", {"secret": "bob-value"}, "bob")
+    assert (credentials.resolve("TOKEN", "bob").secret, credentials.resolve("TOKEN", "bob").source) == ("bob-value", "user")
+    assert credentials.resolve("TOKEN", None).secret == "platform-value"
+    assert credentials.resolve("MINE", "bob") is None
+    vault.put("MINE", PLATFORM_OWNER, {"secret": "never-used"}, "admin")
+    assert credentials.resolve("MINE", "bob") is None
+    vault.put("ADMIN", "bob", {"secret": "ignored"}, "bob")
+    vault.put("ADMIN", PLATFORM_OWNER, {"secret": "admin-value"}, "admin")
+    assert credentials.resolve("ADMIN", "bob").secret == "admin-value"
+
+
+def test_mcp_servers_need_declared_credentials_and_allowed_hosts():
+    base = {"credentials": [{"id": "TOKEN", "name": "Token", "hosts": ["tools.internal"]}]}
+    server = {"id": "tools", "name": "Tools", "url": "http://tools.internal/mcp", "credential": "TOKEN"}
+    PlatformSpec.model_validate({**base, "mcp_servers": [server]})
+    with pytest.raises(ValidationError, match="may not be sent"):
+        PlatformSpec.model_validate({**base, "mcp_servers": [{**server, "url": "https://evil.example/mcp"}]})
+    with pytest.raises(ValidationError, match="undeclared credential"):
+        PlatformSpec.model_validate({"mcp_servers": [server]})
+
+
+def test_automated_workflows_cannot_rely_on_personal_credentials(platform_env):
+    build, platform, _ = platform_env
+    spec = platform(secrets=[])
+    spec["credentials"] = [{"id": "TOKEN", "name": "Token", "hosts": ["tools.internal"], "provided_by": "user"}]
+    spec["mcp_servers"] = [{"id": "tools", "name": "Tools", "url": "http://tools.internal/", "credential": "TOKEN"}]
+    workflow = {"name": "Nightly", "activity": "analysis", "agent": "a", "harness": "h", "trigger": {"type": "schedule", "every_minutes": 60}}
+    registry, _ = build(
+        spec,
+        {"agents/a.json": json.dumps(AGENT), "harnesses/h.json": json.dumps({**HARNESS, "mcp": ["tools"]}), "workflows/w.json": json.dumps(workflow)},
+    )
+    assert any("only has personal values" in e for e in errors(registry, "workflows", "w"))
+
+
+def test_skills_are_collected_without_links_or_escapes(tmp_path):
+    from app.platform.registry import collect_skills
+
+    skill = tmp_path / "skills" / "triage"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("---\nname: triage\ndescription: x\n---\n")
+    assert collect_skills(tmp_path, ["skills/triage"]) == {"triage/SKILL.md": "---\nname: triage\ndescription: x\n---\n"}
+    with pytest.raises(ValueError, match="no SKILL.md"):
+        collect_skills(tmp_path, ["../"])
+    (skill / "secret").symlink_to("/etc/passwd")
+    with pytest.raises(ValueError, match="links are not allowed"):
+        collect_skills(tmp_path, ["skills/triage"])
+
+
+def test_private_sessions_are_not_visible_to_team_members():
+    from datetime import UTC, datetime
+
+    from app.models import Identity, SessionRecord, Visibility
+    from app.sessions import SessionService
+
+    roles = {("member", "team"): "member", ("lead", "team"): "admin"}
+    service = SessionService(Settings(), None, None, None, None, team_role=lambda user, team: roles.get((user, team)))
+    stamp = datetime.now(UTC)
+    record = SessionRecord(
+        id="s1", sub="owner", email="o@x", name="n", image="", team_id="team", visibility=Visibility.PRIVATE,
+        secret_key="k", created_at=stamp, last_activity_at=stamp,
+    )
+    who = lambda name: Identity(sub=name, email=f"{name}@x")  # noqa: E731
+    assert service.can_view(record, who("owner")) and service.can_open(record, who("owner"))
+    assert not service.can_view(record, who("member"))
+    assert service.can_view(record, who("lead")) and service.open_blocked(record, who("lead")) == "private"
+    service.personal = lambda r: True
+    team_record = record.model_copy(update={"visibility": Visibility.TEAM})
+    assert service.open_blocked(team_record, who("member")) == "personal"
+    locked = record.model_copy(update={"locked_at": stamp})
+    assert service.open_blocked(locked, who("owner")) == "locked"

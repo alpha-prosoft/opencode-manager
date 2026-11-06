@@ -32,6 +32,7 @@ class SessionService:
         routes: RouteProvider,
         storage: SharedStorage,
         team_role: Callable[[str, str], str | None] = lambda username, team: None,
+        is_admin: Callable[[str], bool] = lambda username: False,
     ):
         self.settings = settings
         self.store = store
@@ -39,6 +40,8 @@ class SessionService:
         self.routes = routes
         self.storage = storage
         self.team_role = team_role
+        self.is_admin = is_admin
+        self.personal: Callable[[SessionRecord], bool] = lambda record: False
         self._locks: defaultdict[str, threading.Lock] = defaultdict(threading.Lock)
         self._ready: set[str] = set()
         self._last_touch: dict[str, float] = {}
@@ -46,24 +49,46 @@ class SessionService:
     def session_url(self, record: SessionRecord) -> str:
         return self.settings.public_url(self.settings.session_host(record.id))
 
-    def open_path(self, record: SessionRecord) -> str:
-        return opencode.web_path(WORKSPACE_DIR, record.labels.get(CONVERSATION_LABEL))
+    def open_path(self, record: SessionRecord, conversation: str | None = None) -> str:
+        return opencode.web_path(WORKSPACE_DIR, conversation or record.labels.get(CONVERSATION_LABEL))
 
     def entry_path(self, record: SessionRecord) -> str:
         return f"/sessions/{quote(record.sub, safe='')}/{record.id}"
 
+    def manager_page(self, record: SessionRecord) -> str:
+        return self.settings.public_url(self.settings.domain) + f"/sessions/{record.id}"
+
     def entry_url(self, record: SessionRecord) -> str:
         return self.settings.public_url(self.settings.domain) + self.entry_path(record)
 
+    def _team_role(self, record: SessionRecord, identity: Identity) -> str | None:
+        return self.team_role(identity.sub, record.team_id) if record.team_id else None
+
     def can_view(self, record: SessionRecord, identity: Identity) -> bool:
-        if record.sub == identity.sub or record.visibility == Visibility.PUBLIC:
+        """See the session, its activity and audit trail."""
+        if record.sub == identity.sub or record.visibility == Visibility.PUBLIC or self.is_admin(identity.sub):
             return True
-        return bool(record.team_id and self.team_role(identity.sub, record.team_id))
+        role = self._team_role(record, identity)
+        return role == "admin" or (role is not None and record.visibility == Visibility.TEAM)
 
     def can_manage(self, record: SessionRecord, identity: Identity) -> bool:
+        """Stop, delete, change sharing."""
+        return record.sub == identity.sub or self.is_admin(identity.sub) or self._team_role(record, identity) == "admin"
+
+    def open_blocked(self, record: SessionRecord, identity: Identity) -> str | None:
+        """Why this person may not work in the live session, or None when they may."""
+        if record.locked_at:
+            return "locked"
         if record.sub == identity.sub:
-            return True
-        return bool(record.team_id and self.team_role(identity.sub, record.team_id) == "admin")
+            return None
+        if self.personal(record):
+            return "personal"
+        if record.visibility == Visibility.PRIVATE:
+            return "private"
+        return None if self.can_view(record, identity) else "hidden"
+
+    def can_open(self, record: SessionRecord, identity: Identity) -> bool:
+        return self.open_blocked(record, identity) is None
 
     def session_id_from_host(self, host: str) -> str | None:
         hostname = host.split(":", 1)[0].lower()
@@ -74,7 +99,11 @@ class SessionService:
         return session_id if session_id.isalnum() else None
 
     def view(self, record: SessionRecord, identity: Identity, statuses: dict[str, SessionStatus]) -> Session:
+        blocked = self.open_blocked(record, identity)
         return Session(
+            can_open=blocked is None,
+            open_blocked=blocked,
+            personal=self.personal(record),
             **record.model_dump(),
             secret_key=record.secret_key,
             status=statuses.get(record.id, SessionStatus.STOPPED),
@@ -145,7 +174,14 @@ class SessionService:
     def is_active(self, session_id: str) -> bool:
         return self.backend.status(session_id) in ACTIVE
 
+    def lock(self, record: SessionRecord, identity: Identity) -> None:
+        if self.is_active(record.id):
+            self.stop(record.id)
+        self.store.update(record.id, {"locked_by": identity.sub, "locked_at": datetime.now(UTC).isoformat()})
+
     def start(self, record: SessionRecord) -> None:
+        if record.locked_at:
+            raise RuntimeError(f"Session {record.id} is locked")
         sandbox = self.storage.load_sandbox(record.id)
         if sandbox is None:
             raise RuntimeError(f"Session {record.id} has no sandbox configuration")

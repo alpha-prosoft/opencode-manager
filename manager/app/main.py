@@ -18,12 +18,14 @@ from .platform.gateway import router as llm_router
 from .platform.registry import PlatformRegistry
 from .platform.runner import RunService
 from .platform.runs import RunStore
+from .platform.credentials import Credentials, CredentialVault
 from .platform.secrets import SecretStore
 from .platform.telemetry import TelemetryStore
 from .platform.telemetry import router as telemetry_router
 from .platform.triggers import TriggerService
 from .platform.usage import UsageStore
-from .routes import admin, api, gateway
+from .platform import mcp_gateway
+from .routes import admin, api, credentials, gateway
 from .routing import FORWARD_AUTH_PATH, create_route_provider
 from .sessions import SessionService
 from .storage import SharedStorage
@@ -59,7 +61,9 @@ def build_platform() -> Platform:
     settings = get_settings()
     db = Database(settings.database_path)
     secrets = SecretStore(settings)
+    secrets.vault = CredentialVault(settings, db)
     registry = PlatformRegistry(settings, db, secrets)
+    credentials = Credentials(secrets.vault, secrets, registry.platform)
     backend = create_backend(settings)
     sessions = SessionService(
         settings,
@@ -68,15 +72,18 @@ def build_platform() -> Platform:
         create_route_provider(settings, backend),
         SharedStorage(settings.shared_mount_path),
         team_role=registry.role,
+        is_admin=registry.is_platform_admin,
     )
+    sessions.personal = lambda record: credentials.uses_personal(record.sub, sessions.storage.mcp_servers(record.id))
     runs = RunStore(db)
     key = signing_key()
-    runner = RunService(settings, registry, sessions, runs, secrets, key)
+    runner = RunService(settings, registry, sessions, runs, secrets, key, credentials)
     audit = AuditStore(db)
     return Platform(
         settings=settings,
         signing_key=key,
         secrets=secrets,
+        credentials=credentials,
         registry=registry,
         sessions=sessions,
         runs=runs,
@@ -132,6 +139,8 @@ async def wake_session_hosts(request: Request, call_next):
 app.include_router(api.router)
 app.include_router(api.metrics_router)
 app.include_router(admin.router)
+app.include_router(credentials.router)
+app.include_router(mcp_gateway.router)
 app.include_router(gateway.router)
 app.include_router(llm_router)
 app.include_router(telemetry_router)

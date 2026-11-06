@@ -23,7 +23,9 @@ import {
 import AdminPanelSettingsOutlinedIcon from "@mui/icons-material/AdminPanelSettingsOutlined";
 import GroupsOutlinedIcon from "@mui/icons-material/GroupsOutlined";
 import HistoryIcon from "@mui/icons-material/History";
+import HandymanOutlinedIcon from "@mui/icons-material/HandymanOutlined";
 import HomeOutlinedIcon from "@mui/icons-material/HomeOutlined";
+import KeyOutlinedIcon from "@mui/icons-material/KeyOutlined";
 import HubOutlinedIcon from "@mui/icons-material/HubOutlined";
 import LogoutIcon from "@mui/icons-material/Logout";
 import MenuIcon from "@mui/icons-material/Menu";
@@ -49,8 +51,13 @@ const NAV = [
     group: "Library",
     items: [
       { to: "/teams", label: "Teams", icon: <GroupsOutlinedIcon /> },
+      { to: "/harnesses", label: "Harnesses", icon: <HandymanOutlinedIcon /> },
       { to: "/activities", label: "Activities", icon: <WidgetsOutlinedIcon /> },
     ],
+  },
+  {
+    group: "You",
+    items: [{ to: "/accounts", label: "Accounts", icon: <KeyOutlinedIcon /> }],
   },
 ];
 

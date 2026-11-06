@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Avatar, Box, Paper, Stack, Table, TableBody, TableCell, TableRow, Typography } from "@mui/material";
+import { Alert, Avatar, Box, Paper, Stack, Table, TableBody, TableCell, TableRow, Typography } from "@mui/material";
 import type { SvgIconComponent } from "@mui/icons-material";
 
 export function EmptyState({ title, children }: { title: string; children?: ReactNode }) {
@@ -105,3 +105,16 @@ export function IconTile({ icon: Icon }: { icon: SvgIconComponent }) {
 }
 
 export const WIDE_ONLY = { display: { xs: "none", md: "table-cell" } } as const;
+
+export function DefinitionErrorsList({ errors }: { errors: string[] }) {
+  if (errors.length === 0) return null;
+  return (
+    <Alert severity="warning">
+      <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
+        {errors.map((error) => (
+          <li key={error}>{error}</li>
+        ))}
+      </Box>
+    </Alert>
+  );
+}

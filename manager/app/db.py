@@ -126,6 +126,28 @@ MIGRATIONS = [
     CREATE INDEX telemetry_session ON telemetry (session_id, id);
     ALTER TABLE runs ADD COLUMN cancelled_by TEXT;
     """,
+    """
+    CREATE TABLE credential_values (
+        credential_id TEXT NOT NULL,
+        owner TEXT NOT NULL,
+        nonce BLOB NOT NULL,
+        ciphertext BLOB NOT NULL,
+        hint TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        updated_by TEXT NOT NULL,
+        verified_at TEXT,
+        PRIMARY KEY (credential_id, owner)
+    );
+    CREATE TABLE credential_prompts (
+        username TEXT NOT NULL,
+        credential_id TEXT NOT NULL,
+        seen_at TEXT NOT NULL,
+        PRIMARY KEY (username, credential_id)
+    );
+    ALTER TABLE sessions ADD COLUMN locked_by TEXT;
+    ALTER TABLE sessions ADD COLUMN locked_at TEXT;
+    ALTER TABLE sessions ADD COLUMN forked_from TEXT;
+    """,
 ]
 
 

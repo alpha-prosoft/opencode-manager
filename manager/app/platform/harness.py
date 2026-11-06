@@ -46,6 +46,7 @@ class Sandbox:
     team_id: str
     run_id: str | None = None
     idle_minutes: int = 15
+    mcp_servers: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
     files: dict[str, str] = field(default_factory=dict)
 
@@ -60,6 +61,7 @@ def opencode_config(
     interactive: bool,
     llm_key: str,
     mcp_key: str | None,
+    tools_key: str | None = None,
 ) -> dict:
     models = harness.llm.models
     model = f"{PROVIDER_ID}/{models[0]}"
@@ -102,6 +104,14 @@ def opencode_config(
             "oauth": False,
             "enabled": True,
         }
+    for server_id in harness.mcp:
+        config["mcp"][server_id] = {
+            "type": "remote",
+            "url": f"{settings.manager_service_url}/mcp-gw/{server_id}",
+            "headers": {"X-Platform-Key": tools_key},
+            "oauth": False,
+            "enabled": True,
+        }
     return config
 
 
@@ -121,6 +131,7 @@ def sandbox(
     team_id: str,
     run_id: str | None,
     telemetry_key: str,
+    skills: dict[str, str] | None = None,
 ) -> Sandbox:
     return Sandbox(
         image=harness.image or settings.session_image,
@@ -133,10 +144,12 @@ def sandbox(
         team_id=team_id,
         run_id=run_id,
         idle_minutes=harness.idle_minutes,
+        mcp_servers=list(harness.mcp),
         env={**LOCKDOWN_ENV, "OPENCODE_SERVER_PASSWORD": password},
         files={
             "opencode/opencode.json": json.dumps(config, indent=2),
             "opencode/.gitignore": OPENCODE_GITIGNORE,
             "opencode/plugins/platform-monitor.js": monitor_plugin(settings, telemetry_key, harness),
+            **{f"opencode/skills/{path}": content for path, content in (skills or {}).items()},
         },
     )
