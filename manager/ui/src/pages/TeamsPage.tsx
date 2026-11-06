@@ -1,60 +1,57 @@
 import { Link as RouterLink } from "react-router";
-import { Alert, Chip, Link, Paper, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography } from "@mui/material";
-import { api } from "../api";
+import { Alert, Card, CardActionArea, CardContent, Box, Chip, Stack, Typography } from "@mui/material";
+import { api, type TeamSummary } from "../api";
+import { RoleChip } from "../components/Chips";
+import { EmptyState, Row } from "../components/Data";
+import { PageHeader, PageStack } from "../components/Page";
 import { relativeTime } from "../components/format";
 import { useLoad } from "../hooks";
+
+export function sourceLabel(team: TeamSummary): string {
+  const repo = team.repository;
+  const kind = { git: "Git", url: "Archive", path: "Local folder" }[repo.type];
+  return `${kind}: ${repo.url ?? repo.location}${repo.branch ? ` (${repo.branch})` : ""}`;
+}
 
 export default function TeamsPage() {
   const teams = useLoad(() => api.teams(), []);
   return (
-    <Stack spacing={3}>
-      <Typography variant="h4">Teams</Typography>
+    <PageStack>
+      <PageHeader
+        title="Teams"
+        description="Each team keeps its agents, harnesses and workflows as JSON in its own repository. The platform syncs them every few minutes."
+      />
       {teams.error && <Alert severity="error">{teams.error}</Alert>}
-      <Paper variant="outlined">
-        <Table>
-          <TableHead>
-            <TableRow>
-              <TableCell>Team</TableCell>
-              <TableCell>Repository</TableCell>
-              <TableCell>Definitions</TableCell>
-              <TableCell>Synced</TableCell>
-              <TableCell>Your role</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {(teams.data ?? []).map((team) => (
-              <TableRow key={team.id} hover>
-                <TableCell>
-                  <Link component={RouterLink} to={`/teams/${team.id}`}>
+      {teams.data?.length === 0 && (
+        <EmptyState title="You're not in any team">A platform admin adds teams and members in the onboarding repository.</EmptyState>
+      )}
+      <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))" }}>
+        {(teams.data ?? []).map((team) => (
+          <Card key={team.id}>
+            <CardActionArea component={RouterLink} to={`/teams/${team.id}`} sx={{ height: "100%" }}>
+              <CardContent component={Stack} spacing={1}>
+                <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+                  <Typography variant="h3" sx={{ flexGrow: 1 }}>
                     {team.name}
-                  </Link>
-                  <Typography variant="body2" color="text.secondary">
-                    {team.description}
                   </Typography>
-                </TableCell>
-                <TableCell sx={{ fontFamily: "monospace", fontSize: "0.85rem" }}>
-                  {team.repository.type}: {team.repository.url ?? team.repository.location}
-                  <br />
-                  {team.repository.branch ? `${team.repository.branch} · ` : ""}
-                  {team.commit?.slice(0, 16)}
-                </TableCell>
-                <TableCell>
-                  <Stack direction="row" spacing={0.5} useFlexGap sx={{ flexWrap: "wrap" }}>
-                    <Chip size="small" label={`${team.counts.workflows} workflows`} />
-                    <Chip size="small" label={`${team.counts.agents} agents`} variant="outlined" />
-                    <Chip size="small" label={`${team.counts.harnesses} harnesses`} variant="outlined" />
-                    {team.invalid > 0 && <Chip size="small" color="warning" label={`${team.invalid} invalid`} />}
-                  </Stack>
-                </TableCell>
-                <TableCell>
-                  {team.status === "error" ? <Chip size="small" color="error" label="sync error" /> : relativeTime(team.synced_at)}
-                </TableCell>
-                <TableCell>{team.role}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </Paper>
-    </Stack>
+                  <RoleChip role={team.role} />
+                </Stack>
+                <Typography variant="body2" color="text.secondary">
+                  {team.description}
+                </Typography>
+                <Row>
+                  <Chip label={`${team.counts.workflows} workflows`} />
+                  {team.invalid > 0 && <Chip color="warning" variant="outlined" label={`${team.invalid} with problems`} />}
+                  {team.status === "error" && <Chip color="error" variant="outlined" label="Sync failed" />}
+                </Row>
+                <Typography variant="caption" color="text.secondary" noWrap>
+                  {sourceLabel(team)} · synced {relativeTime(team.synced_at)}
+                </Typography>
+              </CardContent>
+            </CardActionArea>
+          </Card>
+        ))}
+      </Box>
+    </PageStack>
   );
 }

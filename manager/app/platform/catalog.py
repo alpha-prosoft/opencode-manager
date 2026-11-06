@@ -86,7 +86,7 @@ CATALOG: dict[str, Activity] = {
     for activity in [
         Activity(
             id="session",
-            name="Interactive session",
+            name="Workspace",
             category="Workspace",
             description="A personal OpenCode workspace in the browser, optionally with a repository checked out.",
             icon="terminal",
@@ -111,7 +111,7 @@ CATALOG: dict[str, Activity] = {
         ),
         Activity(
             id="implement",
-            name="Implement change",
+            name="Implementation",
             category="Engineering",
             description="Implements a task in a repository and returns a reviewed patch. Nothing is pushed.",
             icon="build",
@@ -122,7 +122,7 @@ CATALOG: dict[str, Activity] = {
         ),
         Activity(
             id="analysis",
-            name="Business analysis",
+            name="Analysis",
             category="Discovery",
             description="Turns a brief into a structured analysis document (requirements, risks, open questions).",
             icon="description",

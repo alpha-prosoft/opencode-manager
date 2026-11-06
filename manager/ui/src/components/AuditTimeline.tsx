@@ -1,24 +1,31 @@
 import { useEffect, useState } from "react";
-import { Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, Chip, Stack, Typography } from "@mui/material";
+import { Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, Stack, Typography } from "@mui/material";
 import DownloadIcon from "@mui/icons-material/Download";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
-import VerifiedIcon from "@mui/icons-material/Verified";
 import { api, type AuditEvent } from "../api";
+import { CodeBlock, EmptyState, Mono } from "./Data";
 import Markdown from "./Markdown";
+
+const TYPE_NAMES: Record<string, string> = {
+  message: "Message",
+  text: "Text",
+  reasoning: "Thinking",
+  tool: "Tool call",
+  conversation: "Conversation",
+};
 
 function summary(event: AuditEvent): string {
   const p = event.payload;
   switch (event.type) {
     case "message":
-      return `${p.role} message${p.tokens ? ` · ${p.tokens.input ?? 0} in / ${p.tokens.output ?? 0} out tokens` : ""}`;
+      return `${p.role === "user" ? "Prompt" : "Agent reply"}${p.tokens ? `, ${p.tokens.input ?? 0} tokens in, ${p.tokens.output ?? 0} out` : ""}`;
     case "text":
-      return (p.text ?? "").slice(0, 140);
     case "reasoning":
-      return `reasoning: ${(p.text ?? "").slice(0, 120)}`;
+      return (p.text ?? "").slice(0, 160);
     case "tool":
-      return `${p.tool} · ${p.state?.status}${p.state?.title ? ` · ${p.state.title}` : ""}`;
+      return `${p.tool}: ${p.state?.title ?? p.state?.status ?? ""}`;
     case "conversation":
-      return `conversation “${p.title}”`;
+      return `“${p.title}”`;
     default:
       return event.type;
   }
@@ -30,33 +37,18 @@ function Detail({ event }: { event: AuditEvent }) {
   if (event.type === "tool") {
     return (
       <Stack spacing={1}>
-        <Typography variant="caption">Input</Typography>
-        <Box component="pre" sx={{ m: 0, p: 1, bgcolor: "action.hover", borderRadius: 1, overflowX: "auto", fontSize: "0.8rem" }}>
-          {JSON.stringify(p.state?.input, null, 2)}
-        </Box>
-        <Typography variant="caption">Output</Typography>
-        <Box component="pre" sx={{ m: 0, p: 1, bgcolor: "action.hover", borderRadius: 1, overflowX: "auto", maxHeight: 300, fontSize: "0.8rem" }}>
-          {String(p.state?.output ?? p.state?.error ?? "").slice(0, 20000)}
-        </Box>
+        <Typography variant="label">Input</Typography>
+        <CodeBlock>{JSON.stringify(p.state?.input, null, 2)}</CodeBlock>
+        <Typography variant="label">Output</Typography>
+        <CodeBlock maxHeight={320}>{String(p.state?.output ?? p.state?.error ?? "").slice(0, 20000)}</CodeBlock>
       </Stack>
     );
   }
-  return (
-    <Box component="pre" sx={{ m: 0, overflowX: "auto", fontSize: "0.8rem" }}>
-      {JSON.stringify(p, null, 2)}
-    </Box>
-  );
+  return <CodeBlock>{JSON.stringify(p, null, 2)}</CodeBlock>;
 }
 
-const COLORS: Record<string, "primary" | "secondary" | "success" | "default" | "info"> = {
-  message: "primary",
-  text: "success",
-  tool: "secondary",
-  reasoning: "info",
-};
-
 export default function AuditTimeline({ sessionId }: { sessionId: string }) {
-  const [events, setEvents] = useState<AuditEvent[]>([]);
+  const [events, setEvents] = useState<AuditEvent[] | null>(null);
   const [verification, setVerification] = useState<{ valid: boolean; checked: number } | null>(null);
 
   useEffect(() => {
@@ -64,40 +56,46 @@ export default function AuditTimeline({ sessionId }: { sessionId: string }) {
     api.verifyAudit(sessionId).then(setVerification);
   }, [sessionId]);
 
+  if (events && events.length === 0) {
+    return <EmptyState title="No audit records yet">Messages and tool calls are recorded here as the agent works.</EmptyState>;
+  }
   return (
     <Stack spacing={2}>
-      <Stack direction="row" spacing={2} sx={{ alignItems: "center", flexWrap: "wrap" }} useFlexGap>
+      <Stack direction={{ xs: "column", sm: "row" }} spacing={2} sx={{ alignItems: { sm: "center" } }}>
         {verification && (
-          <Alert icon={<VerifiedIcon />} severity={verification.valid ? "success" : "error"} sx={{ flexGrow: 1 }}>
+          <Alert severity={verification.valid ? "success" : "error"} sx={{ flexGrow: 1 }}>
             {verification.valid
-              ? `Hash chain intact: ${verification.checked} events recorded on the host, append-only.`
-              : "Hash chain broken: the audit trail was modified."}
+              ? `Verified: all ${verification.checked} records are intact. They are stored outside the sandbox and can't be edited.`
+              : "Verification failed: records were changed after they were written."}
           </Alert>
         )}
         <Button startIcon={<DownloadIcon />} href={`/api/sessions/${sessionId}/audit/export`}>
-          Export JSONL
+          Download (JSONL)
         </Button>
       </Stack>
-      {events.length === 0 && <Typography color="text.secondary">No events recorded yet.</Typography>}
       <Box>
-        {events.map((event) => (
-          <Accordion key={event.seq} disableGutters variant="outlined">
+        {(events ?? []).map((event) => (
+          <Accordion key={event.seq}>
             <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-              <Stack direction="row" spacing={1.5} sx={{ alignItems: "center", minWidth: 0 }}>
-                <Typography variant="caption" color="text.secondary" sx={{ minWidth: 72 }}>
+              <Stack direction="row" spacing={2} sx={{ alignItems: "baseline", minWidth: 0 }}>
+                <Typography variant="body2" color="text.secondary" sx={{ minWidth: 76 }}>
                   {new Date(event.ts).toLocaleTimeString()}
                 </Typography>
-                <Chip size="small" label={event.type} color={COLORS[event.type] ?? "default"} variant="outlined" />
+                <Typography variant="body2" sx={{ minWidth: 92, fontWeight: 600 }}>
+                  {TYPE_NAMES[event.type] ?? event.type}
+                </Typography>
                 <Typography variant="body2" noWrap>
                   {summary(event)}
                 </Typography>
               </Stack>
             </AccordionSummary>
             <AccordionDetails>
-              <Detail event={event} />
-              <Typography variant="caption" color="text.secondary" sx={{ fontFamily: "monospace", display: "block", mt: 1 }}>
-                #{event.seq} · sha256 {event.hash.slice(0, 16)}…
-              </Typography>
+              <Stack spacing={1}>
+                <Detail event={event} />
+                <Typography variant="caption" color="text.secondary">
+                  Record {event.seq}, fingerprint <Mono>{event.hash.slice(0, 16)}</Mono>
+                </Typography>
+              </Stack>
             </AccordionDetails>
           </Accordion>
         ))}

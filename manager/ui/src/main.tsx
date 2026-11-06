@@ -1,20 +1,19 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { createBrowserRouter, RouterProvider } from "react-router";
-import { CssBaseline, ThemeProvider, createTheme } from "@mui/material";
+import { createBrowserRouter, Navigate, RouterProvider } from "react-router";
+import { CssBaseline, ThemeProvider } from "@mui/material";
 import App from "./App";
+import { theme } from "./theme";
 import AdminPage from "./pages/AdminPage";
 import DashboardPage from "./pages/DashboardPage";
 import LoginPage from "./pages/LoginPage";
-import MarketplacePage from "./pages/MarketplacePage";
+import ActivitiesPage from "./pages/ActivitiesPage";
 import RunPage from "./pages/RunPage";
 import RunsPage from "./pages/RunsPage";
 import SessionPage from "./pages/SessionPage";
 import SessionsPage from "./pages/SessionsPage";
 import TeamPage from "./pages/TeamPage";
 import TeamsPage from "./pages/TeamsPage";
-
-const theme = createTheme({ colorSchemes: { dark: true }, shape: { borderRadius: 10 } });
 
 const router = createBrowserRouter([
   { path: "/login", element: <LoginPage /> },
@@ -23,7 +22,8 @@ const router = createBrowserRouter([
     element: <App />,
     children: [
       { index: true, element: <DashboardPage /> },
-      { path: "marketplace", element: <MarketplacePage /> },
+      { path: "activities", element: <ActivitiesPage /> },
+      { path: "marketplace", element: <Navigate to="/activities" replace /> },
       { path: "teams", element: <TeamsPage /> },
       { path: "teams/:teamId", element: <TeamPage /> },
       { path: "runs", element: <RunsPage /> },

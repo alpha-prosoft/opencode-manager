@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router";
 import { Alert, Button, Dialog, DialogActions, DialogContent, DialogTitle, Stack, Typography } from "@mui/material";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import TerminalIcon from "@mui/icons-material/Terminal";
 import { api, type Activity, type Definition } from "../api";
 import SchemaForm from "./SchemaForm";
 
@@ -24,6 +25,7 @@ export default function RunDialog({ team, workflow, activity, onClose }: Props) 
   }, [workflow?.id]);
 
   if (!workflow || !activity) return null;
+  const interactive = activity.interactive;
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -44,9 +46,12 @@ export default function RunDialog({ team, workflow, activity, onClose }: Props) 
       <form onSubmit={submit}>
         <DialogTitle>{workflow.spec?.name}</DialogTitle>
         <DialogContent>
-          <Stack spacing={2} sx={{ mt: 1 }}>
+          <Stack spacing={2.5}>
             <Typography variant="body2" color="text.secondary">
-              {workflow.spec?.description || activity.description}
+              {workflow.spec?.description || activity.description}{" "}
+              {interactive
+                ? "A private sandbox starts with the workflow's agent; you can open it as soon as it's ready."
+                : "The agent works in its own sandbox and reports a result. You can follow it on the run page."}
             </Typography>
             <SchemaForm schema={activity.inputs_schema} value={inputs} onChange={setInputs} />
             {error && <Alert severity="error">{error}</Alert>}
@@ -54,8 +59,8 @@ export default function RunDialog({ team, workflow, activity, onClose }: Props) 
         </DialogContent>
         <DialogActions>
           <Button onClick={onClose}>Cancel</Button>
-          <Button type="submit" variant="contained" startIcon={<PlayArrowIcon />} disabled={busy}>
-            {activity.interactive ? "Launch" : "Run"}
+          <Button type="submit" variant="contained" startIcon={interactive ? <TerminalIcon /> : <PlayArrowIcon />} disabled={busy}>
+            {busy ? "Starting…" : interactive ? "Start session" : "Run"}
           </Button>
         </DialogActions>
       </form>

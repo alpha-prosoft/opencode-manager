@@ -44,7 +44,7 @@
     {
       "id": "demo",
       "name": "Demo team",
-      "description": "Sample team showing every marketplace activity.",
+      "description": "Sample team with one workflow for every activity.",
       "repository": {
         "url": "file:///repos/demo-team",
         "branch": "main"

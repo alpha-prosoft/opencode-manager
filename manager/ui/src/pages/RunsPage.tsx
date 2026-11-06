@@ -1,62 +1,46 @@
-import { Link as RouterLink } from "react-router";
-import { Alert, Link, Paper, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography } from "@mui/material";
-import { api } from "../api";
-import { ActivityChip, RunStatusChip } from "../components/Chips";
-import { relativeTime, triggerLabel } from "../components/format";
+import { useState } from "react";
+import { Alert, MenuItem, TextField } from "@mui/material";
+import { api, type RunStatus } from "../api";
+import { RUN_STATUS } from "../components/Chips";
+import { PageHeader, PageStack } from "../components/Page";
+import RunsTable from "../components/RunsTable";
+import { isActive } from "../components/format";
 import { useLoad } from "../hooks";
+
+type Filter = "all" | "active" | RunStatus;
 
 export default function RunsPage() {
   const runs = useLoad(() => api.runs(), [], 5000);
+  const [filter, setFilter] = useState<Filter>("all");
+  const shown = (runs.data ?? []).filter((run) =>
+    filter === "all" ? true : filter === "active" ? isActive(run.status) : run.status === filter,
+  );
   return (
-    <Stack spacing={3}>
-      <Typography variant="h4">Runs</Typography>
-      {runs.error && <Alert severity="error">{runs.error}</Alert>}
-      <Paper variant="outlined">
-        <Table>
-          <TableHead>
-            <TableRow>
-              <TableCell>Run</TableCell>
-              <TableCell>Activity</TableCell>
-              <TableCell>Team / workflow</TableCell>
-              <TableCell>Trigger</TableCell>
-              <TableCell>Status</TableCell>
-              <TableCell>Started</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {runs.data?.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={6} align="center" sx={{ py: 6, color: "text.secondary" }}>
-                  No runs yet.
-                </TableCell>
-              </TableRow>
-            )}
-            {(runs.data ?? []).map((run) => (
-              <TableRow key={run.id} hover>
-                <TableCell>
-                  <Link component={RouterLink} to={`/runs/${run.id}`} sx={{ fontFamily: "monospace" }}>
-                    {run.id}
-                  </Link>
-                </TableCell>
-                <TableCell>
-                  <ActivityChip activity={run.activity} />
-                </TableCell>
-                <TableCell>
-                  {run.workflow_name ?? run.workflow_id}
-                  <Typography variant="caption" color="text.secondary" component="div">
-                    {run.team_id}
-                  </Typography>
-                </TableCell>
-                <TableCell>{triggerLabel(run.trigger)}</TableCell>
-                <TableCell>
-                  <RunStatusChip status={run.status} />
-                </TableCell>
-                <TableCell>{relativeTime(run.created_at)}</TableCell>
-              </TableRow>
+    <PageStack>
+      <PageHeader
+        title="Runs"
+        description="Every workflow run in your teams: started by hand, on a schedule, or by a new pull request."
+        actions={
+          <TextField
+            select
+            size="small"
+            label="Show"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value as Filter)}
+            sx={{ minWidth: 180 }}
+          >
+            <MenuItem value="all">All runs</MenuItem>
+            <MenuItem value="active">In progress</MenuItem>
+            {(["completed", "failed", "cancelled"] as const).map((status) => (
+              <MenuItem key={status} value={status}>
+                {RUN_STATUS[status][0]}
+              </MenuItem>
             ))}
-          </TableBody>
-        </Table>
-      </Paper>
-    </Stack>
+          </TextField>
+        }
+      />
+      {runs.error && <Alert severity="error">{runs.error}</Alert>}
+      <RunsTable runs={runs.data ? shown : null} empty={filter === "all" ? undefined : "No runs match this filter."} />
+    </PageStack>
   );
 }

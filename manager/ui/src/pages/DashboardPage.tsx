@@ -1,120 +1,142 @@
+import { useState } from "react";
 import { Link as RouterLink } from "react-router";
-import { Alert, Box, Button, Card, CardActionArea, CardContent, Chip, Paper, Stack, Typography } from "@mui/material";
-import GroupsIcon from "@mui/icons-material/Groups";
+import { Alert, Box, Button, IconButton, Paper, Stack, Tooltip, Typography } from "@mui/material";
+import CloseIcon from "@mui/icons-material/Close";
 import { api } from "../api";
 import { useIdentity } from "../auth";
-import { ActivityChip, RunStatusChip, SessionStatusChip } from "../components/Chips";
-import { relativeTime, triggerLabel } from "../components/format";
+import { PageHeader, PageStack, Section } from "../components/Page";
+import RunsTable from "../components/RunsTable";
+import SessionsTable from "../components/SessionsTable";
+import WorkflowList, { type TeamWorkflow } from "../components/WorkflowList";
+import { isSessionLive } from "../components/format";
 import { useLoad } from "../hooks";
+
+const STEPS = [
+  ["Pick a workflow", "Your team defines workflows in its repository: a code review, an implementation, an analysis, or a workspace."],
+  [
+    "The agent runs in a sandbox",
+    "Each run gets its own locked-down OpenCode container with only the model, tools and network the team allows.",
+  ],
+  [
+    "Get a result",
+    "Review findings, a patch with test results, or a document. You can open the session to see exactly what the agent did.",
+  ],
+  ["Everything is recorded", "Every LLM call is metered and every message and tool call is kept in a tamper-evident audit trail."],
+];
+
+const INTRO_KEY = "intro-dismissed";
+
+function HowItWorks() {
+  const [hidden, setHidden] = useState(() => {
+    try {
+      return localStorage.getItem(INTRO_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  if (hidden) return null;
+  const dismiss = () => {
+    setHidden(true);
+    try {
+      localStorage.setItem(INTRO_KEY, "1");
+    } catch {
+      /* storage unavailable */
+    }
+  };
+  return (
+    <Paper sx={{ p: 2.5, position: "relative" }}>
+      <Tooltip title="Hide">
+        <IconButton size="small" aria-label="Hide introduction" onClick={dismiss} sx={{ position: "absolute", top: 8, right: 8 }}>
+          <CloseIcon fontSize="small" />
+        </IconButton>
+      </Tooltip>
+      <Typography variant="h2" gutterBottom>
+        How it works
+      </Typography>
+      <Box
+        component="ol"
+        sx={{
+          display: "grid",
+          gap: 2.5,
+          gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr", lg: "repeat(4, 1fr)" },
+          m: 0,
+          p: 0,
+          listStyle: "none",
+        }}
+      >
+        {STEPS.map(([title, body], index) => (
+          <Stack component="li" key={title} direction="row" spacing={1.5}>
+            <Typography variant="h3" color="primary" sx={{ minWidth: 16 }}>
+              {index + 1}
+            </Typography>
+            <Box>
+              <Typography variant="subtitle2">{title}</Typography>
+              <Typography variant="body2" color="text.secondary">
+                {body}
+              </Typography>
+            </Box>
+          </Stack>
+        ))}
+      </Box>
+    </Paper>
+  );
+}
 
 export default function DashboardPage() {
   const identity = useIdentity();
-  const teams = useLoad(() => api.teams(), []);
+  const [error, setError] = useState<string | null>(null);
+  const catalog = useLoad(() => api.marketplace(), []);
+  const workflows = useLoad(async () => {
+    const teams = await api.teams();
+    const details = await Promise.all(teams.map((team) => api.team(team.id)));
+    return details.flatMap((team) =>
+      team.definitions
+        .filter((d) => d.kind === "workflows")
+        .map((workflow): TeamWorkflow => ({ teamId: team.id, teamName: team.name, workflow })),
+    );
+  }, []);
   const runs = useLoad(() => api.runs(), [], 10000);
   const sessions = useLoad(() => api.sessions(), [], 10000);
-  const running = (sessions.data ?? []).filter((s) => s.status === "running" || s.status === "starting");
+  const live = (sessions.data ?? []).filter((s) => isSessionLive(s.status));
+  const noTeams = workflows.data !== null && workflows.data.length === 0;
 
   return (
-    <Stack spacing={4}>
-      <Box>
-        <Typography variant="h4">Welcome, {identity.name ?? identity.sub}</Typography>
-        <Typography color="text.secondary">
-          Run your team's agent workflows in sandboxed OpenCode sessions. Every LLM call and message is metered and audited.
-        </Typography>
-      </Box>
-
-      {teams.data?.length === 0 && (
+    <PageStack>
+      <PageHeader
+        title={`Hi ${identity.name ?? identity.sub}`}
+        description="Run your team's agents in sandboxes, then review what they did."
+      />
+      <HowItWorks />
+      {noTeams && (
         <Alert severity="info">
-          You are not a member of any team yet. Ask a platform admin to add you to a team in the onboarding repository.
+          You're not in a team yet, so there's nothing to run. A platform admin can add you to a team in the onboarding repository.
+          Meanwhile you can open sessions others shared with everyone.
         </Alert>
       )}
-
-      <Box>
-        <Typography variant="h6" gutterBottom>
-          Your teams
-        </Typography>
-        <Box sx={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 2 }}>
-          {(teams.data ?? []).map((team) => (
-            <Card key={team.id} variant="outlined">
-              <CardActionArea component={RouterLink} to={`/teams/${team.id}`} sx={{ height: "100%" }}>
-                <CardContent>
-                  <Stack direction="row" spacing={1} sx={{ alignItems: "center", mb: 1 }}>
-                    <GroupsIcon color="primary" />
-                    <Typography variant="h6">{team.name}</Typography>
-                  </Stack>
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-                    {team.description}
-                  </Typography>
-                  <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap" }}>
-                    <Chip size="small" label={`${team.counts.workflows} workflows`} />
-                    <Chip size="small" label={team.role ?? "viewer"} variant="outlined" />
-                    {team.invalid > 0 && <Chip size="small" color="warning" label={`${team.invalid} invalid`} />}
-                  </Stack>
-                </CardContent>
-              </CardActionArea>
-            </Card>
-          ))}
-        </Box>
-      </Box>
-
-      <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" }, gap: 3 }}>
-        <Paper variant="outlined" sx={{ p: 2 }}>
-          <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center", mb: 1 }}>
-            <Typography variant="h6">Recent runs</Typography>
-            <Button component={RouterLink} to="/runs" size="small">
-              All runs
-            </Button>
-          </Stack>
-          {(runs.data ?? []).slice(0, 6).map((run) => (
-            <Stack
-              key={run.id}
-              direction="row"
-              spacing={1}
-              component={RouterLink}
-              to={`/runs/${run.id}`}
-              sx={{ alignItems: "center", py: 1, borderTop: 1, borderColor: "divider", color: "inherit", textDecoration: "none" }}
-            >
-              <ActivityChip activity={run.activity} />
-              <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-                <Typography variant="body2" noWrap>
-                  {run.workflow_name ?? run.workflow_id}
-                </Typography>
-                <Typography variant="caption" color="text.secondary">
-                  {triggerLabel(run.trigger)} · {relativeTime(run.created_at)}
-                </Typography>
-              </Box>
-              <RunStatusChip status={run.status} />
-            </Stack>
-          ))}
-          {runs.data?.length === 0 && <Typography color="text.secondary">No runs yet. Start one from a team page.</Typography>}
-        </Paper>
-
-        <Paper variant="outlined" sx={{ p: 2 }}>
-          <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center", mb: 1 }}>
-            <Typography variant="h6">Running sessions</Typography>
-            <Button component={RouterLink} to="/sessions" size="small">
-              All sessions
-            </Button>
-          </Stack>
-          {running.map((session) => (
-            <Stack
-              key={session.id}
-              direction="row"
-              spacing={1}
-              component={RouterLink}
-              to={`/sessions/${session.id}`}
-              sx={{ alignItems: "center", py: 1, borderTop: 1, borderColor: "divider", color: "inherit", textDecoration: "none" }}
-            >
-              {session.activity && <ActivityChip activity={session.activity} />}
-              <Typography variant="body2" noWrap sx={{ flexGrow: 1 }}>
-                {session.name}
-              </Typography>
-              <SessionStatusChip status={session.status} />
-            </Stack>
-          ))}
-          {running.length === 0 && <Typography color="text.secondary">Nothing is running right now.</Typography>}
-        </Paper>
-      </Box>
-    </Stack>
+      {error && <Alert severity="error">{error}</Alert>}
+      {!noTeams && (
+        <Section
+          title="Start something"
+          description="Workflows from all your teams. Workflows with problems are hidden; see the team page for details."
+        >
+          <WorkflowList workflows={workflows.data ?? []} catalog={catalog.data ?? []} showTeam showInvalid={false} />
+        </Section>
+      )}
+      {live.length > 0 && (
+        <Section title="Running now" description="Sandboxes that are up. Idle ones stop on their own and start again when opened.">
+          <SessionsTable sessions={live} onChange={sessions.reload} onError={setError} />
+        </Section>
+      )}
+      <Section
+        title="Recent runs"
+        action={
+          <Button component={RouterLink} to="/runs" size="small">
+            All runs
+          </Button>
+        }
+      >
+        <RunsTable runs={runs.data ? runs.data.slice(0, 5) : null} />
+      </Section>
+    </PageStack>
   );
 }

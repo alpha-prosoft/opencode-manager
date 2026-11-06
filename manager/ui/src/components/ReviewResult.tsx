@@ -1,5 +1,6 @@
-import { Alert, Box, Chip, List, ListItem, ListItemText, Paper, Stack, Typography, type ChipProps } from "@mui/material";
+import { Alert, Chip, List, ListItem, ListItemText, Paper, Stack, Typography, type ChipProps } from "@mui/material";
 import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutlineOutlined";
+import { CodeBlock, Mono } from "./Data";
 import Markdown from "./Markdown";
 
 const SEVERITY: Record<string, ChipProps["color"]> = {
@@ -24,34 +25,33 @@ export default function ReviewResult({ result }: { result: Record<string, any> }
         <strong>{review.verdict.replace(/_/g, " ")}</strong> — {review.summary}
       </Alert>
       <Typography variant="body2" color="text.secondary">
-        Post mode <strong>{result.plan.mode}</strong>: {result.plan.comments} comment(s) planned ({result.plan.inline} inline,{" "}
-        {result.plan.folded} folded into the summary), {result.posted} posted.
+        {result.plan.mode === "auto"
+          ? `${result.posted} of ${result.plan.comments} comment(s) posted to the pull request (${result.plan.inline} on lines, ${result.plan.folded} in the summary).`
+          : result.plan.mode === "dry-run"
+            ? `Dry run: nothing was posted. ${result.plan.comments} comment(s) would be posted to the pull request.`
+            : "Posting is off for this workflow: the review is only shown here."}
       </Typography>
       {review.findings.length === 0 && <Typography color="text.secondary">No findings.</Typography>}
       {review.findings.map((finding: any, index: number) => (
-        <Paper key={index} variant="outlined" sx={{ p: 2 }}>
+        <Paper key={index} sx={{ p: 2 }}>
           <Stack direction="row" spacing={1} sx={{ alignItems: "center", mb: 1, flexWrap: "wrap" }} useFlexGap>
-            <Chip size="small" label={finding.severity} color={SEVERITY[finding.severity]} />
+            <Chip variant="outlined" label={finding.severity} color={SEVERITY[finding.severity]} />
             <Typography sx={{ fontWeight: 600 }}>{finding.title}</Typography>
             {finding.path && (
-              <Typography variant="body2" sx={{ fontFamily: "monospace", color: "text.secondary" }}>
+              <Mono>
                 {finding.path}
                 {finding.line ? `:${finding.line}` : ""}
-              </Typography>
+              </Mono>
             )}
           </Stack>
           <Markdown>{finding.body}</Markdown>
-          {finding.suggestion && (
-            <Box component="pre" sx={{ bgcolor: "action.hover", p: 1.5, borderRadius: 1, overflowX: "auto", fontSize: "0.85rem" }}>
-              {finding.suggestion}
-            </Box>
-          )}
+          {finding.suggestion && <CodeBlock>{finding.suggestion}</CodeBlock>}
         </Paper>
       ))}
       {review.checked.length > 0 && (
-        <Paper variant="outlined" sx={{ p: 2 }}>
+        <Paper sx={{ p: 2 }}>
           <Typography variant="subtitle2" gutterBottom>
-            Checked and OK
+            Checked and found fine
           </Typography>
           <List dense disablePadding>
             {review.checked.map((item: string, index: number) => (

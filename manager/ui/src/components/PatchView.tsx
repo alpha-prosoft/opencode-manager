@@ -15,20 +15,20 @@ export default function PatchView({ patch, name }: { patch: string; name: string
     Object.assign(document.createElement("a"), { href: url, download: name }).click();
     URL.revokeObjectURL(url);
   };
-  if (!patch) {
-    return <Typography color="text.secondary">The agent made no changes.</Typography>;
-  }
+  if (!patch) return <Typography color="text.secondary">The agent didn't change any files.</Typography>;
   return (
-    <Stack spacing={1}>
-      <Box>
-        <Button size="small" startIcon={<DownloadIcon />} onClick={download}>
-          Download patch
-        </Button>
-      </Box>
-      <Paper variant="outlined" sx={{ p: 2, overflowX: "auto", maxHeight: 600 }}>
-        <Box component="pre" sx={{ m: 0, fontFamily: "monospace", fontSize: "0.82rem" }}>
+    <Stack spacing={1} sx={{ alignItems: "flex-start" }}>
+      <Button size="small" startIcon={<DownloadIcon />} onClick={download}>
+        Download patch
+      </Button>
+      <Paper sx={{ p: 2, overflow: "auto", maxHeight: 600, width: "100%" }}>
+        <Box component="pre" sx={{ m: 0, typography: "mono" }}>
           {patch.split("\n").map((line, index) => (
-            <Box key={index} component="span" sx={{ display: "block", color: color(line), fontWeight: line.startsWith("diff ") ? 600 : 400 }}>
+            <Box
+              key={index}
+              component="span"
+              sx={{ display: "block", color: color(line), fontWeight: line.startsWith("diff ") ? 600 : 400 }}
+            >
               {line || " "}
             </Box>
           ))}

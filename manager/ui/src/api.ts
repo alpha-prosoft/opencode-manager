@@ -1,14 +1,6 @@
 export type SessionStatus = "running" | "starting" | "stopped" | "error";
 export type Visibility = "private" | "team" | "public";
-export type RunStatus =
-  | "queued"
-  | "preparing"
-  | "running"
-  | "awaiting_result"
-  | "finalizing"
-  | "completed"
-  | "failed"
-  | "cancelled";
+export type RunStatus = "queued" | "preparing" | "running" | "awaiting_result" | "finalizing" | "completed" | "failed" | "cancelled";
 
 export interface Usage {
   calls: number;
@@ -267,8 +259,7 @@ export const api = {
     users: () => request<AdminUser[]>("/admin/users"),
     usage: (days: number) => request<UsageRow[]>(`/admin/usage?days=${days}`),
     secrets: () => request<{ name: string; configured: boolean; used_by: string[]; hosts: string[] }[]>("/admin/secrets"),
-    testConnection: (id: string) =>
-      post<{ ok: boolean; model?: string; latency_ms?: number; error?: string }>(`/admin/llm/${id}/test`),
+    testConnection: (id: string) => post<{ ok: boolean; model?: string; latency_ms?: number; error?: string }>(`/admin/llm/${id}/test`),
     schedules: () => request<{ id: string; next_run: string | null; last_run: string | null; paused: boolean }[]>("/admin/schedules"),
     stopIdle: () => post<{ stopped: string[] }>("/admin/sessions/stop-idle"),
   },

@@ -40,7 +40,7 @@ flowchart LR
 3. [Using the platform](#using-the-platform)
 4. [Onboarding repository (platform admins)](#onboarding-repository)
 5. [Team repository (teams)](#team-repository)
-6. [Marketplace activities](#marketplace-activities)
+6. [Activities](#activities)
 7. [Security model](#security-model)
 8. [Audit trail and metrics](#audit-trail-and-metrics)
 9. [Deploying on Kubernetes](#deploying-on-kubernetes)
@@ -54,14 +54,14 @@ flowchart LR
 | **Team repo** | One Git repo per team | A `.platform/` directory with the team's agents, harnesses and workflows. |
 | **Agent** | `.platform/agents/<id>.json` | Persona and system prompt (OpenCode agent). |
 | **Harness** | `.platform/harnesses/<id>.json` | The sandbox: LLM connection and models, network access, tool permissions, image, CPU and memory. |
-| **Workflow** | `.platform/workflows/<id>.json` | A trigger (manual, schedule, pull request) wired to a marketplace activity, with an agent, a harness and options. |
-| **Activity** | Built into the platform (marketplace) | What a run does: interactive session, code review, implementation, business analysis. |
+| **Workflow** | `.platform/workflows/<id>.json` | A trigger (manual, schedule, pull request) wired to an activity, with an agent, a harness and options. |
+| **Activity** | Built into the platform | What a run does: interactive session, code review, implementation, business analysis. |
 | **Run** | Platform | One execution of a workflow. It creates a sandboxed session, collects a typed result and meters usage. |
 | **Session** | Platform | A running (or stopped) OpenCode sandbox you can open in the browser. |
 
 ```mermaid
 flowchart TB
-    workflow["Workflow<br/>trigger + options"] --> activity["Marketplace activity"]
+    workflow["Workflow<br/>trigger + options"] --> activity["Activity"]
     workflow --> agent["Agent<br/>prompt, temperature"]
     workflow --> harness["Harness<br/>LLM, network, permissions, resources"]
     trigger(("manual · schedule · pull request")) --> run["Run"]
@@ -120,26 +120,31 @@ under `local/` is gitignored. Point the platform at the onboarding repo with `ON
 
 ## Using the platform
 
-1. **Dashboard.** Your teams, recent runs and running sessions.
-2. **Teams → a team.** Workflows, agents and harnesses as synced from the team repo. Invalid definitions are shown
-   with the file and the exact reason, and cannot run.
-3. **Run now / Launch.** Fill in the activity's inputs (the form is generated from the activity's schema).
-   - *Interactive* workflows open a session you work in yourself.
-   - *Automated* workflows run to completion; you watch the run page update live.
-4. **Runs → a run.** Status, inputs, LLM usage and the typed result: a review with findings, a patch with test
-   results, or an analysis document. *Open session* shows exactly what the agent saw and did.
-   Active runs can be **cancelled**; finished automated runs can be **run again** with the same inputs.
-5. **Sessions → a session.** Owner, visibility and usage, plus two tabs:
-   - **Live activity**: what the agent is doing right now, its tool calls with durations, files edited, and any
-     tool call the harness policy blocked.
-   - **Audit trail**: every message and tool call, with an integrity check and JSONL export.
-6. **Admin** (platform admins):
-   - *Overview*: *Sync now*, *Stop idle sessions*, running sessions, today's runs, tokens and estimated cost.
-   - *Users & roles*: who is in which team with which role, with runs and tokens over 30 days.
-   - *Usage & cost*: tokens and cost per team and model over 1 to 90 days.
-   - *Secrets*: which secrets are configured or missing and who uses them. Values are never shown.
-   - *LLM connections*: a one-click test of each connection.
-   - *Schedules* (sync, reaper, pull request triggers) and *Teams* (source, sync state, invalid definitions).
+The sidebar groups pages by what you are doing: **Work** (Home, Runs, Sessions), **Library** (Teams, Activities)
+and, for platform admins, **Platform** (Admin).
+
+1. **Home.** A short *How it works*, then every workflow you can start, grouped by team, and your recent runs.
+   Workflows with problems are hidden here and explained on the team page.
+2. **Start a workflow.** *Run* for automated workflows, *Start session* for interactive ones. The form asks only
+   for the activity's inputs.
+   - *Interactive* workflows open a private sandbox you work in yourself.
+   - *Automated* workflows show a progress bar: *Queued*, *Starting sandbox*, *Agent working*, *Collecting
+     result*, *Done*.
+3. **Runs → a run.** The result first: review findings, a patch with test results, or a document. Then the
+   inputs, details and LLM usage. *Open session* shows exactly what the agent saw and did. Active runs can be
+   cancelled; finished automated runs can be run again with the same inputs.
+4. **Sessions → a session.** *Open* starts and opens it in OpenCode. Three tabs:
+   - **Overview**: owner, team, sharing (only you, the team, or everyone) and LLM usage.
+   - **Live activity**: what the agent is doing now, tools used with durations, files edited, and any tool call
+     the harness policy blocked.
+   - **Audit trail**: every message and tool call, verified against tampering, downloadable as JSONL.
+5. **Teams → a team.** Workflows, runs, *Agents & harnesses* (what each sandbox may do, in plain words, including
+   blocked commands) and *People & usage* (members, daily budget, usage per model).
+6. **Activities.** Reference for workflow authors: what each activity does, its options and inputs, and an
+   example workflow file.
+7. **Admin** (platform admins): *Overview* (sync now, stop idle sessions, today's numbers and cost), *People*,
+   *Usage & cost*, *Teams*, *LLM connections* (one-click test), *Secrets* (set or missing; values are never
+   shown) and *Background jobs*.
 
 ### Roles
 
@@ -315,9 +320,9 @@ Every workflow is validated on sync: references to agents, harnesses, activities
 and images must resolve, and `options` must match the activity's schema. The UI shows the reason for every
 invalid definition.
 
-## Marketplace activities
+## Activities
 
-The **Marketplace** page shows each activity's options and inputs, generated from the same schemas the platform
+The **Activities** page shows each activity's options and inputs, generated from the same schemas the platform
 validates against.
 
 | Activity | Kind | Options (workflow file) | Inputs (per run) | Result |
@@ -440,7 +445,7 @@ NetworkPolicies.
 
 ```
 manager/app/
-├── platform/        spec, registry (sync), catalog (marketplace), harness, gateway, audit, runs, triggers, tools
+├── platform/        spec, registry (sync), catalog (activities), harness, gateway, audit, runs, triggers, tools
 ├── temporal/        workflows (RunWorkflow, triggers, sync, reaper) and activities
 ├── backends/        Docker and Kubernetes session backends
 ├── routes/          REST API, session gateway (handoff, ForwardAuth)

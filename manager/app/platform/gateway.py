@@ -63,9 +63,15 @@ async def chat_completions(request: Request):
     headers = {"Authorization": f"Bearer {secret}", "Content-Type": "application/json", "Accept": request.headers.get("accept", "*/*")}
     started = time.monotonic()
     client = httpx.AsyncClient(timeout=UPSTREAM_TIMEOUT)
-    upstream = await client.send(
-        client.build_request("POST", f"{connection.upstream()}/chat/completions", json=body, headers=headers), stream=True
-    )
+    try:
+        upstream = await client.send(
+            client.build_request("POST", f"{connection.upstream()}/chat/completions", json=body, headers=headers), stream=True
+        )
+    except httpx.HTTPError as error:
+        await client.aclose()
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, f"Could not reach LLM connection {connection.id}: {type(error).__name__}: {error}"
+        ) from error
 
     def record(prompt: int, completion: int, cached: int) -> None:
         platform.usage.record(

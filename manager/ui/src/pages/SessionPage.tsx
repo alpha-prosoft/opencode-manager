@@ -1,14 +1,22 @@
 import { useState } from "react";
 import { Link as RouterLink, useNavigate, useParams } from "react-router";
-import { Alert, Box, MenuItem, Paper, Stack, Tab, Table, TableBody, TableCell, TableRow, Tabs, TextField, Typography } from "@mui/material";
+import { Alert, Box, Link, MenuItem, Stack, Tab, Tabs, TextField, Typography } from "@mui/material";
 import { api, type Visibility } from "../api";
 import AuditTimeline from "../components/AuditTimeline";
-import LiveActivity from "../components/LiveActivity";
 import { ActivityChip, SessionStatusChip, VisibilityChip } from "../components/Chips";
+import { DetailList, Mono, TwoColumns } from "../components/Data";
+import LiveActivity from "../components/LiveActivity";
+import { PageHeader, PageStack, Section } from "../components/Page";
 import SessionActions from "../components/SessionActions";
 import UsageStats from "../components/UsageStats";
-import { relativeTime } from "../components/format";
+import { dateTime, isSessionLive, relativeTime } from "../components/format";
 import { useLoad } from "../hooks";
+
+const SHARING: Record<Visibility, string> = {
+  private: "Only you (and team admins)",
+  team: "Everyone in the team",
+  public: "Everyone on the platform",
+};
 
 export default function SessionPage() {
   const { sessionId = "" } = useParams();
@@ -21,91 +29,94 @@ export default function SessionPage() {
   if (!session) return null;
 
   const setVisibility = (visibility: Visibility) =>
-    api.updateSession(session.id, { visibility }).then(reload).catch((e: Error) => setActionError(e.message));
+    api
+      .updateSession(session.id, { visibility })
+      .then(reload)
+      .catch((e: Error) => setActionError(e.message));
 
   return (
-    <Stack spacing={3}>
-      <Stack direction="row" spacing={2} sx={{ alignItems: "center", flexWrap: "wrap" }} useFlexGap>
-        {session.activity && <ActivityChip activity={session.activity} />}
-        <Typography variant="h4" sx={{ flexGrow: 1 }}>
-          {session.name}
-        </Typography>
-        <VisibilityChip visibility={session.visibility} />
-        <SessionStatusChip status={session.status} />
-        <SessionActions
-          session={session}
-          onChange={() => api.session(session.id).then(reload).catch(() => navigate("/sessions"))}
-          onError={setActionError}
-        />
-      </Stack>
+    <PageStack>
+      <PageHeader
+        back={{ to: "/sessions", label: "Sessions" }}
+        title={session.name}
+        description={session.description || undefined}
+        meta={
+          <>
+            <SessionStatusChip status={session.status} />
+            {session.activity && <ActivityChip activity={session.activity} />}
+            <VisibilityChip visibility={session.visibility} />
+            <Typography variant="body2">Last activity {relativeTime(session.last_activity_at)}</Typography>
+          </>
+        }
+        actions={
+          <SessionActions session={session} prominent onChange={reload} onError={setActionError} onDeleted={() => navigate("/sessions")} />
+        }
+      />
       {actionError && <Alert severity="error">{actionError}</Alert>}
 
-      <Tabs value={tab} onChange={(_, value) => setTab(value)}>
-        <Tab label="Overview" />
-        <Tab label="Live activity" />
-        <Tab label={`Audit trail (${session.audit_events})`} />
-      </Tabs>
+      <Box>
+        <Tabs value={tab} onChange={(_, value) => setTab(value)} variant="scrollable">
+          <Tab label="Overview" />
+          <Tab label="Live activity" />
+          <Tab label={`Audit trail (${session.audit_events})`} />
+        </Tabs>
+      </Box>
 
       {tab === 0 && (
-        <Stack spacing={3}>
-          <Paper variant="outlined" sx={{ p: 2 }}>
-            <Table size="small">
-              <TableBody>
-                <TableRow>
-                  <TableCell sx={{ width: 180, color: "text.secondary" }}>Team</TableCell>
-                  <TableCell>{session.team_id ? <RouterLink to={`/teams/${session.team_id}`}>{session.team_id}</RouterLink> : "—"}</TableCell>
-                </TableRow>
-                <TableRow>
-                  <TableCell sx={{ color: "text.secondary" }}>Run</TableCell>
-                  <TableCell>{session.run_id ? <RouterLink to={`/runs/${session.run_id}`}>{session.run_id}</RouterLink> : "—"}</TableCell>
-                </TableRow>
-                <TableRow>
-                  <TableCell sx={{ color: "text.secondary" }}>Owner</TableCell>
-                  <TableCell>{session.sub}</TableCell>
-                </TableRow>
-                <TableRow>
-                  <TableCell sx={{ color: "text.secondary" }}>Address</TableCell>
-                  <TableCell sx={{ fontFamily: "monospace" }}>{session.url}</TableCell>
-                </TableRow>
-                <TableRow>
-                  <TableCell sx={{ color: "text.secondary" }}>Created</TableCell>
-                  <TableCell>{new Date(session.created_at).toLocaleString()}</TableCell>
-                </TableRow>
-                <TableRow>
-                  <TableCell sx={{ color: "text.secondary" }}>Last activity</TableCell>
-                  <TableCell>{relativeTime(session.last_activity_at)}</TableCell>
-                </TableRow>
-                {session.can_manage && (
-                  <TableRow>
-                    <TableCell sx={{ color: "text.secondary" }}>Visibility</TableCell>
-                    <TableCell>
-                      <TextField
-                        select
-                        size="small"
-                        value={session.visibility}
-                        onChange={(e) => setVisibility(e.target.value as Visibility)}
-                        helperText="private: you · team: your team · public: every user"
-                      >
-                        <MenuItem value="private">private</MenuItem>
-                        <MenuItem value="team">team</MenuItem>
-                        <MenuItem value="public">public</MenuItem>
-                      </TextField>
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </Paper>
-          <Box>
-            <Typography variant="h6" gutterBottom>
-              LLM usage (metered by the platform gateway)
-            </Typography>
-            <UsageStats usage={session.usage} />
-          </Box>
+        <Stack spacing={4}>
+          <TwoColumns>
+            <Section title="Details">
+              <DetailList
+                items={[
+                  ["Owner", session.is_owner ? "You" : session.sub],
+                  [
+                    "Team",
+                    session.team_id ? (
+                      <Link component={RouterLink} to={`/teams/${session.team_id}`}>
+                        {session.team_id}
+                      </Link>
+                    ) : (
+                      "—"
+                    ),
+                  ],
+                  [
+                    "Started by run",
+                    session.run_id ? (
+                      <Link component={RouterLink} to={`/runs/${session.run_id}`}>
+                        <Mono>{session.run_id}</Mono>
+                      </Link>
+                    ) : (
+                      "—"
+                    ),
+                  ],
+                  ["Created", dateTime(session.created_at)],
+                  ["Address", <Mono>{session.url}</Mono>],
+                ]}
+              />
+            </Section>
+            <Section title="Sharing" description="Who can see and open this session.">
+              {session.can_manage ? (
+                <TextField select fullWidth value={session.visibility} onChange={(e) => setVisibility(e.target.value as Visibility)}>
+                  {(Object.keys(SHARING) as Visibility[]).map((option) => (
+                    <MenuItem key={option} value={option}>
+                      {SHARING[option]}
+                    </MenuItem>
+                  ))}
+                </TextField>
+              ) : (
+                <Typography>{SHARING[session.visibility]}</Typography>
+              )}
+            </Section>
+          </TwoColumns>
+          {session.usage.calls > 0 && (
+            <Section title="LLM usage" description="Measured by the platform's gateway, not reported by the agent.">
+              <UsageStats usage={session.usage} />
+            </Section>
+          )}
         </Stack>
       )}
-      {tab === 1 && <LiveActivity sessionId={session.id} />}
+      {tab === 1 && <LiveActivity sessionId={session.id} live={isSessionLive(session.status)} />}
       {tab === 2 && <AuditTimeline sessionId={session.id} />}
-    </Stack>
+    </PageStack>
   );
 }

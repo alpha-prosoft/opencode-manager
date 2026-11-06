@@ -1,8 +1,10 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router";
-import { Alert, Autocomplete, Box, Button, Chip, Paper, Stack, TextField, Typography } from "@mui/material";
+import { Alert, Autocomplete, Avatar, Box, Button, Chip, Paper, Stack, TextField, Typography } from "@mui/material";
+import HubOutlinedIcon from "@mui/icons-material/HubOutlined";
 import { api, type Persona } from "../api";
 import { isSessionEntry, safeNext } from "../auth";
+import { Row } from "../components/Data";
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -12,7 +14,10 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api.personas().then(setPersonas).catch(() => setPersonas([]));
+    api
+      .personas()
+      .then(setPersonas)
+      .catch(() => setPersonas([]));
   }, []);
 
   const submit = async (event: FormEvent) => {
@@ -30,16 +35,19 @@ export default function LoginPage() {
   };
 
   return (
-    <Box sx={{ display: "grid", placeItems: "center", minHeight: "100vh", bgcolor: "background.default", px: 2 }}>
-      <Paper variant="outlined" sx={{ p: 4, width: "100%", maxWidth: 440 }}>
+    <Box sx={{ display: "grid", placeItems: "center", minHeight: "100vh", px: 2 }}>
+      <Paper sx={{ p: 4, width: "100%", maxWidth: 420 }}>
         <form onSubmit={submit}>
           <Stack spacing={3}>
-            <Box>
-              <Typography variant="h5">Agent Platform</Typography>
+            <Stack spacing={1.5}>
+              <Avatar variant="rounded" sx={{ bgcolor: "primary.main", color: "primary.contrastText" }}>
+                <HubOutlinedIcon />
+              </Avatar>
+              <Typography variant="h1">Log in to Agent Platform</Typography>
               <Typography variant="body2" color="text.secondary">
-                Test login: pick a persona or type any username. Roles come from the onboarding repository.
+                Test mode: no password needed. Pick someone to see the platform with their role, or type any name.
               </Typography>
-            </Box>
+            </Stack>
             <Autocomplete
               freeSolo
               options={personas}
@@ -49,12 +57,14 @@ export default function LoginPage() {
               renderOption={(props, option) => {
                 const { key, ...rest } = props as typeof props & { key: string };
                 return (
-                  <Box component="li" key={key} {...rest} sx={{ display: "block !important" }}>
-                    <Typography sx={{ fontWeight: 600 }}>{option.username}</Typography>
-                    <Stack direction="row" spacing={0.5} useFlexGap sx={{ flexWrap: "wrap", mt: 0.5 }}>
-                      {option.roles.map((role) => (
-                        <Chip key={role} size="small" label={role} color={role === "Platform admin" ? "primary" : "default"} />
-                      ))}
+                  <Box component="li" key={key} {...rest}>
+                    <Stack spacing={0.5}>
+                      <Typography sx={{ fontWeight: 600 }}>{option.username}</Typography>
+                      <Row>
+                        {option.roles.map((role) => (
+                          <Chip key={role} variant="outlined" label={role} color={role === "Platform admin" ? "primary" : "default"} />
+                        ))}
+                      </Row>
                     </Stack>
                   </Box>
                 );
@@ -62,7 +72,7 @@ export default function LoginPage() {
               renderInput={(props) => <TextField {...props} label="Username" autoFocus required />}
             />
             {error && <Alert severity="error">{error}</Alert>}
-            <Button type="submit" variant="contained" disabled={!username.trim()}>
+            <Button type="submit" variant="contained" size="large" disabled={!username.trim()}>
               Log in
             </Button>
           </Stack>

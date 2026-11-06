@@ -1,68 +1,93 @@
 import { useState } from "react";
 import { Link as RouterLink, useNavigate, useParams } from "react-router";
-import {
-  Alert,
-  Box,
-  Button,
-  LinearProgress,
-  List,
-  ListItem,
-  ListItemText,
-  Paper,
-  Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableRow,
-  Typography,
-} from "@mui/material";
+import { Alert, Box, Button, Link, List, ListItem, ListItemText, Paper, Stack, Step, StepLabel, Stepper, Typography } from "@mui/material";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import ReplayIcon from "@mui/icons-material/Replay";
 import StopIcon from "@mui/icons-material/Stop";
-import { api, type RunDetail } from "../api";
+import { api, type RunDetail, type RunStatus } from "../api";
 import { ActivityChip, RunStatusChip, SessionStatusChip } from "../components/Chips";
+import { useConfirm } from "../components/ConfirmDialog";
+import { DetailList, Mono, TwoColumns } from "../components/Data";
 import Markdown from "../components/Markdown";
+import { PageHeader, PageStack, Section } from "../components/Page";
 import PatchView from "../components/PatchView";
 import ReviewResult from "../components/ReviewResult";
 import UsageStats from "../components/UsageStats";
-import { relativeTime, triggerLabel } from "../components/format";
+import { dateTime, isActive, relativeTime, triggerLabel } from "../components/format";
 import { useLoad } from "../hooks";
 
-const FINISHED = new Set(["completed", "failed", "cancelled"]);
+const AUTOMATED_STEPS = ["Queued", "Starting sandbox", "Agent working", "Collecting result", "Done"];
+const SESSION_STEPS = ["Queued", "Starting sandbox", "Ready"];
+const STEP_OF: Record<RunStatus, number> = {
+  queued: 0,
+  preparing: 1,
+  running: 2,
+  awaiting_result: 2,
+  finalizing: 3,
+  completed: 5,
+  failed: -1,
+  cancelled: -1,
+};
+
+function Progress({ run }: { run: RunDetail }) {
+  const interactive = run.activity === "session";
+  const steps = interactive ? SESSION_STEPS : AUTOMATED_STEPS;
+  const step = interactive ? Math.min(STEP_OF[run.status], 1) : STEP_OF[run.status];
+  return (
+    <Paper sx={{ p: 2.5 }}>
+      <Stepper activeStep={step} alternativeLabel>
+        {steps.map((label) => (
+          <Step key={label}>
+            <StepLabel>{label}</StepLabel>
+          </Step>
+        ))}
+      </Stepper>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 2, textAlign: "center" }}>
+        {run.status === "awaiting_result"
+          ? "The agent is working in its sandbox. You can watch it live with Open session. This page updates by itself."
+          : "This page updates by itself."}
+      </Typography>
+    </Paper>
+  );
+}
+
+function Implementation({ run }: { run: RunDetail }) {
+  const result = run.result!;
+  const impl = result.implementation;
+  return (
+    <Stack spacing={2}>
+      <Markdown>{impl.summary}</Markdown>
+      {impl.changes.length > 0 && (
+        <Box>
+          <Typography variant="subtitle2">Changes</Typography>
+          <List dense disablePadding>
+            {impl.changes.map((change: string) => (
+              <ListItem key={change} disableGutters>
+                <ListItemText primary={`• ${change}`} />
+              </ListItem>
+            ))}
+          </List>
+        </Box>
+      )}
+      {impl.tests.length > 0 && (
+        <Alert severity="info">
+          <strong>How the agent verified it:</strong> {impl.tests.join("; ")}
+        </Alert>
+      )}
+      {impl.notes && <Alert severity="warning">{impl.notes}</Alert>}
+      <Typography variant="subtitle2">
+        Patch: {result.files.length} file{result.files.length === 1 ? "" : "s"} changed
+      </Typography>
+      <PatchView patch={result.patch} name={`run-${run.id}.patch`} />
+    </Stack>
+  );
+}
 
 function Result({ run }: { run: RunDetail }) {
-  const result = run.result;
-  if (!result) return null;
-  if (run.activity === "review") return <ReviewResult result={result} />;
-  if (run.activity === "analysis") return <Markdown>{result.document.markdown}</Markdown>;
-  if (run.activity === "implement") {
-    const impl = result.implementation;
-    return (
-      <Stack spacing={2}>
-        <Markdown>{impl.summary}</Markdown>
-        {impl.changes.length > 0 && (
-          <Box>
-            <Typography variant="subtitle2">Changes</Typography>
-            <List dense>
-              {impl.changes.map((change: string) => (
-                <ListItem key={change} disableGutters>
-                  <ListItemText primary={`• ${change}`} />
-                </ListItem>
-              ))}
-            </List>
-          </Box>
-        )}
-        {impl.tests.length > 0 && (
-          <Alert severity="info">
-            <strong>Verification:</strong> {impl.tests.join("; ")}
-          </Alert>
-        )}
-        {impl.notes && <Alert severity="warning">{impl.notes}</Alert>}
-        <Typography variant="subtitle2">Patch ({result.files.length} files)</Typography>
-        <PatchView patch={result.patch} name={`run-${run.id}.patch`} />
-      </Stack>
-    );
-  }
+  if (!run.result) return null;
+  if (run.activity === "review") return <ReviewResult result={run.result} />;
+  if (run.activity === "analysis") return <Markdown>{run.result.document.markdown}</Markdown>;
+  if (run.activity === "implement") return <Implementation run={run} />;
   return null;
 }
 
@@ -71,103 +96,119 @@ export default function RunPage() {
   const navigate = useNavigate();
   const { data: run, error, reload } = useLoad(() => api.run(runId), [runId], 4000);
   const [actionError, setActionError] = useState<string | null>(null);
+  const { confirm, dialog } = useConfirm();
   if (error) return <Alert severity="error">{error}</Alert>;
   if (!run) return null;
-  const busy = !FINISHED.has(run.status);
+
+  const active = isActive(run.status);
   const act = (action: () => Promise<unknown>) => action().catch((e: Error) => setActionError(e.message));
+  const cancel = () =>
+    confirm({
+      title: "Cancel this run?",
+      body: "The agent is stopped and no result is collected. You can run it again later with the same inputs.",
+      confirm: "Cancel run",
+      action: () => act(() => api.cancelRun(run.id).then(reload)),
+    });
+  const inputs = Object.entries(run.inputs).filter(([, value]) => value !== null && value !== "");
 
   return (
-    <Stack spacing={3}>
-      <Stack direction="row" spacing={2} sx={{ alignItems: "center", flexWrap: "wrap" }} useFlexGap>
-        <ActivityChip activity={run.activity} />
-        <Typography variant="h4" sx={{ flexGrow: 1 }}>
-          {run.workflow_name ?? run.workflow_id}
-        </Typography>
-        <RunStatusChip status={run.status} />
-        {busy && (
-          <Button color="warning" startIcon={<StopIcon />} onClick={() => act(() => api.cancelRun(run.id).then(reload))}>
-            Cancel
-          </Button>
-        )}
-        {!busy && run.activity !== "session" && (
-          <Button startIcon={<ReplayIcon />} onClick={() => act(() => api.retryRun(run.id).then((next) => navigate(`/runs/${next.id}`)))}>
-            Run again
-          </Button>
-        )}
-        {run.session && (
-          <Button variant="outlined" startIcon={<OpenInNewIcon />} href={run.session.open_url} target="_blank" rel="noopener">
-            Open session
-          </Button>
-        )}
-      </Stack>
-      {busy && (
-        <Box>
-          <LinearProgress />
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-            {run.status === "awaiting_result"
-              ? "The agent is working in its sandbox. This page refreshes automatically."
-              : "Preparing the sandbox…"}
-          </Typography>
-        </Box>
+    <PageStack>
+      <PageHeader
+        back={{ to: "/runs", label: "Runs" }}
+        title={run.workflow_name ?? run.workflow_id}
+        meta={
+          <>
+            <RunStatusChip status={run.status} />
+            <ActivityChip activity={run.activity} />
+            <Typography variant="body2">
+              {triggerLabel(run.trigger)} · {relativeTime(run.created_at)}
+            </Typography>
+          </>
+        }
+        actions={
+          <>
+            {run.session && (
+              <Button
+                variant={run.activity === "session" ? "contained" : "outlined"}
+                startIcon={<OpenInNewIcon />}
+                href={run.session.open_url}
+                target="_blank"
+                rel="noopener"
+              >
+                Open session
+              </Button>
+            )}
+            {active && (
+              <Button color="warning" startIcon={<StopIcon />} onClick={cancel}>
+                Cancel run
+              </Button>
+            )}
+            {!active && run.activity !== "session" && (
+              <Button
+                startIcon={<ReplayIcon />}
+                onClick={() => act(() => api.retryRun(run.id).then((next) => navigate(`/runs/${next.id}`)))}
+              >
+                Run again
+              </Button>
+            )}
+          </>
+        }
+      />
+      {dialog}
+      {active && <Progress run={run} />}
+      {run.error && (
+        <Alert severity={run.status === "cancelled" ? "warning" : "error"}>
+          {run.status === "cancelled" ? run.error : `The run failed: ${run.error}`}
+        </Alert>
       )}
-      {run.error && <Alert severity={run.status === "cancelled" ? "warning" : "error"}>{run.error}</Alert>}
       {actionError && <Alert severity="error">{actionError}</Alert>}
 
-      <Paper variant="outlined" sx={{ p: 2 }}>
-        <Table size="small">
-          <TableBody>
-            <TableRow>
-              <TableCell sx={{ width: 160, color: "text.secondary" }}>Team</TableCell>
-              <TableCell>
-                <RouterLink to={`/teams/${run.team_id}`}>{run.team_id}</RouterLink>
-              </TableCell>
-            </TableRow>
-            <TableRow>
-              <TableCell sx={{ color: "text.secondary" }}>Trigger</TableCell>
-              <TableCell>{triggerLabel(run.trigger)}</TableCell>
-            </TableRow>
-            <TableRow>
-              <TableCell sx={{ color: "text.secondary" }}>Started</TableCell>
-              <TableCell>
-                {new Date(run.created_at).toLocaleString()} ({relativeTime(run.created_at)})
-              </TableCell>
-            </TableRow>
-            {run.session && (
-              <TableRow>
-                <TableCell sx={{ color: "text.secondary" }}>Session</TableCell>
-                <TableCell>
-                  <RouterLink to={`/sessions/${run.session.id}`}>{run.session.name}</RouterLink>{" "}
-                  <SessionStatusChip status={run.session.status} />
-                </TableCell>
-              </TableRow>
-            )}
-            {Object.entries(run.inputs).filter(([, value]) => value !== null && value !== "").map(([key, value]) => (
-              <TableRow key={key}>
-                <TableCell sx={{ color: "text.secondary" }}>{key}</TableCell>
-                <TableCell sx={{ whiteSpace: "pre-wrap" }}>{String(value ?? "")}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </Paper>
-
-      <Box>
-        <Typography variant="h6" gutterBottom>
-          Usage
-        </Typography>
-        <UsageStats usage={run.usage} />
-      </Box>
-
       {run.result && (
-        <Box>
-          <Typography variant="h6" gutterBottom>
-            Result
-          </Typography>
-          <Paper variant="outlined" sx={{ p: 3 }}>
+        <Section title="Result">
+          <Paper sx={{ p: { xs: 2, md: 3 } }}>
             <Result run={run} />
           </Paper>
-        </Box>
+        </Section>
       )}
-    </Stack>
+
+      <TwoColumns>
+        <Section title="Inputs">
+          <DetailList items={inputs.length ? inputs.map(([key, value]) => [key.replace(/_/g, " "), String(value)]) : [["", "No inputs"]]} />
+        </Section>
+        <Section title="Details">
+          <DetailList
+            items={[
+              [
+                "Team",
+                <Link component={RouterLink} to={`/teams/${run.team_id}`}>
+                  {run.team_id}
+                </Link>,
+              ],
+              ["Started", dateTime(run.created_at)],
+              ["Run ID", <Mono>{run.id}</Mono>],
+              ...(run.session
+                ? ([
+                    [
+                      "Session",
+                      <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+                        <Link component={RouterLink} to={`/sessions/${run.session.id}`}>
+                          {run.session.name}
+                        </Link>
+                        <SessionStatusChip status={run.session.status} />
+                      </Stack>,
+                    ],
+                  ] as [string, React.ReactNode][])
+                : []),
+            ]}
+          />
+        </Section>
+      </TwoColumns>
+
+      {run.usage.calls > 0 && (
+        <Section title="LLM usage" description="Measured by the platform's gateway, not reported by the agent.">
+          <UsageStats usage={run.usage} />
+        </Section>
+      )}
+    </PageStack>
   );
 }

@@ -222,11 +222,11 @@ Trigger = Annotated[ManualTrigger | ScheduleTrigger | PullRequestTrigger, Field(
 
 
 class WorkflowSpec(Strict):
-    """.platform/workflows/<id>.json — a trigger wired to a marketplace activity."""
+    """.platform/workflows/<id>.json — a trigger wired to an activity."""
 
     name: str
     description: str = ""
-    activity: Identifier = Field(description="Marketplace activity id")
+    activity: Identifier = Field(description="Activity id (see the Activities page)")
     agent: Identifier
     harness: Identifier
     trigger: Trigger = ManualTrigger()
