@@ -48,11 +48,11 @@
 
 (defn- spec-with
   [url]
-  (update fixtures/platform-spec :mcp-servers
+  (update fixtures/tenant-spec :mcp-servers
           (fn [servers] (mapv #(assoc % :url url) servers))))
 
 (def session
-  {:id #uuid "11111111-1111-1111-1111-111111111111" :sub "alice" :team-id "alpha"})
+  {:id #uuid "11111111-1111-1111-1111-111111111111" :sub "alice" :tenant "acme" :team-id "alpha"})
 
 (defn- request
   [method path body & {:keys [key] :or {key "good-key"}}]
@@ -86,11 +86,12 @@
   [url f]
   (let [audit
         (atom [])]
-    (with-redefs [platform-api/platform-spec (constantly (spec-with url))
+    (with-redefs [platform-api/tenant-spec (fn [_ tenant] (when (= "acme" tenant) (spec-with url)))
                   sessions-api/session-by-key (fn [_ k purposes] (when (and (= "good-key" k) (= #{"tools"} purposes)) session))
                   sessions-api/mcp-servers (fn [_ _] ["jira"])
-                  api/resolve-credential (fn [_ credential-id user]
-                                           (when (and (= "jira" credential-id) (= "alice" user))
+                  api/resolve-credential (fn [_ {:keys [tenant team-id user]} credential-id]
+                                           (when (and (= "jira" credential-id) (= "alice" user)
+                                                      (= ["acme" "alpha"] [tenant team-id]))
                                              {:value {:secret "pw" :username "alice"} :source :user}))
                   observability-api/append-audit! (fn [_ session-id type _ payload]
                                                     (swap! audit conj [session-id type payload]))]
@@ -112,10 +113,15 @@
            (= {:status 403 :error "This harness may not use MCP server github"}
               (call (request :post "/mcp-gw/github" (rpc "ping" {})))))
           (with-redefs [sessions-api/session-by-key (fn [_ _ _] (assoc session :team-id "beta"))
-                        platform-api/platform-spec (constantly (assoc-in (spec-with url) [:mcp-servers 0 :teams] ["alpha"]))]
+                        platform-api/tenant-spec (constantly (assoc-in (spec-with url) [:mcp-servers 0 :teams] ["alpha"]))]
             (is
              (= {:status 404 :error "MCP server jira is not available"}
                 (call (request :post "/mcp-gw/jira" (rpc "ping" {}))))))
+          (testing "servers are looked up in the session's tenant"
+            (with-redefs [sessions-api/session-by-key (fn [_ _ _] (assoc session :tenant "globex"))]
+              (is
+               (= {:status 404 :error "MCP server jira is not available"}
+                  (call (request :post "/mcp-gw/jira" (rpc "ping" {})))))))
           (testing "a tool outside the server's allow-list never reaches it"
             (let [response
                   (call (request :post "/mcp-gw/jira" (rpc "tools/call" {:name "delete_project" :arguments {}})))]
@@ -249,7 +255,7 @@
       (finally
         (.stop server 0)))))
 
-(deftest platform-owned-sessions-use-platform-values-only
+(deftest platform-owned-sessions-use-team-and-tenant-values-only
   (let [{:keys [server url]}
         (start-upstream (fn [_] (json-reply {:jsonrpc "2.0" :id 7 :result {}})))
 
@@ -259,12 +265,12 @@
       (with-gateway* url
         (fn [_audit]
           (with-redefs [sessions-api/session-by-key (fn [_ _ _] (assoc session :sub "platform"))
-                        api/resolve-credential (fn [_ _ user]
-                                                 (swap! asked-for conj user)
-                                                 {:value {:secret "team"} :source :platform})]
+                        api/resolve-credential (fn [_ owner-of _]
+                                                 (swap! asked-for conj owner-of)
+                                                 {:value {:secret "team"} :source :team})]
             (call (request :post "/mcp-gw/jira" (rpc "tools/call" {:name "search"})))
             (is
-             (= [nil]
+             (= [{:tenant "acme" :team-id "alpha" :user nil}]
                 @asked-for)))))
       (finally
         (.stop server 0)))))

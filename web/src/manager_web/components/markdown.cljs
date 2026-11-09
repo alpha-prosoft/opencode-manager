@@ -3,13 +3,16 @@
    (a prompt injection can control it), so raw HTML in the source is shown as
    text, images become their alt text, and the result is sanitized against a
    short allow-list: no styles, images, forms, frames, event handlers or
-   non-http(s) links. Links open in a new tab without access to this page."
+   non-http(s) links. Links open in a new tab without access to this page.
+   Reagent sets HTML only when it is marked with unsafe-html, which this
+   namespace does for what the sanitizer returned and for nothing else."
   (:require ["@mui/material/Box" :default Box]
             ["dompurify" :as dompurify]
             ["marked" :refer [Marked]]
             [goog.string :as gstring]
             [manager-web.el :as el]
-            [manager-web.theme :as theme]))
+            [manager-web.theme :as theme]
+            [reagent.core :as r]))
 
 (def ^:private renderer
   #js {:html (fn [^js token] (gstring/htmlEscape (.-text token)))
@@ -65,5 +68,5 @@
 (defn markdown
   [text & [el-id]]
   [:> Box {:sx (:markdown-document theme/sx)
-           :data-testid (el/id el-id)
-           :dangerouslySetInnerHTML {:__html (html text)}}])
+           :data-testid (el/id el-id)}
+   [:div {:dangerouslySetInnerHTML (r/unsafe-html (html text))}]])

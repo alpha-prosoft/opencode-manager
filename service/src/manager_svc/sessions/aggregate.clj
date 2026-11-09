@@ -5,14 +5,16 @@
    Touches only keep :last-activity-at roughly current for restarts; they
    change no directory row.
 
-   The reaper aggregate (reaper-id) holds an administrator's last request to
-   stop idle sessions, which the reaper carries out."
+   A tenant's reaper aggregate (reaper-id) holds its administrators' last
+   request to stop the tenant's idle sessions, which the reaper carries out."
   (:require [edd.core :as edd]
             [lambda.uuid :as uuid]
+            [manager-svc.auth :as auth]
             [manager-svc.directory :as directory]))
 
-(def reaper-id
-  (uuid/named "sessions:reaper"))
+(defn reaper-id
+  [tenant]
+  (uuid/named (str "sessions:reaper:" tenant)))
 
 (defn session?
   [aggregate]
@@ -69,22 +71,22 @@
 
 (defn- idle-stop-requested
   [aggregate {:keys [attrs]}]
-  (assoc aggregate :kind :session-reaper :requested-at (:at attrs) :requested-by (:by attrs)))
+  (assoc aggregate :kind :session-reaper :tenant (:tenant attrs) :requested-at (:at attrs) :requested-by (:by attrs)))
 
 (def record-keys
   "What the UI sees of a session record."
-  [:id :sub :email :name :description :visibility :labels :image :team-id :run-id :activity
+  [:id :sub :email :name :description :visibility :labels :image :tenant :team-id :project :run-id :activity
    :locked-by :locked-at :forked-from :created-at :last-activity-at :stopped-at])
 
 (def row-keys
   (into record-keys [:pending :fork-pending :error]))
 
 (defn directories
-  "Identities of the directories listing a session: its owner's and its
-   team's, or the platform's for a session without a team."
-  [{:keys [sub team-id]}]
-  [(directory/user sub)
-   (if team-id (directory/team team-id) directory/platform)])
+  "Identities of the directories listing a session: its team's and, when a
+   person owns it, that person's."
+  [{:keys [sub tenant team-id]}]
+  (cond-> [(directory/team tenant team-id)]
+    (not (auth/platform-user? sub)) (conj (directory/user sub))))
 
 (defn directory-rows
   [aggregate]

@@ -4,10 +4,12 @@
    Each entry is an :audit-appended event on the session's audit aggregate;
    its event-seq is the entry's seq, so pages of the trail are event-store
    range reads. The aggregate keeps only the count, the chain head and the
-   conversations seen. An entry's hash is
-   sha256(prev-hash|type|key|body) with body the canonical JSON payload,
-   stored verbatim so verification and the export never depend on
-   re-serialisation."
+   conversations seen. An entry's hash is the sha256 of the JSON array
+   [prev-hash, ts, type, key, body] (:hash-version 2), with body the
+   canonical JSON payload, stored verbatim so verification and the export
+   never depend on re-serialisation. Entries recorded before versions
+   (no :hash-version) are sha256(prev-hash|type|key|body) and verify as
+   such."
   (:require [edd.common :as common]
             [edd.core :as edd]
             [edd.dal :as dal]
@@ -32,9 +34,16 @@
   [session-id]
   (uuid/named (str "audit:" session-id)))
 
+(def hash-version
+  2)
+
 (defn entry-hash
-  [previous entry-type entry-key body]
-  (hash/sha256-hex (str previous "|" entry-type "|" entry-key "|" body)))
+  "The hash of an entry ({:ts :type :key :body}) after previous, as version
+   computes it."
+  [version previous {:keys [ts type key body]}]
+  (if (= 2 version)
+    (hash/sha256-hex (json/canonical [previous ts type key body]))
+    (hash/sha256-hex (str previous "|" type "|" key "|" body))))
 
 (defn- conversation-facts
   "The conversation an entry belongs to, read from its payload once when it
@@ -168,7 +177,8 @@
        :id id
        :attrs (assoc attrs
                      :prev-hash previous
-                     :hash (entry-hash previous (:type attrs) (:key attrs) (:body attrs)))})))
+                     :hash-version hash-version
+                     :hash (entry-hash hash-version previous attrs))})))
 
 (defn- events
   "Audit entries with seq in [from, to]."
@@ -179,23 +189,27 @@
 
 (defn ->entry
   "An entry as the UI reads it, with the payload parsed; raw entries carry
-   the stored :body instead, exactly as hashed."
+   the stored :body instead, exactly as hashed. :hash-version says how the
+   hash was taken (nil for entries recorded before versions)."
   [raw? {:keys [event-seq attrs]}]
   (let [entry
         {:seq event-seq
          :ts (:ts attrs)
          :type (:type attrs)
          :key (:key attrs)
-         :hash (:hash attrs)}]
+         :hash (:hash attrs)
+         :hash-version (:hash-version attrs)}]
     (if raw?
       (assoc entry :body (:body attrs))
       (assoc entry :payload (json/read-str (:body attrs))))))
 
+(defn- last-seq
+  [ctx session-id]
+  (or (:version (common/get-by-id ctx {:id (aggregate-id session-id)})) 0))
+
 (defn- page
   [ctx session-id after limit]
-  (let [last-seq
-        (or (:version (common/get-by-id ctx {:id (aggregate-id session-id)})) 0)]
-    (events ctx session-id (inc after) (min last-seq (+ after limit)))))
+  (events ctx session-id (inc after) (min (last-seq ctx session-id) (+ after limit))))
 
 (defn verify-events
   "Recomputes the chain over entries in seq order and compares its end with
@@ -213,7 +227,7 @@
 
       (or (not= event-seq (inc checked))
           (not= previous (:prev-hash attrs))
-          (not= (:hash attrs) (entry-hash previous (:type attrs) (:key attrs) (:body attrs))))
+          (not= (:hash attrs) (entry-hash (:hash-version attrs) previous attrs)))
       {:valid false :checked checked :broken-at (inc checked)}
 
       :else
@@ -221,10 +235,10 @@
 
 (defn- all-events
   [ctx session-id]
-  (let [last-seq
-        (or (:version (common/get-by-id ctx {:id (aggregate-id session-id)})) 0)]
-    (mapcat #(events ctx session-id % (min last-seq (+ % page-size -1)))
-            (range 1 (inc last-seq) page-size))))
+  (let [end
+        (last-seq ctx session-id)]
+    (mapcat #(events ctx session-id % (min end (+ % page-size -1)))
+            (range 1 (inc end) page-size))))
 
 (defn list-query
   [ctx {:keys [session-id after limit raw]}]

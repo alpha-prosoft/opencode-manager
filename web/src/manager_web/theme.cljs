@@ -131,16 +131,33 @@
   "Named sx fragments shared by views."
   {:page-stack {:gap 4}
    :app-frame {:display "flex" :minHeight "100vh"}
-   :sidebar-nav {:flexGrow 1 :overflowY "auto"}
+   :sidebar {:height "100%" :overflow "hidden"}
+   :sidebar-nav {:flexGrow 1 :minHeight 0 :overflowY "auto"}
    :loading {:display "grid" :placeItems "center" :py 6}
    :centered-screen {:display "grid" :placeItems "center" :minHeight "100vh" :px 2}
    :login-card {:p 4 :width "100%" :maxWidth 420}
    :brand {:alignItems "center" :color "text.primary" :textDecoration "none" :cursor "pointer"}
    :brand-mark {:width 30 :height 30 :bgcolor "primary.main" :color "primary.contrastText"}
    :brand-mark-large {:bgcolor "primary.main" :color "primary.contrastText"}
+   :brand-tenant {:mt 0.5 :maxWidth "100%"}
+   :brand-tenant-mobile {:ml 1 :maxWidth 160}
+   :team-switcher {:px 2 :pt 0.5 :pb 1.5}
+   :team-switcher-none {:px 2 :pb 1.5 :display "block"}
+   :team-option {:my 0}
+   :role-lines {:m 0 :pl 2}
+   :context-summary {:m 0 :p 1.5 :display "grid" :gridTemplateColumns {:xs "1fr" :sm "max-content 1fr"}
+                     :columnGap 2 :rowGap {:xs 0.25 :sm 1} :typography "body2" :bgcolor "action.hover"
+                     :borderRadius 1 "& dd" {:m 0 :mb {:xs 1 :sm 0}}}
+   :context-label {:color "text.secondary" :fontWeight 500}
+   :row-context {:display {:xs "block" :md "none"} :mt 0.25 :overflowWrap "anywhere"}
+   :inline-icon {:fontSize "inherit" :verticalAlign "-0.125em" :mr 0.25}
+   :breadcrumbs {:typography "body2" :color "text.secondary" "& .MuiBreadcrumbs-ol" {:flexWrap "wrap"}}
+   :breadcrumb-current {:color "text.primary" :maxWidth 280 :overflow "hidden" :textOverflow "ellipsis"
+                        :whiteSpace "nowrap"}
+   :team-heading {:alignItems "center" :mb 0.75}
    :drawer {:width drawer-width :flexShrink 0 "& .MuiDrawer-paper" {:width drawer-width}}
    :drawer-temporary {"& .MuiDrawer-paper" {:width drawer-width}}
-   :sidebar-footer {:p 2 :borderTop 1 :borderColor "divider" :alignItems "center"}
+   :sidebar-footer {:p 2 :borderTop 1 :borderColor "divider" :alignItems "center" :flexShrink 0}
    :avatar-small {:width 32 :height 32 :fontSize "0.875rem"}
    :main {:flexGrow 1 :minWidth 0}
    :container {:py {:xs 3 :md 5}}
@@ -187,7 +204,9 @@
    :progress-note {:mt 2 :textAlign "center"}
    :result-paper {:p {:xs 2 :md 3}}
    :setup-paper {:p 3 :maxWidth 720}
-   :setup-later {:mt 2}
+   :setup-later {:mt 2 :alignItems "center"}
+   :one-line {:flexShrink 0 :whiteSpace "nowrap"}
+   :setup-identity {:alignItems "center"}
    :muted {:color "text.secondary"}
    :status-dot {:fontSize "8px !important"}
    :panel {:p 2}
@@ -223,7 +242,7 @@
                        "& h1" {:fontSize "1.375rem"}
                        "& h2" {:fontSize "1.175rem"}
                        "& h3" {:fontSize "1rem"}
-                       "& > :first-child" {:mt 0}
+                       "& > div > :first-child" {:mt 0}
                        :maxWidth 820
                        "& p, & li" {:lineHeight 1.6}
                        "& table" {:borderCollapse "collapse" :width "100%" :my 2 :fontSize "0.9rem"}
@@ -231,4 +250,18 @@
                        "& th" {:bgcolor "action.hover"}
                        "& code" {:typography "mono" :bgcolor "action.hover" :px 0.5 :borderRadius 0.5}
                        "& pre" {:bgcolor "action.hover" :p 2 :borderRadius 1 :overflowX "auto"}
-                       "& pre code" {:bgcolor "transparent" :p 0}}})
+                       "& pre code" {:bgcolor "transparent" :p 0}}
+   :mono-wrap {:typography "mono" :overflowWrap "anywhere"}
+   :push-right {:ml "auto"}
+   :search-trigger {:mx 2 :mb 1.5 :width "auto" :justifyContent "flex-start" :color "text.secondary"
+                    :borderColor "divider" "& .MuiButton-endIcon" {:ml "auto"}}
+   :search-shortcut {:px 0.75 :border 1 :borderColor "divider" :borderRadius 0.75 :lineHeight 1.6}
+   :search-dialog {"& .MuiDialog-container" {:alignItems "flex-start"} "& .MuiDialog-paper" {:mt {:xs 2 :sm 10}}}
+   :search-input {"& .MuiOutlinedInput-notchedOutline" {:border 0} :borderBottom 1 :borderColor "divider"}
+   :search-progress {:height 2}
+   :search-results {:maxHeight 420 :overflowY "auto" :py 0}
+   :search-group {:p 0 :m 0}
+   :search-note {:px 2 :py 2}
+   :webhook-mapping-row {:alignItems {:sm "flex-start"} :py 1 :borderTop 1 :borderColor "divider"}
+   :webhook-mapping-label {:width {:sm 180} :flexShrink 0 :pt {:sm 0.75}}
+   :webhook-name-link {:fontWeight 500 :textAlign "left" :verticalAlign "baseline"}})

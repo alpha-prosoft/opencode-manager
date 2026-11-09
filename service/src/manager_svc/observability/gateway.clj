@@ -2,8 +2,8 @@
   "OpenAI-compatible LLM gateway for sandboxes, served on the sandbox
    listener.
 
-   A sandbox authenticates with its session key (the session must exist,
-   not be stopped and not be locked); the gateway enforces the harness
+   A sandbox authenticates with its session key (sessions.api/session-by-key
+   knows no key of a stopped or locked session); the gateway enforces the harness
    model allow-list and the team's daily token budget, adds the provider
    credential (manager-svc.observability.upstream), relays the upstream
    response (SSE streams chunk by chunk, unbuffered) and meters usage from
@@ -29,22 +29,17 @@
   33554432)
 
 (defn sandbox
-  "The LLM part of a session's sandbox: {:llm-connection :llm-models :team-id :run-id}."
+  "The LLM part of a session's sandbox: {:llm-connection :llm-models :tenant :team-id :run-id}."
   [session]
-  (merge (select-keys session [:team-id :run-id :llm-connection :llm-models])
+  (merge (select-keys session [:tenant :team-id :run-id :llm-connection :llm-models])
          (:sandbox session)))
 
 (defn session-of-key!
-  "The live session a gateway key belongs to: it exists, is not stopped and
-   is not locked."
+  "The live session a gateway key belongs to; 401 for any other key."
   [system key purposes]
-  (let [session
-        (when key
-          (sessions/session-by-key system key purposes))]
-    (cond
-      (or (nil? session) (:stopped-at session)) (errors/fail! 401 "Invalid gateway key")
-      (:locked-at session) (errors/fail! 423 "This session is locked")
-      :else session)))
+  (or (when key
+        (sessions/session-by-key system key purposes))
+      (errors/fail! 401 "Invalid gateway key")))
 
 (defn- context
   [system request]
@@ -58,7 +53,7 @@
         (some-> (:llm-connection box) name)
 
         connection
-        (platform/llm-connection system connection-id)]
+        (platform/llm-connection system (:tenant box) connection-id)]
     (if connection
       {:session session :sandbox box :connection connection}
       (errors/fail! 503 (str "LLM connection " connection-id " is not configured")))))
@@ -81,17 +76,17 @@
      (or (get-in block ["prompt_tokens_details" "cached_tokens"]) 0)]))
 
 (defn check-budget!
-  "Refuses a call when the team used its daily budget, and when the usage
-   can't be read (fails closed)."
-  [system team-id]
+  "Refuses a call when the team used its daily budget (its team.json), and
+   when the usage can't be read (fails closed)."
+  [system tenant team-id]
   (let [daily
         (when team-id
-          (get-in (platform/team system team-id) [:budget :daily-tokens]))
+          (get-in (platform/team system tenant team-id) [:budget :daily-tokens]))
 
         used
         (when (and daily (pos? daily))
           (try
-            (api/tokens-today system team-id)
+            (api/tokens-today system tenant team-id)
             (catch Exception e
               (log/error e "Could not read the token budget of" team-id)
               (errors/fail! 503 "The token budget can't be checked right now"))))]
@@ -112,11 +107,16 @@
     body))
 
 (defn- usage-line
-  "Usage totals from one SSE line when it carries a non-empty usage block."
+  "Usage totals from one SSE data line (\"data:\" with or without a space)
+   when it carries a non-empty usage block."
   [^String line]
-  (when (and (string/starts-with? line "data: {") (string/includes? line "\"usage\""))
-    (let [totals
-          (some-> (json/read-str (subs line 6)) usage-of)]
+  (when (and (string/starts-with? line "data:") (string/includes? line "\"usage\""))
+    (let [payload
+          (json/read-str (subs line 5))
+
+          totals
+          (when (map? payload)
+            (usage-of payload))]
       (when (and totals (some pos? totals))
         totals))))
 
@@ -152,9 +152,9 @@
               (recur (or (last (keep usage-line lines)) totals)))))))))
 
 (defn- secret!
-  [system connection]
+  [system tenant connection]
   (let [secret
-        (credentials/secret system (:secret connection))]
+        (credentials/secret system tenant (:secret connection))]
     (when (string/blank? secret)
       (errors/fail! 503 (str "Secret " (:secret connection) " is not configured")))
     secret))
@@ -166,6 +166,7 @@
       (api/record-usage! system {:session-id (:id session)
                                  :username (:sub session)
                                  :run-id (:run-id sandbox)
+                                 :tenant (:tenant sandbox)
                                  :team-id (:team-id sandbox)
                                  :connection (:id connection)
                                  :model model
@@ -186,7 +187,7 @@
         (validated-body! request sandbox)
 
         _
-        (check-budget! system (:team-id sandbox))
+        (check-budget! system (:tenant sandbox) (:team-id sandbox))
 
         streaming?
         (boolean (get body "stream"))
@@ -200,7 +201,7 @@
         (System/nanoTime)
 
         response
-        (upstream/call! connection (secret! system connection) (get-in request [:headers "accept"]) upstream-body)
+        (upstream/call! connection (secret! system (:tenant sandbox) connection) (get-in request [:headers "accept"]) upstream-body)
 
         status
         (:status response)

@@ -1,4 +1,6 @@
 #kaocha/v1
 {:tests [{:id :it
           :test-paths ["test/it"]
-          :ns-patterns ["-it$"]}]}
+          :ns-patterns ["-it$"]}]
+ :plugins [:kaocha.plugin/profiling]
+ :kaocha.plugin.profiling/count 40}

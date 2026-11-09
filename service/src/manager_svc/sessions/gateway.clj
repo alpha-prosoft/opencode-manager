@@ -7,8 +7,11 @@
 
    The manager's login never reaches a session host. Entering a session
    carries the person over with a one-time handoff token; the session host
-   then gets its own cookie, a token bound to that session (auth/session-token)
-   that forward-auth accepts only for that session's host."
+   then gets its own cookie, a token bound to that session that forward-auth
+   accepts only for that session's host. The token is renewed while the
+   person works, but never past :until, the time their login would have
+   ended: then they enter through the manager again, with the roles their
+   login carries by then."
   (:require [clojure.string :as string]
             [clojure.tools.logging :as log]
             [manager-svc.auth :as auth]
@@ -53,11 +56,32 @@
   [{:keys [headers]}]
   (auth/parse-cookies (get headers "cookie")))
 
+(defn- now-seconds
+  []
+  (.getEpochSecond (Instant/now)))
+
+(defn login-deadline
+  "When a login made now ends, in epoch seconds."
+  [settings]
+  (+ (now-seconds) (* 3600 (long (:auth-ttl-hours settings)))))
+
+(defn- deadline
+  [claims]
+  (some-> (:until claims) str parse-long))
+
+(defn- current
+  "claims while the login they were handed over from still counts."
+  [claims]
+  (let [until
+        (deadline claims)]
+    (when (and until (< (now-seconds) until))
+      claims)))
+
 (defn- session-cookie
-  [settings identity session-id]
+  [settings identity session-id until]
   (auth/set-cookie settings
                    (auth/session-cookie settings)
-                   (auth/session-token settings identity (str session-id))
+                   (auth/session-token settings identity session-id until)
                    auth/session-ttl-seconds))
 
 (defn- decode
@@ -99,17 +123,19 @@
       path)))
 
 (defn- may-open?
-  "can-open?, remembered for a few seconds per person and the session's
-   sharing, so a lock or a visibility change counts at once."
-  [system session username]
+  "can-open?, remembered for a few seconds per person (with the roles their
+   token carries) and the session's sharing, so a lock or a visibility
+   change counts at once."
+  [system session identity]
   (live/cached! system
-                [:open username (select-keys session [:id :sub :team-id :visibility :locked-at])]
+                [:open (select-keys identity [:sub :tenant :teams :tenant-admin])
+                 (select-keys session [:id :sub :tenant :team-id :visibility :locked-at])]
                 live/decision-ttl-ms
-                #(access/can-open? system session username)))
+                #(access/can-open? system session identity)))
 
 (defn- refresh-due?
   [{:keys [expires-at]}]
-  (< (- (or expires-at 0) (.getEpochSecond (Instant/now)))
+  (< (- (or expires-at 0) (now-seconds))
      (quot auth/session-ttl-seconds 2)))
 
 (defn authorize
@@ -133,22 +159,22 @@
       handoff
       (let [identity
             (auth/read-handoff settings handoff (str (:id session)))]
-        (if (and identity (access/can-open? system session (:sub identity)))
+        (if (and identity (access/can-open? system session identity))
           [:respond (assoc-in (redirect 302 (str (links/session-url settings (:id session)) (without-handoff uri)))
                               [:headers "Set-Cookie"]
-                              (session-cookie settings identity (:id session)))]
+                              (session-cookie settings identity (:id session) (login-deadline settings)))]
           [:respond (status-only 401)]))
 
       :else
       (let [claims
-            (auth/read-session-token settings
-                                     (get (cookies-of request) (auth/session-cookie settings))
-                                     (str (:id session)))]
+            (current (auth/read-session-token settings
+                                              (get (cookies-of request) (auth/session-cookie settings))
+                                              (str (:id session))))]
         (cond
           (nil? claims)
           [:respond (redirect 302 (links/entry-url settings session))]
 
-          (not (may-open? system session (:sub claims)))
+          (not (may-open? system session (auth/identity-of settings claims)))
           [:respond (redirect 302 (links/manager-page settings session))]
 
           :else
@@ -156,7 +182,7 @@
 
 (defn ensure-ready
   "True when the session's OpenCode answers; otherwise asks for a start
-   unless one is pending already."
+   unless one is pending already or the session is being deleted."
   [system {:keys [id pending]}]
   (cond
     (live/known-ready? system id)
@@ -165,7 +191,7 @@
     (backend/active? (live/backend-of system) id)
     (live/ready? system id)
 
-    (= :start pending)
+    (contains? #{:start :delete} pending)
     false
 
     :else
@@ -200,11 +226,11 @@
 
       (or (nil? session)
           (not= sub (:sub session))
-          (not (access/can-view? system session (:sub identity))))
+          (not (access/can-view? system session identity)))
       (status-only 404)
 
-      (not (access/can-open? system session (:sub identity)))
-      (redirect 303 (str "/sessions/" (:id session)))
+      (not (access/can-open? system session identity))
+      (redirect 303 (links/page-path session))
 
       :else
       (redirect 303 (str (links/session-url settings (:id session))
@@ -234,7 +260,10 @@
         (records/touch! system (:id result))
         {:status 200
          :headers (cond-> {"Authorization" (opencode/basic-auth (links/secret-key settings (:id result)))}
-                    (refresh-due? claims) (assoc "Set-Cookie" (session-cookie settings (auth/identity-of settings claims) (:id result))))}))))
+                    (refresh-due? claims) (assoc "Set-Cookie" (session-cookie settings
+                                                                              (auth/identity-of settings claims)
+                                                                              (:id result)
+                                                                              (deadline claims))))}))))
 
 (defn wake
   "Host handler: a request for a session host that reached the manager."

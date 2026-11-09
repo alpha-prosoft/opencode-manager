@@ -54,9 +54,12 @@
     (step "A finished run can be run again with the same inputs, as a new run"
           (fn []
             (let [source-id
-                  (h/path-id)]
+                  (h/path-id)
+
+                  source-path
+                  (h/current-path)]
               (h/click run-els/retry)
-              (h/wait-path-change (str "/runs/" source-id))
+              (h/wait-path-change source-path)
               (h/wait-visible run-els/page)
               (is
                (not= source-id

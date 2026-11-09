@@ -17,6 +17,7 @@
 (def session
   {:id #uuid "6f1c5a43-4444-4a52-9c1b-6a3f0b6a0001"
    :sub "alice"
+   :tenant "acme"
    :team-id "alpha"
    :run-id nil
    :sandbox {:llm-connection "up" :llm-models ["gpt-4o"]}})
@@ -88,14 +89,17 @@
 (defmacro with-platform
   [{:keys [port used recorded connection]} & body]
   `(with-redefs [sessions/session-by-key (fn [_# k# purposes#] (when (and (= "session-key" k#) (= #{"llm"} purposes#)) session))
-                 platform/platform-spec (constantly {:llm-connections
-                                                     [(merge {:id "up"
-                                                              :type "openai-compatible"
-                                                              :base-url (str "http://127.0.0.1:" ~port "/v1/")
-                                                              :secret "up-secret"}
-                                                             ~connection)]})
-                 platform/team (constantly {:id "alpha" :budget {:daily-tokens 1000}})
-                 credentials/secret (fn [_# name#] (when (= "up-secret" name#) "sk-test"))
+                 platform/llm-connection (fn [_# tenant# id#]
+                                           (when (and (= "acme" tenant#) (= "up" id#))
+                                             (merge {:id "up"
+                                                     :type "openai-compatible"
+                                                     :base-url (str "http://127.0.0.1:" ~port "/v1/")
+                                                     :secret "up-secret"}
+                                                    ~connection)))
+                 platform/team (fn [_# tenant# team-id#]
+                                 (when (and (= "acme" tenant#) (= "alpha" team-id#))
+                                   {:id "alpha" :tenant "acme" :budget {:daily-tokens 1000}}))
+                 credentials/secret (fn [_# tenant# name#] (when (and (= "acme" tenant#) (= "up-secret" name#)) "sk-test"))
                  api/tokens-today (fn [& _#] @~used)
                  api/record-usage! (fn [_# call#] (swap! ~recorded conj call#))]
      ~@body))
@@ -159,9 +163,9 @@
              (string/includes? rest-of-stream "data: [DONE]")))
           (is
            (= [{:prompt-tokens 7 :completion-tokens 3 :cached-tokens 2 :status 200 :model "gpt-4o"
-                :connection "up" :team-id "alpha" :username (:sub session)}]
+                :connection "up" :tenant "acme" :team-id "alpha" :username (:sub session)}]
               (mapv #(select-keys % [:prompt-tokens :completion-tokens :cached-tokens :status :model
-                                     :connection :team-id :username])
+                                     :connection :tenant :team-id :username])
                     @recorded)))
           (is
            (= {:path "/v1/chat/completions"
@@ -190,7 +194,7 @@
   (with-upstream [port _received _release]
     (let [used (atom 0)
           recorded (atom [])]
-      (with-redefs [gateway/sandbox (constantly {:llm-connection "up" :llm-models ["bad"] :team-id "alpha"})]
+      (with-redefs [gateway/sandbox (constantly {:llm-connection "up" :llm-models ["bad"] :tenant "acme" :team-id "alpha"})]
         (with-platform {:port port :used used :recorded recorded}
           (let [response
                 (gateway/chat-completions system (request {"model" "bad" "messages" []}))]
@@ -259,18 +263,25 @@
      (= [7 3 2]
         (gateway/relay! stream (java.io.ByteArrayOutputStream.))))))
 
-(deftest stopped-and-locked-sessions-lose-their-keys
+(deftest a-key-the-sessions-do-not-know-is-refused
   (with-platform {:port 1 :used (atom 0) :recorded (atom [])}
-    (testing "stopped"
-      (with-redefs [sessions/session-by-key (fn [& _] (assoc session :stopped-at "2026-11-08T10:00:00Z"))]
-        (is
-         (= 401
-            (status-of #(gateway/chat-completions system (request {"model" "gpt-4o" "messages" []})))))))
-    (testing "locked"
-      (with-redefs [sessions/session-by-key (fn [& _] (assoc session :locked-at "2026-11-08T10:00:00Z"))]
-        (is
-         (= 423
-            (status-of #(gateway/chat-completions system (request {"model" "gpt-4o" "messages" []})))))))))
+    (with-redefs [sessions/session-by-key (fn [& _] nil)]
+      (is
+       (= 401
+          (status-of #(gateway/chat-completions system (request {"model" "gpt-4o" "messages" []}))))))))
+
+(deftest usage-is-read-with-or-without-a-space-after-data
+  (doseq [prefix ["data: " "data:"]]
+    (let [stream
+          (ByteArrayInputStream.
+           (.getBytes (str prefix "{\"choices\":[]}\n\n"
+                           prefix "{\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3}}\n\n"
+                           prefix "[DONE]\n\n")
+                      StandardCharsets/UTF_8))]
+      (is
+       (= [7 3 0]
+          (gateway/relay! stream (java.io.ByteArrayOutputStream.)))
+       prefix))))
 
 (deftest the-budget-fails-closed
   (with-upstream [port received _release]
@@ -309,3 +320,28 @@
     (is
      (= [["/v1/chat/completions" "Bearer gh-token"]]
         (mapv (juxt :path :authorization) @received)))))
+
+(deftest the-budget-is-the-teams-own-in-its-tenant
+  (let [asked
+        (atom [])
+
+        teams
+        {["acme" "alpha"] {:budget {:daily-tokens 1000}}
+         ["acme" "unlimited"] {:budget {}}
+         ["globex" "alpha"] {:budget {:daily-tokens 1000000}}}]
+    (with-redefs [platform/team (fn [_ tenant team-id] (get teams [tenant team-id]))
+                  api/tokens-today (fn [_ tenant team-id]
+                                     (swap! asked conj [tenant team-id])
+                                     5000)]
+      (is
+       (= 429
+          (status-of #(gateway/check-budget! system "acme" "alpha"))))
+      (is
+       (nil?
+        (status-of #(gateway/check-budget! system "globex" "alpha"))))
+      (is
+       (nil?
+        (status-of #(gateway/check-budget! system "acme" "unlimited"))))
+      (is
+       (= [["acme" "alpha"] ["globex" "alpha"]]
+          @asked)))))

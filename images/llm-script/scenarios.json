@@ -1,0 +1,1169 @@
+{
+  "default": {
+    "text": "I have no task for this yet. Tell me what you would like me to look at in this workspace.",
+    "usage": {
+      "prompt": 612,
+      "completion": 38,
+      "cached": 0
+    }
+  },
+  "title": {
+    "system_marker": "You are a title generator",
+    "text": "Workspace conversation",
+    "usage": {
+      "prompt": 184,
+      "completion": 9,
+      "cached": 0
+    }
+  },
+  "preludes": {
+    "analysis": {
+      "match": [
+        "Write a business analysis for the brief in `.platform/brief.md`"
+      ],
+      "turns": [
+        {
+          "text": "I'll read the brief first.",
+          "tools": [
+            {
+              "name": "read",
+              "arguments": {
+                "filePath": "/session/workspace/.platform/brief.md"
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 2140,
+            "completion": 46,
+            "cached": 0
+          }
+        }
+      ]
+    },
+    "implement": {
+      "match": [
+        "Implement the task in `.platform/task.md`"
+      ],
+      "turns": [
+        {
+          "text": "Let me read the task and the team's guidelines.",
+          "tools": [
+            {
+              "name": "read",
+              "arguments": {
+                "filePath": "/session/workspace/.platform/task.md"
+              }
+            },
+            {
+              "name": "read",
+              "arguments": {
+                "filePath": "/session/workspace/.platform/guidelines.md"
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 2310,
+            "completion": 71,
+            "cached": 0
+          }
+        },
+        {
+          "text": "Now the code and its tests.",
+          "tools": [
+            {
+              "name": "read",
+              "arguments": {
+                "filePath": "/session/workspace/repo/demo/pricing.py"
+              }
+            },
+            {
+              "name": "read",
+              "arguments": {
+                "filePath": "/session/workspace/repo/tests/test_pricing.py"
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 2620,
+            "completion": 64,
+            "cached": 2048
+          }
+        }
+      ]
+    },
+    "change-review": {
+      "match": [
+        "Review pull request #"
+      ],
+      "turns": [
+        {
+          "text": "I'll read the guidelines and the diff before judging the change.",
+          "tools": [
+            {
+              "name": "read",
+              "arguments": {
+                "filePath": "/session/workspace/.platform/guidelines.md"
+              }
+            },
+            {
+              "name": "read",
+              "arguments": {
+                "filePath": "/session/workspace/.platform/pull-request.md"
+              }
+            },
+            {
+              "name": "read",
+              "arguments": {
+                "filePath": "/session/workspace/.platform/pr.diff"
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 2480,
+            "completion": 88,
+            "cached": 0
+          }
+        }
+      ]
+    },
+    "branch-review": {
+      "match": [
+        "Review branch `"
+      ],
+      "turns": [
+        {
+          "text": "I'll read the guidelines and the diff before judging the branch.",
+          "tools": [
+            {
+              "name": "read",
+              "arguments": {
+                "filePath": "/session/workspace/.platform/guidelines.md"
+              }
+            },
+            {
+              "name": "read",
+              "arguments": {
+                "filePath": "/session/workspace/.platform/branch.md"
+              }
+            },
+            {
+              "name": "read",
+              "arguments": {
+                "filePath": "/session/workspace/.platform/branch.diff"
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 2450,
+            "completion": 86,
+            "cached": 0
+          }
+        }
+      ]
+    }
+  },
+  "scenarios": [
+    {
+      "id": "requirements-csv-export",
+      "prelude": "analysis",
+      "match": [
+        "CSV export of their monthly invoices"
+      ],
+      "turns": [
+        {
+          "text": "The brief asks for a CSV export of monthly invoices. I'll check the template and how totals are calculated today.",
+          "tools": [
+            {
+              "name": "read",
+              "arguments": {
+                "filePath": "/session/workspace/.platform/template.md"
+              }
+            },
+            {
+              "name": "read",
+              "arguments": {
+                "filePath": "/session/workspace/repo/demo/pricing.py"
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 2390,
+            "completion": 92,
+            "cached": 2048
+          }
+        },
+        {
+          "tools": [
+            {
+              "name": "submit_document",
+              "arguments": {
+                "title": "CSV export of monthly invoices",
+                "markdown": {
+                  "file": "texts/requirements-csv-export.md"
+                }
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 2870,
+            "completion": 812,
+            "cached": 2048
+          }
+        },
+        {
+          "text": "The document is submitted. It follows the team's template; the open questions at the end need an answer from the product owner before work starts.",
+          "usage": {
+            "prompt": 4980,
+            "completion": 41,
+            "cached": 4096
+          }
+        }
+      ]
+    },
+    {
+      "id": "requirements-volume-discount",
+      "prelude": "analysis",
+      "match": [
+        "volume discount"
+      ],
+      "turns": [
+        {
+          "text": "The brief is about discounts by order size. I'll check the template and the current discount calculation.",
+          "tools": [
+            {
+              "name": "read",
+              "arguments": {
+                "filePath": "/session/workspace/.platform/template.md"
+              }
+            },
+            {
+              "name": "read",
+              "arguments": {
+                "filePath": "/session/workspace/repo/demo/pricing.py"
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 2380,
+            "completion": 90,
+            "cached": 2048
+          }
+        },
+        {
+          "tools": [
+            {
+              "name": "submit_document",
+              "arguments": {
+                "title": "Volume discount tiers",
+                "markdown": {
+                  "file": "texts/requirements-volume-discount.md"
+                }
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 2850,
+            "completion": 744,
+            "cached": 2048
+          }
+        },
+        {
+          "text": "The document is submitted. It follows the team's template; the open questions at the end need an answer from the product owner before work starts.",
+          "usage": {
+            "prompt": 4980,
+            "completion": 41,
+            "cached": 4096
+          }
+        }
+      ]
+    },
+    {
+      "id": "build-failure",
+      "prelude": "analysis",
+      "match": [
+        "The build of pull request #",
+        "failed."
+      ],
+      "capture": {
+        "change": "pull request #(\\d+)",
+        "build": "build #(\\d+)",
+        "job": "Jenkins job `([^`]+)`",
+        "branch": "The change is on branch `([^`]+)`"
+      },
+      "turns": [
+        {
+          "tools": [
+            {
+              "name": "submit_document",
+              "arguments": {
+                "title": "Build #{{build}} failed: an existing test still passes the discount as a fraction",
+                "markdown": {
+                  "file": "texts/build-failure.md"
+                }
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 4260,
+            "completion": 498,
+            "cached": 2048
+          }
+        },
+        {
+          "text": "The analysis is submitted: `test_discount` still passes the discount as a fraction, which the change now reads as a percentage. The fix is to update that test and any other caller in the same change.",
+          "usage": {
+            "prompt": 4810,
+            "completion": 58,
+            "cached": 4096
+          }
+        }
+      ]
+    },
+    {
+      "id": "analysis-other",
+      "prelude": "analysis",
+      "match": [],
+      "capture": {
+        "subject": "brief\\.md</path>\\n<type>file</type>\\n<content>\\n1: ([^\\n]{1,160})"
+      },
+      "turns": [
+        {
+          "tools": [
+            {
+              "name": "submit_document",
+              "arguments": {
+                "title": "Analysis: {{subject}}",
+                "markdown": {
+                  "file": "texts/analysis-other.md"
+                }
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 2290,
+            "completion": 356,
+            "cached": 2048
+          }
+        },
+        {
+          "text": "The analysis is submitted. It lists what has to be confirmed before anyone starts on a fix.",
+          "usage": {
+            "prompt": 2690,
+            "completion": 34,
+            "cached": 2048
+          }
+        }
+      ]
+    },
+    {
+      "id": "review-e2e-branch",
+      "prelude": "branch-review",
+      "match": [
+        "def bulk_total("
+      ],
+      "turns": [
+        {
+          "text": "The branch adds `bulk_total`. I'll read the whole module and run the tests to check its two edge cases.",
+          "tools": [
+            {
+              "name": "read",
+              "arguments": {
+                "filePath": "/session/workspace/repo/demo/pricing.py"
+              }
+            },
+            {
+              "name": "bash",
+              "arguments": {
+                "command": "python3 -m unittest -v 2>&1 | tail -n 6",
+                "workdir": "/session/workspace/repo"
+              }
+            },
+            {
+              "name": "bash",
+              "arguments": {
+                "command": "python3 -c \"from demo.pricing import bulk_total; print(bulk_total([1.0] * 10), bulk_total([0.82] * 10 + [0.0]))\"",
+                "workdir": "/session/workspace/repo"
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 2960,
+            "completion": 148,
+            "cached": 2048
+          }
+        },
+        {
+          "tools": [
+            {
+              "name": "submit_review",
+              "arguments": {
+                "verdict": "REQUEST_CHANGES",
+                "summary": "bulk_total gives the bulk discount one item too late and can lose a cent by truncating instead of rounding. Both are small fixes; the function also needs tests, which would have caught them.",
+                "findings": [
+                  {
+                    "severity": "major",
+                    "title": "Orders of exactly 10 items get no discount",
+                    "body": "The docstring promises the discount for \"10 or more items\", but `len(prices) > 10` only gives it from 11 items on. `bulk_total([1.0] * 10)` returns `10.0`, not `9.0`.",
+                    "path": "demo/pricing.py",
+                    "line": 8,
+                    "suggestion": "    discount = 0.1 if len(prices) >= 10 else 0.0"
+                  },
+                  {
+                    "severity": "major",
+                    "title": "Truncating with int() loses a cent on some totals",
+                    "body": "`total()` already rounds to cents. `int(x * 100) / 100` then truncates, and because `x * 100` is not exact in floating point, `8.2` becomes `8.19` (`8.2 * 100 == 819.9999999999999`). Return the rounded total as it is.",
+                    "path": "demo/pricing.py",
+                    "line": 9,
+                    "suggestion": "    return total(prices, discount)"
+                  },
+                  {
+                    "severity": "minor",
+                    "title": "No tests for bulk_total",
+                    "body": "`tests/test_pricing.py` is unchanged. Add tests at the boundary (9, 10 and 11 items) and for a total such as 8.20, so that both problems above stay fixed.",
+                    "path": "demo/pricing.py",
+                    "line": 6
+                  }
+                ],
+                "checked": [
+                  "total() is unchanged and its two tests pass",
+                  "No secrets or external input in the change"
+                ]
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 3540,
+            "completion": 612,
+            "cached": 2048
+          }
+        },
+        {
+          "text": "The review is submitted with the verdict **REQUEST_CHANGES**: two major findings in `bulk_total` (the boundary at 10 items, and truncation instead of rounding) and one minor finding about missing tests.",
+          "usage": {
+            "prompt": 4290,
+            "completion": 62,
+            "cached": 2048
+          }
+        }
+      ]
+    },
+    {
+      "id": "review-branch-other",
+      "prelude": "branch-review",
+      "match": [],
+      "turns": [
+        {
+          "tools": [
+            {
+              "name": "submit_review",
+              "arguments": {
+                "verdict": "APPROVE",
+                "summary": "The change is small and consistent with the surrounding code. I found nothing that needs to change.",
+                "findings": [],
+                "checked": [
+                  "Read every hunk of the diff",
+                  "No secrets in the change"
+                ]
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 3120,
+            "completion": 96,
+            "cached": 2048
+          }
+        },
+        {
+          "text": "The review is submitted with the verdict **APPROVE**.",
+          "usage": {
+            "prompt": 3310,
+            "completion": 18,
+            "cached": 2048
+          }
+        }
+      ]
+    },
+    {
+      "id": "review-change-subtotal",
+      "prelude": "change-review",
+      "match": [
+        "+def subtotal("
+      ],
+      "turns": [
+        {
+          "text": "The change adds `subtotal` with two tests. I'll run the suite on the checked-out change.",
+          "tools": [
+            {
+              "name": "read",
+              "arguments": {
+                "filePath": "/session/workspace/repo/demo/pricing.py"
+              }
+            },
+            {
+              "name": "bash",
+              "arguments": {
+                "command": "python3 -m unittest -v 2>&1 | tail -n 8",
+                "workdir": "/session/workspace/repo"
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 3050,
+            "completion": 96,
+            "cached": 2048
+          }
+        },
+        {
+          "tools": [
+            {
+              "name": "submit_review",
+              "arguments": {
+                "verdict": "APPROVE",
+                "summary": "subtotal does what the task asks, is typed like the rest of the module and comes with tests for a rounded sum and an empty list. All four tests pass. One naming nit, not blocking.",
+                "findings": [
+                  {
+                    "severity": "nit",
+                    "title": "The new function shares its name with a local variable in total()",
+                    "body": "`total()` has a local variable `subtotal` (line 2) that now shadows this function inside it. Nothing breaks, but it reads oddly. Consider renaming the local, for example to `gross`.",
+                    "path": "demo/pricing.py",
+                    "line": 6
+                  }
+                ],
+                "checked": [
+                  "python3 -m unittest: 4 tests pass",
+                  "Rounding matches total() (two decimals)",
+                  "No behaviour change for existing callers"
+                ]
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 3620,
+            "completion": 268,
+            "cached": 2048
+          }
+        },
+        {
+          "text": "The review is submitted with the verdict **APPROVE** and one nit about the name `subtotal`.",
+          "usage": {
+            "prompt": 4010,
+            "completion": 31,
+            "cached": 2048
+          }
+        }
+      ]
+    },
+    {
+      "id": "review-change-percent-discount",
+      "prelude": "change-review",
+      "match": [
+        "discount / 100"
+      ],
+      "turns": [
+        {
+          "text": "The change alters what `discount` means in `total()`. I'll run the whole suite, not only the new tests.",
+          "tools": [
+            {
+              "name": "read",
+              "arguments": {
+                "filePath": "/session/workspace/repo/tests/test_pricing.py"
+              }
+            },
+            {
+              "name": "bash",
+              "arguments": {
+                "command": "python3 -m unittest -v 2>&1 | tail -n 14",
+                "workdir": "/session/workspace/repo"
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 3080,
+            "completion": 104,
+            "cached": 2048
+          }
+        },
+        {
+          "tools": [
+            {
+              "name": "submit_review",
+              "arguments": {
+                "verdict": "REQUEST_CHANGES",
+                "summary": "The change turns discount from a fraction into a percentage but leaves the existing caller in the tests on the old unit, so the suite fails: test_discount gets 9.99 instead of 9.0. The new behaviour itself is implemented correctly.",
+                "findings": [
+                  {
+                    "severity": "major",
+                    "title": "Existing callers still pass a fraction; the test suite fails",
+                    "body": "`tests/test_pricing.py::test_discount` calls `total([10.0], discount=0.1)` and expects `9.0`. With this line, 0.1 is a tenth of a percent and the result is `9.99`. Update that test, and every other caller, in the same change. `python3 -m unittest` shows the failure; the new module alone passes.",
+                    "path": "demo/pricing.py",
+                    "line": 3
+                  },
+                  {
+                    "severity": "question",
+                    "title": "Should a discount above 100 be refused?",
+                    "body": "`total([200.0], discount=150)` returns `-100.0`. With fractions that mistake was unlikely; with percentages a value such as 150 is easy to send. Should `total()` reject values outside 0 to 100?",
+                    "path": "tests/test_percent.py",
+                    "line": 8
+                  }
+                ],
+                "checked": [
+                  "tests/test_percent.py: both new tests pass",
+                  "The default discount=0.0 still means no discount"
+                ]
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 3710,
+            "completion": 402,
+            "cached": 2048
+          }
+        },
+        {
+          "text": "The review is submitted with the verdict **REQUEST_CHANGES**: the existing test still passes a fraction and fails with this change.",
+          "usage": {
+            "prompt": 4240,
+            "completion": 36,
+            "cached": 2048
+          }
+        }
+      ]
+    },
+    {
+      "id": "review-change-other",
+      "prelude": "change-review",
+      "match": [],
+      "turns": [
+        {
+          "tools": [
+            {
+              "name": "submit_review",
+              "arguments": {
+                "verdict": "APPROVE",
+                "summary": "The change is small and consistent with the surrounding code. I found nothing that needs to change.",
+                "findings": [],
+                "checked": [
+                  "Read every hunk of the diff",
+                  "No secrets in the change"
+                ]
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 3120,
+            "completion": 96,
+            "cached": 2048
+          }
+        },
+        {
+          "text": "The review is submitted with the verdict **APPROVE**.",
+          "usage": {
+            "prompt": 3310,
+            "completion": 18,
+            "cached": 2048
+          }
+        }
+      ]
+    },
+    {
+      "id": "implement-subtotal",
+      "prelude": "implement",
+      "match": [
+        "subtotal(prices"
+      ],
+      "turns": [
+        {
+          "text": "I'll add `subtotal` below `total` and cover it with two tests.",
+          "tools": [
+            {
+              "name": "edit",
+              "arguments": {
+                "filePath": "/session/workspace/repo/demo/pricing.py",
+                "oldString": "    return round(subtotal - subtotal * discount, 2)\n",
+                "newString": "    return round(subtotal - subtotal * discount, 2)\n\n\ndef subtotal(prices: list[float]) -> float:\n    return round(sum(prices), 2)\n"
+              }
+            },
+            {
+              "name": "edit",
+              "arguments": {
+                "filePath": "/session/workspace/repo/tests/test_pricing.py",
+                "oldString": "from demo.pricing import total\n",
+                "newString": "from demo.pricing import subtotal, total\n"
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 3010,
+            "completion": 214,
+            "cached": 2048
+          }
+        },
+        {
+          "tools": [
+            {
+              "name": "edit",
+              "arguments": {
+                "filePath": "/session/workspace/repo/tests/test_pricing.py",
+                "oldString": "        self.assertEqual(total([10.0], discount=0.1), 9.0)\n",
+                "newString": "        self.assertEqual(total([10.0], discount=0.1), 9.0)\n\n\nclass SubtotalTest(unittest.TestCase):\n    def test_rounded_sum(self):\n        self.assertEqual(subtotal([1.0, 2.5, 0.333]), 3.83)\n\n    def test_empty(self):\n        self.assertEqual(subtotal([]), 0.0)\n"
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 3390,
+            "completion": 176,
+            "cached": 2048
+          }
+        },
+        {
+          "text": "Both files are changed. Running the tests.",
+          "tools": [
+            {
+              "name": "bash",
+              "arguments": {
+                "command": "python3 -m unittest -v",
+                "workdir": "/session/workspace/repo"
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 3640,
+            "completion": 52,
+            "cached": 2048
+          }
+        },
+        {
+          "tools": [
+            {
+              "name": "submit_implementation",
+              "arguments": {
+                "title": "Add subtotal() to the pricing module",
+                "summary": "Adds `subtotal(prices)`, which returns the sum of the prices rounded to cents, next to `total()`.",
+                "verified": true,
+                "changes": [
+                  "demo/pricing.py: new function subtotal(prices: list[float]) -> float",
+                  "tests/test_pricing.py: SubtotalTest with a rounded sum and an empty list"
+                ],
+                "tests": [
+                  "python3 -m unittest -v: 4 tests, OK"
+                ],
+                "notes": ""
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 3980,
+            "completion": 198,
+            "cached": 2048
+          }
+        },
+        {
+          "text": "Done. `subtotal` is in `demo/pricing.py` with two tests; all four tests pass. The platform delivers the change from here.",
+          "usage": {
+            "prompt": 4310,
+            "completion": 44,
+            "cached": 4096
+          }
+        }
+      ]
+    },
+    {
+      "id": "implement-percent-discount",
+      "prelude": "implement",
+      "match": [
+        "discount is given in percent"
+      ],
+      "turns": [
+        {
+          "text": "I'll change the calculation in `total()` and add a test module for the new unit.",
+          "tools": [
+            {
+              "name": "edit",
+              "arguments": {
+                "filePath": "/session/workspace/repo/demo/pricing.py",
+                "oldString": "    return round(subtotal - subtotal * discount, 2)\n",
+                "newString": "    return round(subtotal - subtotal * discount / 100, 2)\n"
+              }
+            },
+            {
+              "name": "write",
+              "arguments": {
+                "filePath": "/session/workspace/repo/tests/test_percent.py",
+                "content": {
+                  "file": "texts/test_percent.py"
+                }
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 3020,
+            "completion": 268,
+            "cached": 2048
+          }
+        },
+        {
+          "text": "Running the new tests.",
+          "tools": [
+            {
+              "name": "bash",
+              "arguments": {
+                "command": "python3 -m unittest tests.test_percent -v",
+                "workdir": "/session/workspace/repo"
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 3470,
+            "completion": 49,
+            "cached": 2048
+          }
+        },
+        {
+          "tools": [
+            {
+              "name": "submit_implementation",
+              "arguments": {
+                "title": "Read the discount of total() as a percentage",
+                "summary": "`total()` now takes the discount in percent (10 means 10%), as the checkout API sends it.",
+                "verified": true,
+                "changes": [
+                  "demo/pricing.py: total() divides the discount by 100",
+                  "tests/test_percent.py: tests for a 10% discount and for no discount"
+                ],
+                "tests": [
+                  "python3 -m unittest tests.test_percent -v: 2 tests, OK"
+                ],
+                "notes": ""
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 3760,
+            "completion": 187,
+            "cached": 2048
+          }
+        },
+        {
+          "text": "Done. `total()` reads the discount as a percentage and the two new tests pass. The platform delivers the change from here.",
+          "usage": {
+            "prompt": 4080,
+            "completion": 41,
+            "cached": 4096
+          }
+        }
+      ]
+    },
+    {
+      "id": "implement-negative-prices",
+      "prelude": "implement",
+      "match": [
+        "negative"
+      ],
+      "turns": [
+        {
+          "text": "I'll validate the prices at the top of `total()` and add a test for it.",
+          "tools": [
+            {
+              "name": "edit",
+              "arguments": {
+                "filePath": "/session/workspace/repo/demo/pricing.py",
+                "oldString": "    subtotal = sum(prices)\n",
+                "newString": "    if any(price < 0 for price in prices):\n        raise ValueError(\"prices must not be negative\")\n    subtotal = sum(prices)\n"
+              }
+            },
+            {
+              "name": "edit",
+              "arguments": {
+                "filePath": "/session/workspace/repo/tests/test_pricing.py",
+                "oldString": "        self.assertEqual(total([10.0], discount=0.1), 9.0)\n",
+                "newString": "        self.assertEqual(total([10.0], discount=0.1), 9.0)\n\n    def test_negative_price(self):\n        with self.assertRaises(ValueError):\n            total([5.0, -1.0])\n"
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 3000,
+            "completion": 232,
+            "cached": 2048
+          }
+        },
+        {
+          "text": "Running the tests.",
+          "tools": [
+            {
+              "name": "bash",
+              "arguments": {
+                "command": "python3 -m unittest -v",
+                "workdir": "/session/workspace/repo"
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 3450,
+            "completion": 47,
+            "cached": 2048
+          }
+        },
+        {
+          "tools": [
+            {
+              "name": "submit_implementation",
+              "arguments": {
+                "title": "Reject negative prices in total()",
+                "summary": "`total()` raises `ValueError` when a price is negative instead of quietly lowering the total.",
+                "verified": true,
+                "changes": [
+                  "demo/pricing.py: total() checks the prices before summing them",
+                  "tests/test_pricing.py: test_negative_price"
+                ],
+                "tests": [
+                  "python3 -m unittest -v: 3 tests, OK"
+                ],
+                "notes": "A price of 0 is still accepted."
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 3790,
+            "completion": 181,
+            "cached": 2048
+          }
+        },
+        {
+          "text": "Done. Negative prices are refused with a `ValueError`; all three tests pass.",
+          "usage": {
+            "prompt": 4090,
+            "completion": 33,
+            "cached": 4096
+          }
+        }
+      ]
+    },
+    {
+      "id": "implement-other",
+      "prelude": "implement",
+      "match": [],
+      "turns": [
+        {
+          "tools": [
+            {
+              "name": "submit_implementation",
+              "arguments": {
+                "title": "No change made",
+                "summary": "The task needs a decision before code changes: I read the module and its tests and left the working tree as it is.",
+                "verified": false,
+                "changes": [],
+                "tests": [],
+                "notes": "Describe the expected behaviour with an example and run the workflow again."
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 2980,
+            "completion": 112,
+            "cached": 2048
+          }
+        },
+        {
+          "text": "I submitted the result without a change: the task needs a decision first.",
+          "usage": {
+            "prompt": 3180,
+            "completion": 27,
+            "cached": 2048
+          }
+        }
+      ]
+    },
+    {
+      "id": "workspace-readme-push",
+      "match": [
+        "usage example to the README"
+      ],
+      "turns": [
+        {
+          "text": "I'll look at the README and the module it describes.",
+          "tools": [
+            {
+              "name": "read",
+              "arguments": {
+                "filePath": "/session/workspace/repo/README.md"
+              }
+            },
+            {
+              "name": "read",
+              "arguments": {
+                "filePath": "/session/workspace/repo/demo/pricing.py"
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 1840,
+            "completion": 67,
+            "cached": 0
+          }
+        },
+        {
+          "text": "The README has no example yet. Adding one.",
+          "tools": [
+            {
+              "name": "edit",
+              "arguments": {
+                "filePath": "/session/workspace/repo/README.md",
+                "oldString": "A tiny pricing module used by the platform examples. Run the tests with `python3 -m unittest`.\n",
+                "newString": "A tiny pricing module used by the platform examples. Run the tests with `python3 -m unittest`.\n\n## Usage\n\n```python\nfrom demo.pricing import total\n\ntotal([19.99, 5.01])               # 25.0\ntotal([200.0], discount=0.1)       # 180.0\n```\n"
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 2210,
+            "completion": 158,
+            "cached": 1024
+          }
+        },
+        {
+          "text": "The example is in place. Committing and pushing it.",
+          "tools": [
+            {
+              "name": "bash",
+              "arguments": {
+                "command": "git add README.md && git commit -m \"Add a usage example to the README\" && git push origin main",
+                "workdir": "/session/workspace/repo"
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 2470,
+            "completion": 61,
+            "cached": 2048
+          }
+        },
+        {
+          "text": "I added a **Usage** section with a short example to `repo/README.md`.\n\nI could not push it: the platform's policy for this sandbox blocks `git push`, so nothing left the session. The change is in the working tree. To deliver it for review, start the team's **Implement a change in Gerrit** workflow, which pushes through the platform.",
+          "usage": {
+            "prompt": 2690,
+            "completion": 96,
+            "cached": 2048
+          }
+        }
+      ]
+    },
+    {
+      "id": "workspace-modules",
+      "match": [
+        "List the modules in this repository"
+      ],
+      "turns": [
+        {
+          "text": "I'll look at what is checked out.",
+          "tools": [
+            {
+              "name": "glob",
+              "arguments": {
+                "pattern": "repo/**/*.py",
+                "path": "/session/workspace"
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 1810,
+            "completion": 44,
+            "cached": 0
+          }
+        },
+        {
+          "tools": [
+            {
+              "name": "read",
+              "arguments": {
+                "filePath": "/session/workspace/repo/demo/pricing.py"
+              }
+            },
+            {
+              "name": "read",
+              "arguments": {
+                "filePath": "/session/workspace/repo/tests/test_pricing.py"
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 1990,
+            "completion": 58,
+            "cached": 1024
+          }
+        },
+        {
+          "text": "The repository has two Python packages:\n\n- `demo/pricing.py`: `total(prices, discount)` sums the prices, applies a discount given as a fraction and rounds to cents.\n- `tests/test_pricing.py`: unit tests for `total`, one for a plain sum and one for a discount.\n\n`demo/__init__.py` and `tests/__init__.py` are empty package markers. Run the tests with `python3 -m unittest`.",
+          "usage": {
+            "prompt": 2380,
+            "completion": 112,
+            "cached": 1024
+          }
+        }
+      ]
+    },
+    {
+      "id": "workspace-explain-discount",
+      "match": [
+        "how the discount"
+      ],
+      "turns": [
+        {
+          "text": "Let me read the pricing module.",
+          "tools": [
+            {
+              "name": "read",
+              "arguments": {
+                "filePath": "/session/workspace/repo/demo/pricing.py"
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 1790,
+            "completion": 41,
+            "cached": 0
+          }
+        },
+        {
+          "text": "`total(prices, discount=0.0)` in `repo/demo/pricing.py` adds up the prices, subtracts `subtotal * discount` and rounds the result to two decimals. The discount is a fraction: `0.1` means 10%, so `total([10.0], discount=0.1)` is `9.0`. There is one discount per call, no tiers and no validation: a value above 1 gives a negative total.",
+          "usage": {
+            "prompt": 2050,
+            "completion": 104,
+            "cached": 1024
+          }
+        }
+      ]
+    },
+    {
+      "id": "workspace-test-run",
+      "match": [
+        "Run the tests and tell me"
+      ],
+      "turns": [
+        {
+          "text": "Running the unit tests of the demo service.",
+          "tools": [
+            {
+              "name": "bash",
+              "arguments": {
+                "command": "python3 -m unittest -v",
+                "workdir": "/session/workspace/repo"
+              }
+            }
+          ],
+          "usage": {
+            "prompt": 1800,
+            "completion": 43,
+            "cached": 0
+          }
+        },
+        {
+          "text": "Both tests pass: `test_sum` and `test_discount` in `tests/test_pricing.py` (`Ran 2 tests ... OK`).",
+          "usage": {
+            "prompt": 2020,
+            "completion": 39,
+            "cached": 1024
+          }
+        }
+      ]
+    }
+  ]
+}

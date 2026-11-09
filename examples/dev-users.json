@@ -1,0 +1,149 @@
+{
+  "alice": {
+    "sub": "alice",
+    "preferred_username": "alice",
+    "email": "alice@acme.test",
+    "name": "Alice",
+    "tenant": "acme",
+    "groups": [
+      "/acme/demo/admin"
+    ],
+    "realm_access": {
+      "roles": [
+        "tenant-admin"
+      ]
+    }
+  },
+  "bob": {
+    "sub": "bob",
+    "preferred_username": "bob",
+    "email": "bob@acme.test",
+    "name": "Bob",
+    "tenant": "acme",
+    "groups": [
+      "/acme/demo",
+      "/acme/payments"
+    ],
+    "realm_access": {
+      "roles": []
+    }
+  },
+  "carol": {
+    "sub": "carol",
+    "preferred_username": "carol",
+    "email": "carol@acme.test",
+    "name": "Carol",
+    "tenant": "acme",
+    "groups": [],
+    "realm_access": {
+      "roles": []
+    }
+  },
+  "dave": {
+    "sub": "dave",
+    "preferred_username": "dave",
+    "email": "dave@acme.test",
+    "name": "Dave",
+    "tenant": "acme",
+    "groups": [
+      "/acme/payments/admin",
+      "/acme/ops"
+    ],
+    "realm_access": {
+      "roles": []
+    }
+  },
+  "erin": {
+    "sub": "erin",
+    "preferred_username": "erin",
+    "email": "erin@acme.test",
+    "name": "Erin",
+    "tenant": "acme",
+    "groups": [
+      "/acme/payments"
+    ],
+    "realm_access": {
+      "roles": []
+    }
+  },
+  "frank": {
+    "sub": "frank",
+    "preferred_username": "frank",
+    "email": "frank@acme.test",
+    "name": "Frank",
+    "tenant": "acme",
+    "groups": [
+      "/acme/demo/admin"
+    ],
+    "realm_access": {
+      "roles": []
+    }
+  },
+  "henry": {
+    "sub": "henry",
+    "preferred_username": "henry",
+    "email": "henry@acme.test",
+    "name": "Henry",
+    "tenant": "acme",
+    "groups": [
+      "/acme/ops"
+    ],
+    "realm_access": {
+      "roles": []
+    }
+  },
+  "gina": {
+    "sub": "gina",
+    "preferred_username": "gina",
+    "email": "gina@globex.test",
+    "name": "Gina",
+    "tenant": "globex",
+    "groups": [
+      "/globex/research/admin"
+    ],
+    "realm_access": {
+      "roles": [
+        "tenant-admin"
+      ]
+    }
+  },
+  "hank": {
+    "sub": "hank",
+    "preferred_username": "hank",
+    "email": "hank@globex.test",
+    "name": "Hank",
+    "tenant": "globex",
+    "groups": [
+      "/globex/research"
+    ],
+    "realm_access": {
+      "roles": []
+    }
+  },
+  "ivy": {
+    "sub": "ivy",
+    "preferred_username": "ivy",
+    "email": "ivy@globex.test",
+    "name": "Ivy",
+    "tenant": "globex",
+    "groups": [
+      "/globex/research",
+      "/globex/lab/admin"
+    ],
+    "realm_access": {
+      "roles": []
+    }
+  },
+  "oscar": {
+    "sub": "oscar",
+    "preferred_username": "oscar",
+    "email": "oscar@platform.test",
+    "name": "Oscar",
+    "groups": [],
+    "realm_access": {
+      "roles": [
+        "platform-operator"
+      ]
+    }
+  }
+}

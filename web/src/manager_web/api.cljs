@@ -14,6 +14,7 @@
    A 401 drops everything cached for the person and sends them to the login
    page."
   (:require [clojure.string :as string]
+            [clojure.walk :as walk]
             [edd.json :as json]
             [re-frame.core :as rf]))
 
@@ -46,9 +47,9 @@
 
 (defn error-message
   "A readable message from an error response."
-  [{:keys [error exception detail]}]
+  [{:keys [error exception detail message]}]
   (let [value
-        (or error exception detail)]
+        (or error exception detail message)]
     (cond
       (string? value) value
       (string? (:message value)) (:message value)
@@ -95,6 +96,22 @@
           (.catch (constantly nil)))
       (js/Promise.resolve nil))))
 
+(defn- read-field
+  [value]
+  (cond
+    (keyword? value) (or (json/decode-json-special value) value)
+    (not (string? value)) value
+    (re-matches #":[^\s:]\S*" value) (keyword (subs value 1))
+    (string/starts-with? value "#") (or (parse-uuid (subs value 1)) value)
+    :else value))
+
+(defn read-fields
+  "An edd reply with its keywords (\":running\") and UUIDs (\"#<uuid>\") read.
+   Any other text stays text, also when it starts like one: a Markdown
+   document opens with \"# Heading\"."
+  [body]
+  (walk/postwalk read-field body))
+
 (defn response-event
   "The event a response leads to, nil when there is nothing to do.
    :on-not-found, when given, handles a 404 (an endpoint the server doesn't offer)."
@@ -106,7 +123,7 @@
     (not edd?) (success-event on-success body)
     (nil? body) (failure-event on-failure (http-error status body))
     :else (let [[outcome value]
-                (edd-result (json/parse-custom-fields body))]
+                (edd-result (read-fields body))]
             (if (= :ok outcome)
               (success-event on-success value)
               (failure-event on-failure value)))))
@@ -171,16 +188,36 @@
   (-> (into {} (remove (comp app-key? key)) db)
       (assoc :manager-web.session/status :anonymous)))
 
+(defn- login-without-completion
+  "The login page's URL without complete=1, nil when it doesn't carry it."
+  [search]
+  (let [params
+        (js/URLSearchParams. (or search ""))]
+    (when (.has params "complete")
+      (.delete params "complete")
+      (let [query
+            (.toString params)]
+        (str "/login" (when-not (string/blank? query) (str "?" query)))))))
+
+(defn unauthenticated-effects
+  "After a 401. Elsewhere everything kept for the person goes and they are
+   sent to log in. On the login page nothing they started is still running,
+   and a provider login that didn't complete is not tried again."
+  [db pathname search]
+  (if (= "/login" pathname)
+    {:db (-> db
+             (assoc :manager-web.session/status :anonymous)
+             (dissoc :manager-web.data/busy))
+     :fx [(when-let [url
+                     (login-without-completion search)]
+            [:dispatch [:edd.events/navigate {:url url :replace? true}]])]}
+    {:db (signed-out db)
+     :fx [[:dispatch [:edd.events/navigate {:url (str "/login?next=" (js/encodeURIComponent (str pathname search)))
+                                            :replace? true}]]]}))
+
 (rf/reg-event-fx
  ::unauthenticated
  (fn [{:keys [db]} _]
    (let [location
-         (.-location js/window)
-
-         path
-         (str (.-pathname location) (.-search location))]
-     (if (= "/login" (.-pathname location))
-       {:db (assoc db :manager-web.session/status :anonymous)}
-       {:db (signed-out db)
-        :fx [[:dispatch [:edd.events/navigate {:url (str "/login?next=" (js/encodeURIComponent path))
-                                               :replace? true}]]]}))))
+         (.-location js/window)]
+     (unauthenticated-effects db (.-pathname location) (.-search location)))))

@@ -3,6 +3,9 @@
   "additionalProperties": false,
   "description": ".platform/agents/<id>.json",
   "properties": {
+    "$schema": {
+      "type": "string"
+    },
     "description": {
       "default": "",
       "title": "Description",

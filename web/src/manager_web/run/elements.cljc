@@ -1,5 +1,10 @@
 (ns manager-web.run.elements)
 
+(def crumbs [:run :crumbs])
+(def crumb-team [:run :crumb-team])
+(def team-chip [:run :team-chip])
+(def runs-as [:run :runs-as])
+
 (def page [:run :page])
 (def title [:run :title])
 (def back [:run :back])
@@ -20,3 +25,10 @@
 (def session-link [:run :session])
 (def pull-request [:run :pull-request])
 (def pull-request-link [:run :pull-request-link])
+(def pull-request-ref [:run :pull-request-ref])
+(def project [:run :project])
+(def crumb-tenant [:run :crumb-tenant])
+(def crumb-project [:run :crumb-project])
+(def view-session [:run :view-session])
+(def back-to-list [:run :back-to-list])
+(def not-found [:run :not-found])

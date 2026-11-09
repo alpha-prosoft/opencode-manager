@@ -9,9 +9,6 @@
 (def branch
   [:re #"^[A-Za-z0-9._/-]{1,200}$"])
 
-(def repository-slug
-  [:re #"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"])
-
 (defn- closed
   [& entries]
   (into [:map {:closed true}] entries))
@@ -21,10 +18,7 @@
   [k {:optional true} [:maybe schema]])
 
 (def scm-source
-  (closed
-   [:provider (spec/enum :bitbucket :github)]
-   [:repository repository-slug]
-   [:credentials string?]))
+  (spec/scm-source))
 
 (def session-options
   (closed
@@ -56,14 +50,19 @@
 
 (def pull-request-delivery
   (closed
-   [:provider (spec/enum :bitbucket :github)]
-   [:repository repository-slug]
+   [:provider spec/scm-provider]
+   [:repository spec/repository-name]
+   (optional :url spec/http-url)
+   (optional :web-url spec/http-url)
    (optional :target-branch string?)))
 
 (def ci-follow
+  "job with {pr} is a job per pull request whose last build is followed;
+   without it, a shared job whose build naming the pushed commit in its
+   description is followed."
   (closed
    [:mcp-server string?]
-   [:job [:re {:error/message "should contain {pr}"} #"\{pr\}"]]
+   [:job [:string {:min 1}]]
    [:timeout-minutes {:default 120} [:int {:min 5 :max 720}]]
    (optional :on-failure string?)))
 
@@ -158,7 +157,8 @@
       (:inputs-schema described))))
 
 (def schema-files
-  {:platform "platform.schema.json"
+  {:tenant "tenant.schema.json"
+   :team "team.schema.json"
    :agents "agents.schema.json"
    :harnesses "harnesses.schema.json"
    :workflows "workflows.schema.json"})

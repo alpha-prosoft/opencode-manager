@@ -28,9 +28,17 @@
   (when-not (platform-created? run)
     (:created-by run)))
 
+(defn credential-scope
+  "Whose credentials a run works with: its person's (when allowed), its
+   team's and its tenant's."
+  [run]
+  {:tenant (:tenant run)
+   :team-id (:team-id run)
+   :user (person run)})
+
 (def run-keys
-  [:id :team-id :workflow-id :activity :status :trigger :inputs :session-id
-   :created-by :platform-started :created-at :cancelled-by])
+  [:id :tenant :team-id :workflow-id :activity :status :trigger :inputs :session-id
+   :created-by :platform-started :created-at :cancelled-by :session-visibility :project])
 
 (defn outcome
   "The few facts a run list shows: the pull request, its build, or the review verdict."
@@ -53,11 +61,21 @@
           verdict (assoc :verdict verdict))]
     (not-empty facts)))
 
+(defn scm-provider
+  "The SCM provider of the run's pull request: where it delivered one, else
+   where its trigger found one."
+  [run]
+  (some-> (or (get-in run [:result :pull-request :provider])
+              (get-in run [:trigger :scm :provider]))
+          name
+          keyword))
+
 (defn summary
   "What a run list shows. The run's error is :error-message: edd answers a
    query result holding :error as an error."
   [run workflow-name]
   (assoc (select-keys run run-keys)
+         :scm-provider (scm-provider run)
          :error-message (:error run)
          :has-result (boolean (seq (:result run)))
          :outcome (outcome (:result run))

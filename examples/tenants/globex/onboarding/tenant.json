@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "allowed_images": [
+    "ghcr.io/anomalyco/opencode:1.19.5",
+    "opencode-platform/opencode-dev:1.19.5"
+  ],
+  "llm_connections": [
+    {
+      "id": "copilot",
+      "type": "github-copilot",
+      "secret": "COPILOT_TOKEN",
+      "models": [
+        "claude-sonnet-5.5",
+        "gemini-3.5-flash"
+      ],
+      "pricing": {
+        "claude-sonnet-5.5": {
+          "input": 3.0,
+          "output": 15.0,
+          "cached_input": 0.3
+        },
+        "gemini-3.5-flash": {
+          "input": 0.3,
+          "output": 2.5
+        }
+      }
+    }
+  ],
+  "credentials": [],
+  "mcp_servers": [],
+  "teams": [
+    {
+      "id": "research",
+      "name": "Research",
+      "description": "Globex's research team, for testing tenant isolation.",
+      "repository": {
+        "type": "git",
+        "url": "file:///repos/globex-research",
+        "branch": "main"
+      },
+      "secrets": []
+    },
+    {
+      "id": "lab",
+      "name": "Lab",
+      "description": "Globex's second team: ivy is in both, for testing people in several teams of another tenant.",
+      "repository": {
+        "type": "git",
+        "url": "file:///repos/globex-lab",
+        "branch": "main"
+      },
+      "secrets": []
+    }
+  ]
+}

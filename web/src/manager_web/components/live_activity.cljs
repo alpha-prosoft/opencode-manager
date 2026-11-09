@@ -123,5 +123,6 @@
   [{:keys [session-id live?]}]
   [data/loaded {:key [:session-activity session-id]
                 :query {:query-id :get-session-activity :session-id session-id}
-                :interval (when live? 3000)}
+                :interval (when live? 3000)
+                :error-el-id els/activity-error}
    #(activity-view % live?)])

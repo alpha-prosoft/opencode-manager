@@ -8,6 +8,7 @@
    the sessions lock: a start waits in :pending until its image is there."
   (:require [clojure.tools.logging :as log]
             [manager-svc.client :as client]
+            [manager-svc.effects :as effects]
             [manager-svc.observability.api :as observability]
             [manager-svc.runs.api :as runs]
             [manager-svc.sessions.access :as access]
@@ -41,7 +42,7 @@
     (storage/prepare! settings id)
     (storage/copy-session! settings forked-from id)
     (storage/write-sandbox! settings id sandbox)
-    (records/command! system :record-session-fork-prepared id)
+    (records/record! system :record-session-fork-prepared id)
     (audit-fork! system fork)))
 
 (defn- start!
@@ -59,7 +60,7 @@
       (throw (ex-info (str "Session " id " has no sandbox configuration") {}))
 
       (backend/active? backend id)
-      (records/command! system :record-session-started id)
+      (records/record! system :record-session-started id)
 
       (not (live/image-available! system (:image sandbox)))
       (log/info "Session waits for its image" id (:image sandbox))
@@ -69,14 +70,14 @@
         (log/info "Starting session" id)
         (live/forget-ready! system id)
         (backend/start! backend session sandbox)
-        (records/command! system :record-session-started id)))))
+        (records/record! system :record-session-started id)))))
 
 (defn- stop!
   [system {:keys [id]}]
   (log/info "Stopping session" id)
   (live/forget-ready! system id)
   (backend/stop! (live/backend-of system) id)
-  (records/command! system :record-session-stopped id))
+  (records/record! system :record-session-stopped id))
 
 (defn- delete!
   [system {:keys [id]}]
@@ -84,7 +85,7 @@
   (live/forget-ready! system id)
   (backend/delete! (live/backend-of system) id)
   (storage/remove! (:settings system) id)
-  (records/command! system :record-session-deleted id))
+  (records/record! system :record-session-deleted id))
 
 (def ^:private actions
   {:start start!
@@ -98,8 +99,8 @@
     (catch Exception e
       (log/error e "Session action failed" (:id session) action)
       (try
-        (records/command! system :record-session-failed (:id session)
-                          {:error (or (ex-message e) "failed") :action action})
+        (records/record! system :record-session-failed (:id session)
+                         {:error (or (ex-message e) "failed") :action action})
         (catch Exception record-error
           (log/error record-error "Could not record the failure of session" (:id session)))))))
 
@@ -153,37 +154,49 @@
     (let [rows
           (records/rows system)]
       (prepare-forks! system rows)
-      (carry-out! system rows))
+      (carry-out! system rows)))
+  (effects/settle!)
+  (locking (:sessions/lock system)
     (let [rows
           (records/rows system)]
       (live/keep-ready! system (live/running-ids system rows))
       (sync-routes! system rows))))
 
 (defn reap!
-  [system]
-  (let [idle
-        (live/idle-ids system (records/rows system))]
-    (doseq [session-id idle]
-      (log/info "Stopping idle session" session-id)
-      (records/command! system :stop-session session-id))
-    (when (seq idle)
-      (reconcile! system))
-    idle))
+  "Stops the idle sessions of every tenant, or of one."
+  ([system]
+   (reap! system nil))
+  ([system tenant]
+   (let [idle
+         (live/idle-ids system (if tenant (records/rows system tenant) (records/rows system)))]
+     (doseq [session-id idle]
+       (log/info "Stopping idle session" session-id)
+       (records/command! system :stop-session session-id))
+     (when (seq idle)
+       (reconcile! system))
+     idle)))
 
 (defn reap-requested!
-  "Reaps when an administrator asked for it since the last time; the ids of
-   the sessions stopped, or nil."
+  "Reaps the tenants whose administrators asked for it since the last time;
+   the ids of the sessions stopped, or nil when nobody asked."
   [system]
-  (let [{:keys [requested-at]}
+  (let [{:keys [requests]}
         (client/query (:settings system) {:query-id :get-idle-stop-request})
 
         state
-        (:sessions/state system)]
-    (when (and requested-at (not= requested-at (:reaped-request @state)))
-      (let [idle
-            (reap! system)]
-        (swap! state assoc :reaped-request requested-at)
-        idle))))
+        (:sessions/state system)
+
+        due
+        (filter (fn [{:keys [tenant requested-at]}]
+                  (not= requested-at (get-in @state [:reaped-request tenant])))
+                requests)]
+    (when (seq due)
+      (vec (mapcat (fn [{:keys [tenant requested-at]}]
+                     (let [idle
+                           (reap! system tenant)]
+                       (swap! state assoc-in [:reaped-request tenant] requested-at)
+                       idle))
+                   due)))))
 
 (defn prepare-backend!
   [system]
@@ -201,7 +214,7 @@
      {:id :sessions-reaper
       :interval-seconds reap-interval
       :initial-delay-seconds reap-interval
-      :run reap!}
+      :run (fn [system] (reap! system))}
      {:id :sessions-reap-requests
       :interval-seconds 60
       :initial-delay-seconds 15

@@ -2,12 +2,12 @@
   (:require [clojure.tools.logging :as log]
             [edd.common :as common]
             [edd.core :as edd]
-            [manager-svc.auth :as auth]
             [manager-svc.credentials.api :as credentials]
             [manager-svc.directory :as directory]
             [manager-svc.errors :as errors]
             [manager-svc.observability.api :as observability]
             [manager-svc.platform.api :as platform]
+            [manager-svc.roles :as roles]
             [manager-svc.runs.definitions :as definitions]
             [manager-svc.runs.model :as model]
             [manager-svc.runs.run :as run]
@@ -17,46 +17,64 @@
 
 (def max-limit 500)
 
-(def empty-usage
-  {:calls 0 :prompt-tokens 0 :completion-tokens 0 :cached-tokens 0 :errors 0 :avg-latency-ms 0})
-
 (defn- team-rows
-  [ctx team-ids]
-  (directory/rows-of ctx (map directory/team team-ids) :runs))
+  [ctx tenant team-ids]
+  (directory/tenant-rows ctx tenant (map #(directory/team tenant %) team-ids) :runs))
+
+(defn- tenant-rows
+  "Rows of every team of tenant, also of teams that left the registry."
+  [ctx tenant]
+  (directory/tenant-rows ctx tenant (directory/identities ctx tenant "team") :runs))
 
 (defn- all-rows
-  "Rows of every team directory, also of teams that left the registry."
+  "Rows of every team of every tenant."
   [ctx]
-  (directory/rows-of ctx (directory/identities ctx "team") :runs))
+  (directory/rows-of ctx (directory/all-identities ctx "team") :runs))
 
 (defn- newest-first
   [runs]
   (sort-by :created-at #(compare %2 %1) runs))
 
+(defn- of-project
+  "rows of a project of team-id: project ids are only unique within a team,
+   so :project-id counts only beside :team-id."
+  [team-id project-id rows]
+  (if (and team-id project-id)
+    (filter #(= project-id (:project %)) rows)
+    rows))
+
 (defn list-runs
-  [ctx {:keys [team-id limit]}]
+  "Runs of the caller's teams, newest first; of one team with :team-id, of
+   one of its projects with :project-id as well."
+  [ctx {:keys [team-id project-id limit]}]
   (let [system
         (system/of ctx)
 
+        caller
+        (roles/caller ctx)
+
+        tenant
+        (:tenant caller)
+
         teams
-        (set (platform/teams-of system (auth/user-id ctx)))
+        (set (platform/teams-of system caller))
 
         wanted
         (if team-id (filter #{team-id} teams) teams)
 
         runs
         (take (min max-limit (or limit 100))
-              (newest-first (team-rows ctx wanted)))
+              (newest-first (of-project team-id project-id (team-rows ctx tenant wanted))))
 
         names
-        (definitions/workflow-names system (set (map :team-id runs)))]
+        (definitions/workflow-names system tenant (set (map :team-id runs)))]
     (mapv (fn [r] (model/listed r (get names [(:team-id r) (:workflow-id r)])))
           runs)))
 
 (defn get-run-state
   [ctx {:keys [run-id]}]
   (let [found
-        (common/get-by-id ctx {:id (run/->uuid run-id)})]
+        (common/get-by-id ctx {:id run-id})]
     (when (:status found)
       found)))
 
@@ -73,31 +91,32 @@
       fallback)))
 
 (defn- viewable-session
-  [system user session-id]
+  [system caller session-id]
   (when session-id
     (guarded "session" nil
              #(let [session (sessions/get-session system session-id)]
-                (when (and session (sessions/can-view? system session user))
-                  (sessions/describe-session system session user))))))
+                (when (and session (sessions/can-view? system session caller))
+                  (sessions/describe-session system session caller))))))
 
 (defn get-run
   [ctx {:keys [run-id]}]
   (let [system
         (system/of ctx)
 
-        user
-        (auth/user-id ctx)
+        caller
+        (roles/caller ctx)
 
         found
-        (run/visible! system user (get-run-state ctx {:run-id run-id}))
+        (run/visible! caller (get-run-state ctx {:run-id run-id}))
 
-        names
-        (definitions/workflow-names system #{(:team-id found)})]
-    (model/detail found
-                  (get names [(:team-id found) (:workflow-id found)])
-                  (viewable-session system user (:session-id found))
-                  (guarded "usage" empty-usage
-                           #(or (observability/usage-for-run system (:id found)) empty-usage)))))
+        workflow
+        (definitions/workflow system (:tenant found) (:team-id found) (:workflow-id found))]
+    (assoc (model/detail found
+                         (:name workflow)
+                         (viewable-session system caller (:session-id found))
+                         (guarded "usage" observability/empty-usage
+                                  #(or (observability/usage-for-run system (:id found)) observability/empty-usage)))
+           :project (or (:project found) (:project workflow)))))
 
 (defn- since
   [rows from]
@@ -106,24 +125,20 @@
          (select-keys row [:id :status :created-by :created-at]))))
 
 (defn list-runs-since
-  "Runs of every team created since an ISO timestamp."
-  [ctx query]
-  (since (all-rows ctx) (:since query)))
+  "Runs of every team of a tenant created since an ISO timestamp."
+  [ctx {:keys [tenant] :as query}]
+  (since (tenant-rows ctx tenant) (:since query)))
 
 (defn list-people-runs-since
-  "Runs people started since an ISO timestamp, from their own directories."
-  [ctx query]
-  (since (directory/rows-of ctx (directory/identities ctx "user") :runs) (:since query)))
+  "Runs people of a tenant started since an ISO timestamp, from their own
+   directories."
+  [ctx {:keys [tenant] :as query}]
+  (since (directory/tenant-rows ctx tenant (directory/identities ctx tenant "user") :runs) (:since query)))
 
 (defn list-pending-runs
   "Rows of the runs that need work; the executor reads each run itself."
   [ctx _query]
   (filterv :needs-work (all-rows ctx)))
-
-(defn count-running-sessions
-  "{:count n} of a team's running sessions; the dependency of :start-run."
-  [ctx {:keys [team-id]}]
-  {:count (sessions/running-count (system/of ctx) team-id)})
 
 (defn scm-options
   "Where a workflow's pull requests live: options.scm, or the delivery target
@@ -138,7 +153,7 @@
       (:scm options) (:scm options)
       (:pull-request options) (assoc (:pull-request options)
                                      :credentials (get-in options [:repository :credentials]))
-      (= "pull_request" (:type trigger)) (select-keys trigger [:provider :repository :credentials])
+      (= "pull_request" (:type trigger)) (select-keys trigger [:provider :repository :url :web-url :credentials])
       :else nil)))
 
 (defn list-open-pull-requests
@@ -146,27 +161,29 @@
   (let [system
         (system/of ctx)
 
-        user
-        (auth/user-id ctx)
+        caller
+        (roles/caller ctx)
+
+        tenant
+        (:tenant caller)
 
         _
-        (when-not (contains? (set (platform/teams-of system user)) team-id)
-          (errors/not-found! "Team not found"))
+        (run/member! system caller team-id)
 
         workflow
-        (or (definitions/workflow system team-id workflow-id)
+        (or (definitions/workflow system tenant team-id workflow-id)
             (errors/not-found! "Workflow not found"))
 
-        {:keys [provider repository credentials]}
+        {:keys [provider repository credentials] :as source}
         (scm-options workflow)
 
-        secret
+        credential
         (when credentials
-          (get-in (credentials/resolve-credential system credentials user) [:value :secret]))]
-    (if (and provider repository secret)
+          (:value (credentials/resolve-credential system {:tenant tenant :team-id team-id :user (:id caller)} credentials)))]
+    (if (and provider repository (:secret credential))
       (let [items
             (try
-              ((:open-pull-requests (scm/provider system provider secret)) repository)
+              ((:open-pull-requests (scm/provider system source credential)) repository)
               (catch Exception e
                 (log/warn e "Listing pull requests failed")
                 (errors/fail! 502 "Could not list pull requests")))]
@@ -174,32 +191,29 @@
               (sort-by #(- (:id %)) items)))
       [])))
 
-(def ^:private user-only
-  {:role [:user]})
-
 (defn register
   [ctx]
   (-> ctx
       (edd/reg-query :list-runs list-runs
-                     :consumes [:map [:team-id {:optional true} [:maybe :string]] [:limit {:optional true} [:maybe :int]]]
-                     :auth user-only)
+                     :consumes [:map
+                                [:team-id {:optional true} [:maybe :string]]
+                                [:project-id {:optional true} [:maybe :string]]
+                                [:limit {:optional true} [:maybe :int]]]
+                     :auth roles/people)
       (edd/reg-query :get-run get-run
-                     :consumes [:map [:run-id any?]]
-                     :auth user-only)
+                     :consumes [:map [:run-id uuid?]]
+                     :auth roles/people)
       (edd/reg-query :get-run-source get-run-source
-                     :consumes [:map [:run-id any?]]
-                     :auth {:role [:non-interactive]})
+                     :consumes [:map [:run-id uuid?]]
+                     :auth roles/platform-only)
       (edd/reg-query :list-runs-since list-runs-since
-                     :consumes [:map [:since string?]]
-                     :auth {:role [:non-interactive]})
+                     :consumes [:map [:tenant string?] [:since string?]]
+                     :auth roles/platform-only)
       (edd/reg-query :list-people-runs-since list-people-runs-since
-                     :consumes [:map [:since string?]]
-                     :auth {:role [:non-interactive]})
+                     :consumes [:map [:tenant string?] [:since string?]]
+                     :auth roles/platform-only)
       (edd/reg-query :list-pending-runs list-pending-runs
-                     :auth {:role [:non-interactive]})
-      (edd/reg-query :count-running-sessions count-running-sessions
-                     :consumes [:map [:team-id :string]]
-                     :auth {:role [:non-interactive]})
+                     :auth roles/platform-only)
       (edd/reg-query :list-open-pull-requests list-open-pull-requests
                      :consumes [:map [:team-id :string] [:workflow-id :string]]
-                     :auth user-only)))
+                     :auth roles/people)))

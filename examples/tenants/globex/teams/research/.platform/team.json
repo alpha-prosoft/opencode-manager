@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "budget": {
+    "daily_tokens": 1000000,
+    "max_running_sessions": 2
+  },
+  "llm_connections": [
+    {
+      "id": "copilot"
+    }
+  ]
+}

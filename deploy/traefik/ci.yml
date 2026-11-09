@@ -1,0 +1,21 @@
+# Browser access to the local CI stack (compose.ci.yml) through Traefik: http://gerrit.localhost:8080 and
+# http://jenkins.localhost:8080. The ci-routes service copies this file into Traefik's dynamic directory.
+http:
+  routers:
+    gerrit:
+      rule: Host(`gerrit.localhost`)
+      entryPoints: [web]
+      service: gerrit
+    jenkins:
+      rule: Host(`jenkins.localhost`)
+      entryPoints: [web]
+      service: jenkins
+  services:
+    gerrit:
+      loadBalancer:
+        servers:
+          - url: http://gerrit:8080
+    jenkins:
+      loadBalancer:
+        servers:
+          - url: http://jenkins:8080

@@ -4,6 +4,7 @@
             ["@mui/material/CardContent" :default CardContent]
             ["@mui/material/Chip" :default Chip]
             ["@mui/material/Stack" :default Stack]
+            [clojure.string :as string]
             [manager-web.components.chips :as chips]
             [manager-web.components.layout :as layout]
             [manager-web.data :as data]
@@ -13,16 +14,32 @@
             [manager-web.theme :as theme]
             [web.primitives.components :refer [RawBox RawStack RawTypography]]))
 
+(defn project-line
+  "A project as a team card lists it: its name, repository and builds."
+  [{:keys [id scm ci] :as project}]
+  (string/join " · " (remove string/blank?
+                             [(or (:name project) id)
+                              (when (:repository scm)
+                                (str (some-> (:provider scm) name) " " (:repository scm)))
+                              (when (seq (:jobs ci))
+                                (str "builds " (string/join ", " (:jobs ci))))])))
+
+(defn role-attribute
+  "The team role as the card's data-role: \"admin\", \"member\" or nil."
+  [role]
+  (some-> role format/kw name))
+
 (defn- team-card
-  [{:keys [id name role description counts invalid status synced-at] :as team}]
+  [{:keys [id role description counts invalid status synced-at projects] :as team}]
   [:> Card
    [:> CardActionArea (merge (layout/nav-props :team {:team-id id})
                              {:sx (:full-height theme/sx)
-                              :data-testid (el/id (els/team-card id))})
+                              :data-testid (el/id (els/team-card id))
+                              :data-role (role-attribute role)})
     [:> CardContent {:component Stack :spacing 1}
      [RawStack {:direction "row" :spacing 1 :sx (:centered-row theme/sx)}
-      [RawTypography {:variant "h3" :sx (:grow theme/sx)} name]
-      [chips/role-chip role]]
+      [RawTypography {:variant "h3" :sx (:grow theme/sx)} (:name team)]
+      [chips/role-chip id (el/id (els/team-role id))]]
      [RawTypography {:variant "body2" :color "text.secondary"} description]
      [layout/row
       [:> Chip {:variant "filled" :label (str (:workflows counts 0) " workflows")}]
@@ -30,6 +47,12 @@
         [:> Chip {:color "warning" :label (str invalid " with problems")}])
       (when (= :error (format/kw status))
         [:> Chip {:color "error" :label "Sync failed"}])]
+     (when (seq projects)
+       [RawStack {:spacing 0.5 :el-id (els/team-projects id)}
+        (for [project projects]
+          ^{:key (:id project)}
+          [RawTypography {:variant "caption" :component "div" :data-testid (el/id (els/team-project id (:id project)))}
+           (project-line project)])])
      [RawTypography {:variant "caption" :color "text.secondary" :noWrap true}
       (str (format/source-label team) " · synced " (format/relative-time synced-at))]]]])
 
@@ -37,7 +60,7 @@
   [teams]
   (if (empty? teams)
     [layout/empty-state {:title "You're not in any team" :el-id els/empty-state}
-     "A platform admin adds teams and members in the onboarding repository."]
+     "Your tenant admin adds teams in the onboarding repository; your identity provider assigns you to them."]
     (into [RawBox {:sx (:card-grid theme/sx) :el-id els/grid}]
           (for [team teams]
             ^{:key (:id team)}

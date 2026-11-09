@@ -49,13 +49,16 @@
                                    :raw true}))
 
 (defn export-line
-  "An entry as one JSON line; the payload is the stored body its hash covers."
+  "An entry as one JSON line; the payload is the stored body its hash
+   covers, hash_version how the hash was taken (see
+   manager-svc.observability.audit)."
   [entry]
   (str "{\"seq\":" (:seq entry)
        ",\"ts\":" (json/write-str (:ts entry))
        ",\"type\":" (json/write-str (:type entry))
        ",\"key\":" (json/write-str (:key entry))
        ",\"hash\":" (json/write-str (:hash entry))
+       ",\"hash_version\":" (json/write-str (:hash-version entry))
        ",\"payload\":" (:body entry)
        "}\n"))
 

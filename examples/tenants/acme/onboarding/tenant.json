@@ -1,0 +1,215 @@
+{
+  "version": 1,
+  "allowed_images": [
+    "ghcr.io/anomalyco/opencode:1.19.5",
+    "opencode-platform/opencode-dev:1.19.5"
+  ],
+  "llm_connections": [
+    {
+      "id": "copilot",
+      "type": "github-copilot",
+      "secret": "COPILOT_TOKEN",
+      "models": [
+        "claude-sonnet-5.5",
+        "claude-opus-5.5",
+        "gemini-3.5-flash"
+      ],
+      "pricing": {
+        "claude-sonnet-5.5": {
+          "input": 3.0,
+          "output": 15.0,
+          "cached_input": 0.3
+        },
+        "claude-opus-5.5": {
+          "input": 15.0,
+          "output": 75.0,
+          "cached_input": 1.5
+        },
+        "gemini-3.5-flash": {
+          "input": 0.3,
+          "output": 2.5
+        }
+      }
+    }
+  ],
+  "credentials": [
+    {
+      "id": "BITBUCKET_TOKEN",
+      "name": "Bitbucket",
+      "description": "Read access to Bitbucket Cloud repositories and pull requests.",
+      "kind": "token",
+      "hosts": [
+        "bitbucket.org",
+        "api.bitbucket.org",
+        "mcp-bitbucket"
+      ],
+      "provided_by": [
+        "tenant",
+        "team",
+        "user"
+      ],
+      "help": "Use your own Bitbucket API token to act as yourself; otherwise your team's or the tenant's read-only account is used. Create one under Bitbucket \u2192 Personal settings \u2192 API tokens (read scopes are enough).",
+      "test": {
+        "url": "https://api.bitbucket.org/2.0/user"
+      }
+    },
+    {
+      "id": "JIRA_TOKEN",
+      "name": "Jira",
+      "description": "Your Atlassian account for Jira tools. Each person uses their own, so issues are read and written as you.",
+      "kind": "basic",
+      "hosts": [
+        "your-company.atlassian.net"
+      ],
+      "provided_by": [
+        "user"
+      ],
+      "help": "Username is your Atlassian e-mail. Create an API token at id.atlassian.com \u2192 Security \u2192 API tokens."
+    },
+    {
+      "id": "GERRIT_TOKEN",
+      "name": "Gerrit",
+      "description": "HTTP password of a Gerrit account: lists and reviews changes, pushes changes for review.",
+      "kind": "basic",
+      "hosts": [
+        "gerrit"
+      ],
+      "provided_by": [
+        "tenant",
+        "team",
+        "user"
+      ],
+      "help": "Username is your Gerrit username; the secret is the HTTP password from Gerrit \u2192 Settings \u2192 HTTP Credentials. The local CI stack (compose.ci.yml) provides the platform account for the tenant."
+    },
+    {
+      "id": "JENKINS_TOKEN",
+      "name": "Jenkins",
+      "description": "A Jenkins user and API token for reading builds and logs.",
+      "kind": "basic",
+      "hosts": [
+        "mcp-jenkins"
+      ],
+      "provided_by": [
+        "tenant",
+        "team",
+        "user"
+      ],
+      "help": "Username is your Jenkins user; create the token under your user \u2192 Security \u2192 API Token. The local CI stack (compose.ci.yml) provides the platform's token for the tenant."
+    },
+    {
+      "id": "NEXUS_TOKEN",
+      "name": "Nexus",
+      "description": "Read access to the internal Nexus package repository through a shared account. Only tenant and team admins set it.",
+      "kind": "token",
+      "hosts": [
+        "nexus.internal"
+      ],
+      "provided_by": [
+        "tenant",
+        "team"
+      ],
+      "help": "Create a token for the shared build account in Nexus \u2192 Security \u2192 User Token."
+    },
+    {
+      "id": "PAGERDUTY_TOKEN",
+      "name": "PagerDuty",
+      "description": "Your PagerDuty API key, so on-call tools act as you. acme requires it of everyone in the ops team.",
+      "kind": "token",
+      "hosts": [
+        "api.pagerduty.com"
+      ],
+      "provided_by": [
+        "user"
+      ],
+      "required": true,
+      "teams": [
+        "ops"
+      ],
+      "help": "Create a user API key in PagerDuty \u2192 My Profile \u2192 User Settings \u2192 API Access."
+    }
+  ],
+  "mcp_servers": [
+    {
+      "id": "bitbucket",
+      "name": "Bitbucket (read-only)",
+      "description": "Pull requests, diffs and repository details from Bitbucket Cloud.",
+      "url": "http://mcp-bitbucket:8000/",
+      "credential": "BITBUCKET_TOKEN",
+      "tools": [
+        "whoami",
+        "list_pull_requests",
+        "get_pull_request",
+        "get_pull_request_diff"
+      ]
+    },
+    {
+      "id": "jenkins",
+      "name": "Jenkins (read-only)",
+      "description": "Jobs, builds, pipeline stages and logs from Jenkins.",
+      "url": "http://mcp-jenkins:8000/",
+      "credential": "JENKINS_TOKEN",
+      "auth": {
+        "scheme": "basic"
+      },
+      "tools": [
+        "whoami",
+        "list_jobs",
+        "get_builds",
+        "get_build",
+        "get_build_log"
+      ]
+    },
+    {
+      "id": "jira",
+      "name": "Jira",
+      "description": "Issues and comments in Jira, as yourself.",
+      "url": "https://your-company.atlassian.net/mcp/",
+      "credential": "JIRA_TOKEN",
+      "auth": {
+        "scheme": "basic"
+      },
+      "teams": [
+        "payments"
+      ]
+    }
+  ],
+  "secret_hosts": {
+    "GITHUB_TOKEN": [
+      "github.com"
+    ]
+  },
+  "teams": [
+    {
+      "id": "demo",
+      "name": "Demo team",
+      "description": "Sample team with one workflow for every activity.",
+      "repository": {
+        "url": "file:///repos/acme-demo",
+        "branch": "main"
+      },
+      "secrets": []
+    },
+    {
+      "id": "payments",
+      "name": "Payments",
+      "description": "Small team with a workspace and a limit of two running sessions, for testing team roles and limits.",
+      "repository": {
+        "type": "git",
+        "url": "file:///repos/acme-payments",
+        "branch": "main"
+      },
+      "secrets": []
+    },
+    {
+      "id": "ops",
+      "name": "Operations",
+      "description": "Team with a scheduled workspace and a tiny daily token budget, for testing platform-started sessions and budgets.",
+      "repository": {
+        "type": "git",
+        "url": "file:///repos/acme-ops",
+        "branch": "main"
+      },
+      "secrets": []
+    }
+  ]
+}

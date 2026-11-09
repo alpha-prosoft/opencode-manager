@@ -14,10 +14,15 @@
 (def sync [:admin :sync])
 (def stop-idle [:admin :stop-idle])
 (def report [:admin :report])
+(def sync-outcome [:admin :sync-outcome])
+(def sync-outcome-teams [:admin :sync-outcome-teams])
 (def sync-error [:admin :sync-error])
+(def sync-status [:admin :sync-status])
+(def forbidden [:admin :forbidden])
 (def overview-stats [:admin :overview-stats])
 
 (def users-table [:admin :users])
+(def users-empty [:admin :users-empty])
 
 (def usage-days [:admin :usage-days])
 
@@ -27,6 +32,11 @@
 
 (def usage-table [:admin :usage-table])
 (def usage-empty [:admin :usage-empty])
+(def team-usage-table [:admin :team-usage-table])
+
+(defn team-usage
+  [team-id]
+  [:admin :team-usage team-id])
 
 (def teams-table [:admin :teams-table])
 
@@ -57,6 +67,10 @@
 
 (def credentials-action-error [:admin :credentials-action-error])
 
+(defn required-credential
+  [credential-id]
+  [:admin :required-credential credential-id])
+
 (def mcp-empty [:admin :mcp-empty])
 (def mcp-list [:admin :mcp-list])
 
@@ -65,3 +79,4 @@
   [:admin :mcp-server server-id])
 
 (def schedules-table [:admin :schedules])
+(def scope [:admin :scope])

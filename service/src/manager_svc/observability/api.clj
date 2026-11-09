@@ -8,6 +8,10 @@
             [manager-svc.observability.usage :as usage]
             [manager-svc.time :as time]))
 
+(def empty-usage
+  "Usage of something no call was metered for."
+  {:calls 0 :prompt-tokens 0 :completion-tokens 0 :cached-tokens 0 :errors 0 :avg-latency-ms 0})
+
 (defonce ^:private write-lock
   (Object.))
 
@@ -20,7 +24,7 @@
     (apply client/command-no-settle (:settings system) commands)))
 
 (defn record-usage!
-  "One LLM call: {:session-id :username :run-id :team-id :connection :model :status
+  "One LLM call: {:session-id :username :run-id :tenant :team-id :connection :model :status
    :prompt-tokens :completion-tokens :cached-tokens :latency-ms}."
   [system call]
   (serialized-command system (usage/commands (merge {:ts (time/now)}
@@ -31,6 +35,7 @@
   [system session report]
   (serialized-command system (telemetry/commands (assoc report
                                                         :session-id (str (:id session))
+                                                        :tenant (:tenant session)
                                                         :team-id (:team-id session)
                                                         :ts (time/now)))))
 
@@ -51,30 +56,30 @@
   "What a team page shows, in one call: {:usage (usage-for-session shape)
    :used-today tokens :by-model [{:model :calls :prompt-tokens
    :completion-tokens}]} since an ISO timestamp (day granularity)."
-  [system team-id since]
-  (client/query (:settings system) {:query-id :get-team-usage :team-id team-id :since since}))
+  [system tenant team-id since]
+  (client/query (:settings system) {:query-id :get-team-usage :tenant tenant :team-id team-id :since since}))
 
 (defn usage-rows
-  "[{:team-id :connection :model :calls :prompt-tokens :completion-tokens
-   :cached-tokens :errors :cost}] for team ids (nil = all) since; :cost is
-   nil without pricing."
-  [system team-ids since]
+  "[{:tenant :team-id :connection :model :calls :prompt-tokens
+   :completion-tokens :cached-tokens :errors :cost}] of a tenant's team ids
+   (nil = all of the tenant) since; :cost is nil without pricing."
+  [system tenant team-ids since]
   (client/query (:settings system)
-                (cond-> {:query-id :get-usage-rows :since since}
+                (cond-> {:query-id :get-usage-rows :tenant tenant :since since}
                   team-ids (assoc :team-ids (vec team-ids)))))
 
 (defn tokens-by-user
-  "{username tokens} of LLM calls since an ISO timestamp (day granularity),
-   attributed to the owner of the calling session."
-  [system since]
+  "{username tokens} of a tenant's LLM calls since an ISO timestamp (day
+   granularity), attributed to the owner of the calling session."
+  [system tenant since]
   (into {}
         (map (juxt :username :tokens))
-        (client/query (:settings system) {:query-id :get-usage-by-user :since since})))
+        (client/query (:settings system) {:query-id :get-usage-by-user :tenant tenant :since since})))
 
 (defn tokens-today
   "Tokens of a team's LLM calls today (UTC)."
-  [system team-id]
-  (:tokens (client/query (:settings system) {:query-id :get-team-tokens-today :team-id team-id})))
+  [system tenant team-id]
+  (:tokens (client/query (:settings system) {:query-id :get-team-tokens-today :tenant tenant :team-id team-id})))
 
 (defn test-llm-connection
   "A tiny chat completion through the connection, the way the gateway calls

@@ -17,8 +17,10 @@
 (def other-id #uuid "99999999-9999-9999-9999-999999999999")
 
 (defn- identity-of
+  "An identity as tokens carry it, with the person's tenant and teams."
   [username]
-  {:sub username :email (str username "@users.local") :name username})
+  (merge (select-keys (fixtures/person username) [:tenant :teams :tenant-admin :operator])
+         {:sub username :email (str username "@users.local") :name username}))
 
 (defn- login-cookie
   [system username]
@@ -29,8 +31,21 @@
   ([system username]
    (session-cookie system username session-id))
   ([system username sid]
+   (session-cookie system username sid (gateway/login-deadline (:settings system))))
+  ([system username sid until]
    (str (auth/session-cookie (:settings system)) "="
-        (auth/session-token (:settings system) (identity-of username) (str sid)))))
+        (auth/session-token (:settings system) (identity-of username) sid until))))
+
+(defn- cookie-claims
+  "Claims of the session-host token a response sets."
+  [system response]
+  (let [[_ token]
+        (re-find #"oc_session=([^;]+)" (str (get-in response [:headers "Set-Cookie"])))]
+    (auth/read-session-token (:settings system) token (str session-id))))
+
+(defn- epoch-seconds
+  []
+  (.getEpochSecond (java.time.Instant/now)))
 
 (defn- forward-auth-with
   [system uri headers]
@@ -67,7 +82,7 @@
               (forward-auth system "/"))))
         (testing "people who may not open it go to its page in the manager"
           (is
-           (= (str "http://example.test/sessions/" session-id)
+           (= (str "http://example.test/acme/sessions/" session-id)
               (get-in (forward-auth system "/" "mallory") [:headers "Location"]))))
         (testing "a valid handoff sets the session-host cookie and drops the token from the URL"
           (let [response
@@ -110,8 +125,12 @@
                  :headers {"Authorization" (opencode/basic-auth (api/secret-key system session-id))}}
                 (forward-auth system "/" "carol")))
             (testing "a session cookie close to expiry is renewed through Traefik"
-              (let [old
-                    (auth/issue (:settings system) (identity-of "carol") auth/session-audience 60 {:sid (str session-id)})
+              (let [until
+                    (+ (epoch-seconds) 7200)
+
+                    old
+                    (auth/issue (:settings system) (identity-of "carol") auth/session-audience 60
+                                {:sid (str session-id) :until until})
 
                     response
                     (forward-auth-with system "/" {"cookie" (str "oc_session=" old)})]
@@ -119,7 +138,11 @@
                  (= 200
                     (:status response)))
                 (is
-                 (string/starts-with? (get-in response [:headers "Set-Cookie"]) "oc_session="))))))
+                 (string/starts-with? (get-in response [:headers "Set-Cookie"]) "oc_session="))
+                (testing "with the end of the login it was handed over from, never a later one"
+                  (is
+                   (= (str until)
+                      (:until (cookie-claims system response)))))))))
         (testing "a running session that does not answer yet keeps the person waiting"
           (fixtures/set-status! system session-id :starting)
           (live/forget-ready! system session-id)
@@ -127,6 +150,49 @@
             (is
              (= 503
                 (:status (forward-auth system "/" "carol"))))))))))
+
+(deftest a-session-host-cookie-ends-with-the-login-it-came-from
+  (mock/with-mock-dal
+    (let [system
+          (fixtures/system)
+
+          ctx
+          (fixtures/ctx system)
+
+          entry
+          (str "http://example.test/sessions/bob/" session-id)
+
+          answer
+          (fn [cookie]
+            (let [response
+                  (forward-auth-with system "/" {"cookie" cookie})]
+              [(:status response) (get-in response [:headers "Location"])]))]
+      (fixtures/with-domains ctx
+        (fixtures/create-session! system ctx {:id session-id :owner "bob" :visibility :team})
+        (fixtures/set-status! system session-id :running)
+        (with-redefs [opencode/healthy? (fn [_ _] true)]
+          (testing "a handoff gives a cookie good until the login would end"
+            (let [before
+                  (epoch-seconds)
+
+                  until
+                  (parse-long (:until (cookie-claims system (forward-auth system (str "/?oc_handoff=" (handoff system "carol"))))))
+
+                  ttl
+                  (* 3600 (get-in system [:settings :auth-ttl-hours]))]
+              (is
+               (<= (+ before ttl) until (+ (epoch-seconds) ttl)))))
+          (is
+           (= [200 nil]
+              (answer (session-cookie system "carol" session-id (+ (epoch-seconds) 60)))))
+          (testing "past that time the person enters through the manager again, however fresh the cookie"
+            (is
+             (= [302 entry]
+                (answer (session-cookie system "carol" session-id (- (epoch-seconds) 1))))))
+          (testing "a cookie that names no end is not accepted"
+            (is
+             (= [302 entry]
+                (answer (str "oc_session=" (auth/session-token (:settings system) (identity-of "carol") (str session-id) nil)))))))))))
 
 (deftest session-hosts-accept-only-their-own-cookie
   (mock/with-mock-dal
@@ -190,6 +256,23 @@
          (= [[:sessions-lifecycle]]
             @kicked))))))
 
+(deftest a-session-being-deleted-is-not-woken
+  (mock/with-mock-dal
+    (let [system
+          (fixtures/system)
+
+          ctx
+          (fixtures/ctx system)]
+      (fixtures/with-domains ctx
+        (fixtures/create-session! system ctx {:id session-id :owner "bob"})
+        (fixtures/command! (fixtures/as ctx "bob") {:cmd-id :delete-session :id session-id})
+        (is
+         (= 503
+            (:status (forward-auth system "/" "bob"))))
+        (is
+         (= :delete
+            (:pending (api/get-session system session-id))))))))
+
 (deftest access-decisions-are-remembered-briefly
   (mock/with-mock-dal
     (let [system
@@ -210,7 +293,7 @@
             (dotimes [_ 3]
               (forward-auth system "/" "bob"))
             (testing "a change of the session's sharing asks again"
-              (fixtures/command! (support/as-user ctx "bob") {:cmd-id :update-session :id session-id :attrs {:visibility :team}})
+              (fixtures/command! (fixtures/as ctx "bob") {:cmd-id :update-session :id session-id :attrs {:visibility :team}})
               (forward-auth system "/" "bob"))))
         (is
          (= 2
@@ -245,7 +328,7 @@
               (:status (enter "bob" (str "/sessions/alice/" session-id)))))
           (testing "a team admin who may only look is sent to the session page"
             (is
-             (= (str "/sessions/" session-id)
+             (= (str "/acme/sessions/" session-id)
                 (get-in (enter "alice" path) [:headers "Location"]))))
           (testing "the owner is handed over to the session host"
             (let [location
@@ -303,3 +386,34 @@
     (is
      (nil?
       (gateway/handoff-of "/?x=%zz")))))
+
+(deftest people-of-another-tenant-never-reach-a-session
+  (mock/with-mock-dal
+    (let [system
+          (fixtures/system)
+
+          ctx
+          (fixtures/ctx system)
+
+          path
+          (str "/sessions/bob/" session-id)]
+      (fixtures/with-domains ctx
+        (fixtures/create-session! system ctx {:id session-id :owner "bob" :visibility :tenant})
+        (testing "entering is not found for them"
+          (is
+           (= 404
+              (:status (gateway/enter system {:method :get
+                                              :path path
+                                              :query {}
+                                              :headers {"cookie" (login-cookie system "hank")}})))))
+        (testing "a handoff or a session cookie issued to them is refused"
+          (is
+           (= 401
+              (:status (forward-auth system (str "/?oc_handoff=" (handoff system "gina")))))))
+        (is
+         (= (str "http://example.test/acme/sessions/" session-id)
+            (get-in (forward-auth system "/" "hank") [:headers "Location"])))
+        (testing "while people of the session's tenant may work in it"
+          (is
+           (= 302
+              (:status (forward-auth system (str "/?oc_handoff=" (handoff system "mallory")))))))))))

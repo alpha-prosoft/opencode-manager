@@ -33,11 +33,23 @@
                                  :on-success [::logged-out]
                                  :on-failure [::logged-out]}]]]}))
 
+(defn logged-out-effects
+  "After logging out: the identity provider's logout page when the server
+   names one (oidc mode), else the login page."
+  [db result]
+  (let [provider-logout
+        (when (map? result)
+          (urls/safe-url (:redirect result)))]
+    (if provider-logout
+      {:db (api/signed-out db)
+       ::assign-location provider-logout}
+      {:db (api/signed-out db)
+       :fx [[:dispatch [:edd.events/navigate {:url "/login" :replace? true}]]]})))
+
 (rf/reg-event-fx
  ::logged-out
- (fn [{:keys [db]} _]
-   {:db (api/signed-out db)
-    :fx [[:dispatch [:edd.events/navigate {:url "/login" :replace? true}]]]}))
+ (fn [{:keys [db]} [_ result]]
+   (logged-out-effects db result)))
 
 (rf/reg-fx
  ::assign-location
@@ -59,11 +71,3 @@
 (defn display-name
   [me]
   (or (:name me) (:sub me) ""))
-
-(defn role-label
-  [{:keys [platform-admin teams]}]
-  (cond
-    platform-admin "Platform admin"
-    (some #(= :admin (:role %)) teams) "Team admin"
-    (seq teams) "Team member"
-    :else "No team yet"))

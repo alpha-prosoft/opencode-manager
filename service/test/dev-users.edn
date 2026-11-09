@@ -1,0 +1,7 @@
+{"alice" {:email "alice@acme.test" :name "Alice" :tenant "acme"
+          :groups ["/acme/alpha/admin"] :realm_access {:roles ["tenant-admin"]}}
+ "bob" {:tenant "acme" :groups ["/acme/alpha" "/acme/beta"]}
+ "platformer" {:tenant "acme"}
+ "gina" {:groups ["/globex/research/admin"] :realm_access {:roles ["tenant-admin"]}}
+ "oscar" {:realm_access {:roles ["platform-operator"]}}
+ "nobody" {:groups []}}

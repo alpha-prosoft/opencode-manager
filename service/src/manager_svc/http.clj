@@ -109,3 +109,13 @@
 (defn json-body
   [response]
   (read-json (:body response)))
+
+(defn get-json
+  "The JSON body of a GET of url; throws naming what when it is not 2xx."
+  ([url what]
+   (get-json url what {}))
+  ([url what headers]
+   (json-body (checked! (request! {:url url
+                                   :headers (merge {"Accept" "application/json"} headers)
+                                   :timeout-seconds 15})
+                        what))))

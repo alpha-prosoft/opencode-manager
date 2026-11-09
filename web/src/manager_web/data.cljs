@@ -10,6 +10,7 @@
    events. Page state (tabs, filters) lives under [::ui page key]."
   (:require [manager-web.api :as api]
             [manager-web.components.layout :as layout]
+            [manager-web.routes :as routes]
             [re-frame.core :as rf]
             [reagent.core :as r]))
 
@@ -51,6 +52,16 @@
   [db key token message]
   (when (current? db key token)
     (update-in db [::loads key] assoc :error message :loading? false)))
+
+(defn store
+  "db with result as the data of key, as if it had just been loaded; replies
+   still on their way are dropped."
+  [db key result]
+  (let [token
+        (inc (::requests db 0))]
+    (-> db
+        (assoc ::requests token)
+        (update-in [::loads key] assoc :data result :error nil :loading? false :token token))))
 
 (rf/reg-event-fx
  ::fetch
@@ -135,8 +146,10 @@
 (defn loaded
   "Polls like `poll` and renders (render data) once data has arrived. A failed
    refresh keeps the data under an error alert. With :poll-while, polling
-   stops once (poll-while data) is false."
-  [{:keys [key interval poll-while error-el-id] :as props} render]
+   stops once (poll-while data) is false. :failed, a hiccup form, is shown
+   under the error while there is no data: the way on from a page that
+   couldn't load."
+  [{:keys [key interval poll-while error-el-id failed] :as props} render]
   (let [{:keys [data] :as load}
         @(rf/subscribe [::load key])
 
@@ -145,18 +158,19 @@
           interval)]
     [:<>
      [poll (assoc props :interval interval)]
-     [layout/loadable load error-el-id render]]))
+     [layout/loadable load error-el-id render failed]]))
 
 (defn run-effects
   "What happens after a successful ::run."
   [{:keys [refetch navigate on-success finally]} result]
   (cond-> []
     (seq refetch) (conj [:dispatch [::refetch refetch]])
-    navigate (conj [:dispatch (into [:edd.events/navigate] navigate)])
+    navigate (conj [:dispatch (into [::routes/navigate] navigate)])
     on-success (conj [:dispatch (conj on-success result)])
     finally (conj [:dispatch finally])))
 
-(defn- busy-key
+(defn busy-key
+  "Where a ::run spec's busy flag lives."
   [spec]
   (or (:busy spec) (:id spec)))
 
@@ -195,12 +209,20 @@
    {:db (finish-run db spec)
     :fx (run-effects spec result)}))
 
+(defn failure-effects
+  "What happens after a failed ::run. :refetch-on-failure names the loads a
+   refusal may have made stale."
+  [{:keys [on-failure finally refetch-on-failure]} message]
+  (cond-> []
+    (seq refetch-on-failure) (conj [:dispatch [::refetch refetch-on-failure]])
+    on-failure (conj [:dispatch (conj on-failure message)])
+    finally (conj [:dispatch finally])))
+
 (rf/reg-event-fx
  ::run-failed
- (fn [{:keys [db]} [_ {:keys [on-failure finally] :as spec} message]]
+ (fn [{:keys [db]} [_ spec message]]
    {:db (finish-run db spec message)
-    :fx [(when on-failure [:dispatch (conj on-failure message)])
-         (when finally [:dispatch finally])]}))
+    :fx (failure-effects spec message)}))
 
 (rf/reg-event-db
  ::clear-error
@@ -239,10 +261,35 @@
  (fn [db [_ page key default]]
    (ui db page key default)))
 
+(defn enter
+  "db on entering a page: its state (and that of also, pages whose state it
+   embeds) and the errors of earlier actions start fresh. Navigating within
+   the page, where only the query changes, keeps them."
+  [db & also]
+  (let [panel
+        (:edd.db/active-panel db)
+
+        place
+        [panel (:edd.db/path-params db)]]
+    (if (= place (::place db))
+      db
+      (-> (reduce reset-ui db (cons panel also))
+          (dissoc ::errors)
+          (assoc ::place place)))))
+
 (rf/reg-event-db
  ::enter-page
  (fn [db _]
-   (reset-ui db (:edd.db/active-panel db))))
+   (enter db)))
+
+(defn tab-of
+  "The tab a URL asks for (?tab=runs) among tabs ([id label ...] entries),
+   else the first."
+  [tabs value]
+  (let [ids
+        (map first tabs)]
+    (or (some #{(some-> value keyword)} ids)
+        (first ids))))
 
 (defn route-id
   "A path parameter that names an aggregate, as a UUID when it is one."

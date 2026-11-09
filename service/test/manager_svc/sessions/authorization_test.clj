@@ -23,11 +23,11 @@
 
 (defn- command
   [ctx username cmd]
-  (outcome #(fixtures/command! (support/as-user ctx username) cmd)))
+  (outcome #(fixtures/command! (fixtures/as ctx username) cmd)))
 
 (defn- query
   [ctx username q]
-  (outcome #(mock/query (support/as-user ctx username) q)))
+  (outcome #(mock/query (fixtures/as ctx username) q)))
 
 (defmacro ^:private with-session
   "Runs body with ctx bound to a fresh mock DAL holding one session."
@@ -60,12 +60,12 @@
        (= 404
           (command ctx "carol" {:cmd-id :fork-session :id (random-uuid) :attrs {:source-id session-id}}))))))
 
-(deftest owners-team-admins-and-platform-admins-manage-a-session
+(deftest owners-team-admins-and-tenant-admins-manage-a-session
   (doseq [manager ["bob" "alice" "root"]]
     (with-session [ctx {:owner "bob" :visibility :team}]
       (is
        (= [manager {:update-session :ok :stop-session :ok :delete-session :ok}]
-          [manager {:update-session (command ctx manager {:cmd-id :update-session :id session-id :attrs {:visibility :public}})
+          [manager {:update-session (command ctx manager {:cmd-id :update-session :id session-id :attrs {:visibility :tenant}})
                     :stop-session (command ctx manager {:cmd-id :stop-session :id session-id})
                     :delete-session (command ctx manager {:cmd-id :delete-session :id session-id})}])))))
 
@@ -75,7 +75,7 @@
      (= {:get-session :ok :start-session :ok :update-session 403 :stop-session 403 :delete-session 403 :lock-session 403}
         {:get-session (query ctx "carol" {:query-id :get-session :session-id session-id})
          :start-session (command ctx "carol" {:cmd-id :start-session :id session-id})
-         :update-session (command ctx "carol" {:cmd-id :update-session :id session-id :attrs {:visibility :public}})
+         :update-session (command ctx "carol" {:cmd-id :update-session :id session-id :attrs {:visibility :tenant}})
          :stop-session (command ctx "carol" {:cmd-id :stop-session :id session-id})
          :delete-session (command ctx "carol" {:cmd-id :delete-session :id session-id})
          :lock-session (command ctx "carol" {:cmd-id :lock-session :id session-id})}))))
@@ -93,7 +93,7 @@
             (command ctx "carol" {:cmd-id :fork-session :id (random-uuid) :attrs {:source-id session-id}})))))))
 
 (deftest sessions-of-platform-runs-are-worked-in-by-their-team-only
-  (with-session [ctx {:owner "platform" :visibility :public}]
+  (with-session [ctx {:owner "platform" :visibility :tenant}]
     (is
      (= {"mallory" 409 "carol" :ok "root" :ok}
         (into {} (for [username ["mallory" "carol" "root"]]
@@ -102,12 +102,18 @@
       (is
        (= {:status :ok :open-blocked :team-only}
           {:status (query ctx "mallory" {:query-id :get-session :session-id session-id})
-           :open-blocked (:open-blocked (mock/query (support/as-user ctx "mallory")
+           :open-blocked (:open-blocked (mock/query (fixtures/as ctx "mallory")
                                                     {:query-id :get-session :session-id session-id}))})))
-    (testing "and cannot fork it, since forks belong to the team"
-      (is
-       (= 403
-          (command ctx "mallory" {:cmd-id :fork-session :id (random-uuid) :attrs {:source-id session-id}}))))))
+    (testing "and continue in their own fork, which stays in the team"
+      (let [fork-id
+            (random-uuid)]
+        (is
+         (= :ok
+            (command ctx "mallory" {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id}})))
+        (is
+         (= {:sub "mallory" :tenant "acme" :team-id "alpha" :visibility :private :forked-from session-id}
+            (select-keys (mock/query (fixtures/as ctx "mallory") {:query-id :get-session :session-id fork-id})
+                         [:sub :tenant :team-id :visibility :forked-from])))))))
 
 (deftest a-locked-session-can-still-be-forked
   (with-session [ctx {:owner "bob" :visibility :team}]
@@ -128,3 +134,48 @@
       (is
        (= 409
           (outcome #(fixtures/command! platform {:cmd-id :start-session :id session-id})))))))
+
+(deftest people-of-another-tenant-are-told-a-session-does-not-exist
+  (with-session [ctx {:owner "bob" :visibility :tenant}]
+    (doseq [username ["gina" "hank"]]
+      (is
+       (= [username {:get-session 404 :list-conversations 404 :listed []}]
+          [username {:get-session (query ctx username {:query-id :get-session :session-id session-id})
+                     :list-conversations (query ctx username {:query-id :list-conversations :session-id session-id})
+                     :listed (mock/query (fixtures/as ctx username) {:query-id :list-sessions})}]))
+      (is
+       (= [username {:update-session 404 :start-session 404 :stop-session 404 :delete-session 404
+                     :lock-session 404 :fork-session 404}]
+          [username {:update-session (command ctx username {:cmd-id :update-session :id session-id :attrs {:name "Mine"}})
+                     :start-session (command ctx username {:cmd-id :start-session :id session-id})
+                     :stop-session (command ctx username {:cmd-id :stop-session :id session-id})
+                     :delete-session (command ctx username {:cmd-id :delete-session :id session-id})
+                     :lock-session (command ctx username {:cmd-id :lock-session :id session-id})
+                     :fork-session (command ctx username {:cmd-id :fork-session :id (random-uuid)
+                                                          :attrs {:source-id session-id}})}])))))
+
+(deftest anyone-in-the-tenant-forks-a-session-shared-with-the-tenant
+  (with-session [ctx {:owner "bob" :visibility :tenant}]
+    (let [fork-id
+          (random-uuid)]
+      (is
+       (= :ok
+          (command ctx "mallory" {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id}})))
+      (is
+       (= {:sub "mallory" :tenant "acme" :team-id "alpha" :visibility :private}
+          (select-keys (mock/query (fixtures/as ctx "mallory") {:query-id :get-session :session-id fork-id})
+                       [:sub :tenant :team-id :visibility])))
+      (testing "the owner of the source does not see the private fork"
+        (is
+         (= 404
+            (query ctx "bob" {:query-id :get-session :session-id fork-id})))))))
+
+(deftest only-tenant-admins-stop-idle-sessions
+  (mock/with-mock-dal
+    (let [ctx
+          (fixtures/ctx (fixtures/system))]
+      (fixtures/with-domains ctx
+        (is
+         (= {"root" :ok "gina" :ok "alice" 403 "bob" 403}
+            (into {} (for [username ["root" "gina" "alice" "bob"]]
+                       [username (command ctx username {:cmd-id :stop-idle-sessions})]))))))))

@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "budget": {
+    "daily_tokens": 5000000,
+    "max_running_sessions": 10,
+    "idle_minutes": 30
+  },
+  "llm_connections": [
+    {
+      "id": "copilot"
+    }
+  ],
+  "mcp_servers": [
+    "bitbucket",
+    "jenkins"
+  ],
+  "projects": [
+    {
+      "id": "demo-service",
+      "name": "Demo service",
+      "branch": "main",
+      "scm": {
+        "provider": "gerrit",
+        "url": "http://gerrit:8080",
+        "web_url": "http://gerrit.localhost:8080",
+        "repository": "demo-service",
+        "credentials": "GERRIT_TOKEN"
+      },
+      "ci": {
+        "mcp_server": "jenkins",
+        "jobs": [
+          "demo-service-verify"
+        ],
+        "job": "demo-service-verify"
+      }
+    }
+  ]
+}

@@ -1,0 +1,463 @@
+{
+  "realm": "agent-platform",
+  "displayName": "Agent Platform (local)",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": false,
+  "resetPasswordAllowed": false,
+  "rememberMe": false,
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 43200,
+  "ssoSessionMaxLifespan": 43200,
+  "roles": {
+    "realm": [
+      {
+        "name": "tenant-admin",
+        "description": "Administers the person's tenant"
+      },
+      {
+        "name": "platform-operator",
+        "description": "Operates the platform: registers tenants, sees every tenant's sync state"
+      }
+    ]
+  },
+  "groups": [
+    {
+      "name": "acme",
+      "subGroups": [
+        {
+          "name": "demo",
+          "subGroups": [
+            {
+              "name": "admin",
+              "subGroups": []
+            }
+          ]
+        },
+        {
+          "name": "payments",
+          "subGroups": [
+            {
+              "name": "admin",
+              "subGroups": []
+            }
+          ]
+        },
+        {
+          "name": "ops",
+          "subGroups": [
+            {
+              "name": "admin",
+              "subGroups": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "globex",
+      "subGroups": [
+        {
+          "name": "research",
+          "subGroups": [
+            {
+              "name": "admin",
+              "subGroups": []
+            }
+          ]
+        },
+        {
+          "name": "lab",
+          "subGroups": [
+            {
+              "name": "admin",
+              "subGroups": []
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "agent-platform",
+      "name": "Agent Platform",
+      "description": "The manager (MANAGER_AUTH_MODE=oidc). Local only: the secret is public.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "agent-platform-local-secret",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "frontchannelLogout": false,
+      "fullScopeAllowed": true,
+      "redirectUris": [
+        "http://localhost:8080/api/auth/oidc/callback",
+        "http://localhost:18000/api/auth/oidc/callback"
+      ],
+      "webOrigins": [],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:8080/login##http://localhost:18000/login"
+      },
+      "defaultClientScopes": [
+        "web-origins",
+        "acr",
+        "profile",
+        "roles",
+        "basic",
+        "email"
+      ],
+      "optionalClientScopes": [
+        "offline_access"
+      ],
+      "protocolMappers": [
+        {
+          "name": "tenant",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "introspection.token.claim": "true",
+            "user.attribute": "tenant",
+            "claim.name": "tenant",
+            "jsonType.label": "String",
+            "multivalued": "false"
+          }
+        },
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "introspection.token.claim": "true",
+            "claim.name": "groups",
+            "full.path": "true"
+          }
+        },
+        {
+          "name": "realm roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "introspection.token.claim": "true",
+            "claim.name": "realm_access.roles",
+            "jsonType.label": "String",
+            "multivalued": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "alice",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Alice",
+      "email": "alice@acme.test",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "alice",
+          "temporary": false
+        }
+      ],
+      "groups": [
+        "/acme/demo/admin"
+      ],
+      "realmRoles": [
+        "tenant-admin"
+      ],
+      "requiredActions": [],
+      "attributes": {
+        "tenant": [
+          "acme"
+        ]
+      }
+    },
+    {
+      "username": "bob",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Bob",
+      "email": "bob@acme.test",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "bob",
+          "temporary": false
+        }
+      ],
+      "groups": [
+        "/acme/demo",
+        "/acme/payments"
+      ],
+      "realmRoles": [],
+      "requiredActions": [],
+      "attributes": {
+        "tenant": [
+          "acme"
+        ]
+      }
+    },
+    {
+      "username": "carol",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Carol",
+      "email": "carol@acme.test",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "carol",
+          "temporary": false
+        }
+      ],
+      "groups": [],
+      "realmRoles": [],
+      "requiredActions": [],
+      "attributes": {
+        "tenant": [
+          "acme"
+        ]
+      }
+    },
+    {
+      "username": "dave",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Dave",
+      "email": "dave@acme.test",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dave",
+          "temporary": false
+        }
+      ],
+      "groups": [
+        "/acme/payments/admin",
+        "/acme/ops"
+      ],
+      "realmRoles": [],
+      "requiredActions": [],
+      "attributes": {
+        "tenant": [
+          "acme"
+        ]
+      }
+    },
+    {
+      "username": "erin",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Erin",
+      "email": "erin@acme.test",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "erin",
+          "temporary": false
+        }
+      ],
+      "groups": [
+        "/acme/payments"
+      ],
+      "realmRoles": [],
+      "requiredActions": [],
+      "attributes": {
+        "tenant": [
+          "acme"
+        ]
+      }
+    },
+    {
+      "username": "frank",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Frank",
+      "email": "frank@acme.test",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "frank",
+          "temporary": false
+        }
+      ],
+      "groups": [
+        "/acme/demo/admin"
+      ],
+      "realmRoles": [],
+      "requiredActions": [],
+      "attributes": {
+        "tenant": [
+          "acme"
+        ]
+      }
+    },
+    {
+      "username": "henry",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Henry",
+      "email": "henry@acme.test",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "henry",
+          "temporary": false
+        }
+      ],
+      "groups": [
+        "/acme/ops"
+      ],
+      "realmRoles": [],
+      "requiredActions": [],
+      "attributes": {
+        "tenant": [
+          "acme"
+        ]
+      }
+    },
+    {
+      "username": "gina",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Gina",
+      "email": "gina@globex.test",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "gina",
+          "temporary": false
+        }
+      ],
+      "groups": [
+        "/globex/research/admin"
+      ],
+      "realmRoles": [
+        "tenant-admin"
+      ],
+      "requiredActions": [],
+      "attributes": {
+        "tenant": [
+          "globex"
+        ]
+      }
+    },
+    {
+      "username": "hank",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Hank",
+      "email": "hank@globex.test",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "hank",
+          "temporary": false
+        }
+      ],
+      "groups": [
+        "/globex/research"
+      ],
+      "realmRoles": [],
+      "requiredActions": [],
+      "attributes": {
+        "tenant": [
+          "globex"
+        ]
+      }
+    },
+    {
+      "username": "ivy",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Ivy",
+      "email": "ivy@globex.test",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "ivy",
+          "temporary": false
+        }
+      ],
+      "groups": [
+        "/globex/research",
+        "/globex/lab/admin"
+      ],
+      "realmRoles": [],
+      "requiredActions": [],
+      "attributes": {
+        "tenant": [
+          "globex"
+        ]
+      }
+    },
+    {
+      "username": "oscar",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Oscar",
+      "email": "oscar@platform.test",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "oscar",
+          "temporary": false
+        }
+      ],
+      "groups": [],
+      "realmRoles": [
+        "platform-operator"
+      ],
+      "requiredActions": []
+    },
+    {
+      "username": "nobody",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Nobody",
+      "email": "nobody@nowhere.test",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "nobody",
+          "temporary": false
+        }
+      ],
+      "groups": [],
+      "realmRoles": [],
+      "requiredActions": []
+    }
+  ],
+  "components": {
+    "org.keycloak.userprofile.UserProfileProvider": [
+      {
+        "providerId": "declarative-user-profile",
+        "subComponents": {},
+        "config": {
+          "kc.user.profile.config": [
+            "{\"unmanagedAttributePolicy\": \"ADMIN_VIEW\", \"attributes\": [{\"name\": \"username\", \"displayName\": \"${username}\", \"validations\": {\"length\": {\"min\": 3, \"max\": 255}, \"username-prohibited-characters\": {}, \"up-username-not-idn-homograph\": {}}, \"permissions\": {\"view\": [\"admin\", \"user\"], \"edit\": [\"admin\", \"user\"]}, \"multivalued\": false}, {\"name\": \"email\", \"displayName\": \"${email}\", \"validations\": {\"email\": {}, \"length\": {\"max\": 255}}, \"permissions\": {\"view\": [\"admin\", \"user\"], \"edit\": [\"admin\", \"user\"]}, \"multivalued\": false}, {\"name\": \"firstName\", \"displayName\": \"${firstName}\", \"validations\": {\"length\": {\"max\": 255}, \"person-name-prohibited-characters\": {}}, \"permissions\": {\"view\": [\"admin\", \"user\"], \"edit\": [\"admin\", \"user\"]}, \"multivalued\": false}, {\"name\": \"lastName\", \"displayName\": \"${lastName}\", \"validations\": {\"length\": {\"max\": 255}, \"person-name-prohibited-characters\": {}}, \"permissions\": {\"view\": [\"admin\", \"user\"], \"edit\": [\"admin\", \"user\"]}, \"multivalued\": false}, {\"name\": \"tenant\", \"displayName\": \"Tenant\", \"validations\": {\"pattern\": {\"pattern\": \"^[a-z0-9][a-z0-9-]{0,62}$\", \"error-message\": \"lowercase letters, digits and dashes\"}}, \"permissions\": {\"view\": [\"admin\", \"user\"], \"edit\": [\"admin\"]}, \"multivalued\": false}], \"groups\": [{\"name\": \"user-metadata\", \"displayHeader\": \"User metadata\", \"displayDescription\": \"Attributes, which refer to user metadata\"}]}"
+          ]
+        }
+      }
+    ]
+  }
+}

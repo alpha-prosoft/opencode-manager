@@ -1,7 +1,7 @@
 (ns manager-svc.sessions.api
   "Facade other domains use for sessions (sandboxed OpenCode instances).
    Session maps are the aggregate: {:id (uuid) :sub :email :name
-   :description :visibility :labels :env :image :team-id :run-id :activity
+   :description :visibility :labels :env :image :tenant :team-id :project :run-id :activity
    :created-at :last-activity-at :stopped-at :locked-by :locked-at
    :forked-from}."
   (:require [lambda.uuid :as uuid]
@@ -34,25 +34,51 @@
   (access/platform-owned? session))
 
 (defn can-view?
-  [system session username]
-  (access/can-view? system session username))
+  "caller: a [:meta :user] map or an edge identity."
+  [system session caller]
+  (access/can-view? system session caller))
+
+(defn visible-rows
+  "Directory rows of the sessions of caller's tenant that caller may see:
+   their own, those shared with them and, for admins, their teams'."
+  [system caller]
+  (when-let [tenant
+             (:tenant caller)]
+    (access/visible-to system caller (records/rows system tenant))))
+
+(defn session-limit-error
+  "Why the team may not run another session beside its running ones (a
+   count), or nil: team.json's budget.max_running_sessions."
+  [system tenant team-id running]
+  (live/limit-error system tenant team-id running))
+
+(defn parse-id
+  "A session or run id as a UUID, from a UUID or its text; nil otherwise."
+  [value]
+  (links/parse-id value))
+
+(def conversation-label
+  "The session label naming the conversation a person opens first."
+  (name links/conversation-label))
 
 (defn describe-session
-  "What username sees of a session, the Session shape :get-session returns
+  "What caller sees of a session, the Session shape :get-session returns
    (without usage and audit counts)."
-  [system session username]
+  [system session caller]
   (let [status
         (backend/status (live/backend-of system) (:id session))]
-    (views/session-view system {(:id session) status} session username)))
+    (views/session-view system {(:id session) status} session caller)))
 
 (defn session-count
-  [system]
-  (count (records/rows system)))
+  "Sessions of a tenant."
+  [system tenant]
+  (count (records/rows system tenant)))
 
 (defn create-session!
   "Creates and starts a session, as SessionService.create. opts:
-   {:identity {:sub :email :name} :name :description :visibility :labels :env
-    :image :team-id :run-id :activity :sandbox (what storage.write_sandbox gets)
+   {:identity {:sub :email :name} :tenant :team-id (both required) :name
+    :description :visibility :labels :env :image :project :run-id :activity :sandbox
+    (what storage.write_sandbox gets)
     :start? (default true)}.
    Returns the session map."
   [system {:keys [id identity sandbox start?] :or {start? true} :as opts}]
@@ -66,7 +92,7 @@
       (storage/write-sandbox! settings session-id sandbox))
     (records/command! system :create-session session-id
                       (merge (select-keys opts [:name :description :visibility :labels :env :image
-                                                :team-id :run-id :activity])
+                                                :tenant :team-id :project :run-id :activity])
                              {:sub (:sub identity)
                               :email (:email identity)
                               :start start?}))
@@ -89,13 +115,16 @@
   (live/ready? system session-id))
 
 (defn running-session-ids
-  [system]
-  (live/running-ids system (records/rows system)))
+  "Running sessions of every tenant, or of one."
+  ([system]
+   (live/running-ids system (records/rows system)))
+  ([system tenant]
+   (live/running-ids system (records/rows system tenant))))
 
 (defn running-count
   "Running sessions of a team: its directory rows against one backend status read."
-  [system team-id]
-  (count (live/running-ids system (records/rows system team-id))))
+  [system tenant team-id]
+  (count (live/running-ids system (records/rows system tenant team-id))))
 
 (defn label!
   [system session-id key value]

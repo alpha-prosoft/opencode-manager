@@ -1,6 +1,7 @@
 (ns manager-web.data-test
-  (:require [clojure.test :refer [deftest is]]
-            [manager-web.data :as data]))
+  (:require [clojure.test :refer [deftest is testing]]
+            [manager-web.data :as data]
+            [manager-web.routes :as routes]))
 
 (def query
   {:query {:query-id :list-runs}})
@@ -65,7 +66,7 @@
 (deftest run-effects
   (is
    (= [[:dispatch [::data/refetch [:runs]]]
-       [:dispatch [:edd.events/navigate :run {:run-id "1"}]]
+       [:dispatch [::routes/navigate :run {:run-id "1"}]]
        [:dispatch [:done 42]]
        [:dispatch [:finally]]]
       (data/run-effects {:refetch [:runs] :navigate [:run {:run-id "1"}] :on-success [:done] :finally [:finally]}
@@ -107,3 +108,58 @@
   (is
    (= "demo"
       (data/route-id "demo"))))
+
+(deftest a-refused-run-may-refresh-what-it-made-stale
+  (is
+   (= [[:dispatch [::data/refetch [:my-credentials]]] [:dispatch [:failed "No"]] [:dispatch [:done]]]
+      (data/failure-effects {:refetch-on-failure [:my-credentials] :on-failure [:failed] :finally [:done]} "No")))
+  (is
+   (= []
+      (data/failure-effects {} "No"))))
+
+(deftest a-result-read-elsewhere-is-stored-as-loaded
+  (let [[db token]
+        (data/begin-fetch {} :runs query nil false)
+
+        stored
+        (data/store db :runs [1])]
+    (is
+     (= {:data [1] :error nil :loading? false}
+        (select-keys (data/load-of stored :runs) [:data :error :loading?])))
+    (is
+     (nil? (data/accept-result stored :runs token [2]))
+     "the reply that was on its way is dropped")))
+
+(deftest entering-a-page-starts-it-fresh
+  (let [db
+        (-> {:edd.db/active-panel :team :edd.db/path-params {:tenant "acme" :team-id "ops"}}
+            (data/enter :webhooks)
+            (data/set-ui :team :team-id "ops")
+            (data/set-ui :webhooks :selected "w1")
+            (data/finish-run {:id :x} "Refused"))]
+    (testing "navigating within the page keeps its state and errors"
+      (is
+       (= db
+          (data/enter db :webhooks))))
+    (testing "another team's page, or another page, starts fresh"
+      (let [next-db
+            (data/enter (assoc db :edd.db/path-params {:tenant "acme" :team-id "demo"}) :webhooks)]
+        (is
+         (= [nil nil nil]
+            [(data/ui next-db :team :team-id nil) (data/ui next-db :webhooks :selected nil) (::data/errors next-db)]))))
+    (testing "other pages' state stays"
+      (is
+       (= "ops"
+          (data/ui (data/enter (assoc db :edd.db/active-panel :runs)) :team :team-id nil))))))
+
+(deftest the-tab-of-a-url
+  (let [tabs
+        [[:workflows "Workflows"] [:runs "Runs"]]]
+    (is
+     (= [:runs :workflows :workflows]
+        (mapv #(data/tab-of tabs %) ["runs" "nope" nil])))))
+
+(deftest a-spec-names-its-busy-flag
+  (is
+   (= [:x :y]
+      [(data/busy-key {:id :x}) (data/busy-key {:id :x :busy :y})])))

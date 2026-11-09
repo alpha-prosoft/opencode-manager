@@ -14,6 +14,9 @@
 (def checked-credential-id
   (:checked-credential h/fixture))
 
+(def admin-only-id
+  (:admin-only-credential h/fixture))
+
 (defn- save-credential
   [username secret]
   (h/wait-visible component-els/credential-dialog)
@@ -81,15 +84,47 @@
              (false?
               (h/visible? (els/remove-credential checked-credential-id))))))))
 
+(deftest admin-only-credentials-it
+  (with-ui [_page]
+    (step "A credential only admins provide is shown read-only, with where its value comes from"
+          (fn []
+            (h/login (:member h/fixture))
+            (h/goto "/accounts")
+            (h/wait-visible (els/credential admin-only-id))
+            (is
+             (true?
+              (h/visible? (els/read-only admin-only-id))))
+            (is
+             (contains? #{"team" "tenant" "missing"}
+                        (.getAttribute (h/raw-locator (els/resolution admin-only-id)) "data-state")))
+            (is
+             (false?
+              (h/visible? (els/edit admin-only-id))))
+            (is
+             (false?
+              (h/visible? (els/read-only credential-id))))))))
+
 (deftest setup-it
   (with-ui [_page]
+    (step "Their other optional credentials were left for later and Jira has no value of theirs"
+          (fn []
+            (h/login (:member h/fixture))
+            (h/goto "/accounts")
+            (h/wait-visible (els/edit credential-id))
+            (when (h/visible? (els/remove-credential credential-id))
+              (remove-credential))
+            (h/logout)))
+
     (step "Logging in with credentials to connect opens the setup page"
           (fn []
             (h/submit-login (:member h/fixture))
             (h/wait-visible setup-els/page)
             (is
              (true?
-              (.isVisible (h/wait-visible (setup-els/step credential-id)))))))
+              (.isVisible (h/wait-visible (setup-els/step credential-id)))))
+            (is
+             (false?
+              (h/visible? (setup-els/step admin-only-id))))))
 
     (step "A checked credential that fails is not saved, and the step can be skipped"
           (fn []

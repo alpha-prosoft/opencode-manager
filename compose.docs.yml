@@ -1,0 +1,41 @@
+# The documentation stack: the full local stack with a scripted LLM instead of a real one, so that the guides'
+# screenshots are the same on every run and cost nothing.
+#
+#   make docs-stack     (clean, seed the docs variant of the example tenants, build, start, wait)
+#
+# llm-script (images/llm-script) answers chat completions from images/llm-script/scenarios.json. It is on
+# opencode-net only: the manager's LLM gateway reaches it, sandboxes do not. The docs variant of the example
+# tenants (SEED_VARIANT=docs scripts/seed-local-repos.sh) points their LLM connection at it. The operator's secret
+# files come from deploy/docs-secrets instead of local/secrets: placeholders, so no real token is used or sent
+# anywhere and the stack looks the same on every machine.
+services:
+  llm-script:
+    image: opencode-platform/llm-script:dev
+    build: ./images/llm-script
+    read_only: true
+    environment:
+      LLM_SCRIPT_SCENARIOS: /script/scenarios.json
+      LLM_SCRIPT_TRACE_DIR: ${LLM_SCRIPT_TRACE_DIR:-}
+    volumes:
+      - ./images/llm-script:/script:ro
+    tmpfs:
+      - /tmp
+    networks: [opencode-net]
+    restart: unless-stopped
+
+  manager:
+    environment:
+      # No idle session is stopped while the guides are made: what a screenshot shows as running stays running.
+      MANAGER_REAP_INTERVAL_SECONDS: 10800
+    volumes:
+      - ./deploy/docs-secrets:/config/secrets:ro
+    depends_on:
+      llm-script:
+        condition: service_started
+
+# A fixed subnet, so that the caller's address in a webhook's recent calls is the same on every run.
+networks:
+  opencode-net:
+    ipam:
+      config:
+        - subnet: 172.30.250.0/24

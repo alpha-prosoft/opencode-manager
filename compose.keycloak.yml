@@ -1,0 +1,57 @@
+# Local single sign-on: Keycloak as the OpenID Connect provider of the manager.
+#
+#   docker compose -f compose.yml -f compose.keycloak.yml up -d
+#
+# Local only: Keycloak runs in dev mode over plain http with the realm
+# imported from deploy/keycloak (users and passwords in README, "Local
+# single sign-on"). The browser opens http://keycloak.localhost:8180, and the
+# manager reaches Keycloak at the very same URL: keycloak.localhost resolves to
+# the loopback address on the host, and inside opencode-net it is a network
+# alias of the keycloak container, which listens on the same port. So the
+# issuer of the tokens is the same for both and no discovery URL rewriting is
+# needed. Keycloak has its own port rather than a Traefik route, because the
+# manager would reach Traefik's port 80, not the 8080 the browser uses, and
+# the issuer would differ.
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.2
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_HTTP_PORT: ${KEYCLOAK_PORT:-8180}
+      KC_HOSTNAME: http://keycloak.localhost:${KEYCLOAK_PORT:-8180}
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "${KEYCLOAK_PORT:-8180}:${KEYCLOAK_PORT:-8180}"
+    volumes:
+      - ./deploy/keycloak:/opt/keycloak/data/import:ro
+    networks:
+      opencode-net:
+        aliases: [keycloak.localhost]
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9000 &&
+          printf 'GET /health/ready HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3 &&
+          grep -q '"UP"' <&3
+      interval: 5s
+      timeout: 5s
+      retries: 60
+    restart: unless-stopped
+
+  manager:
+    environment:
+      MANAGER_AUTH_MODE: oidc
+      # Endpoints, keys and the issuer come from the discovery document; MANAGER_OIDC_ISSUER may pin the issuer.
+      MANAGER_OIDC_DISCOVERY_URL: ${MANAGER_OIDC_DISCOVERY_URL:-http://keycloak.localhost:${KEYCLOAK_PORT:-8180}/realms/agent-platform/.well-known/openid-configuration}
+      MANAGER_OIDC_ISSUER: ${MANAGER_OIDC_ISSUER:-}
+      MANAGER_OIDC_CLIENT_ID: agent-platform
+      MANAGER_OIDC_CLIENT_SECRET: ${MANAGER_OIDC_CLIENT_SECRET:-agent-platform-local-secret}
+      MANAGER_OIDC_SCOPES: openid profile email
+      MANAGER_OIDC_CLAIMS_SOURCE: ${MANAGER_OIDC_CLAIMS_SOURCE:-id_token}
+      MANAGER_OIDC_REDIRECT_URL: http://localhost:${MANAGER_PUBLIC_PORT:-8080}/api/auth/oidc/callback
+    depends_on:
+      keycloak:
+        condition: service_healthy

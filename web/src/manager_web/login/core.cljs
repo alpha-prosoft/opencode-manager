@@ -6,4 +6,6 @@
   [_ctx]
   {:init ::events/init
    :panel views/main-panel
-   :url-params [:map [:next {:optional true} :string]]})
+   :url-params [:map
+                [:next {:optional true} :string]
+                [:complete {:optional true} :string]]})

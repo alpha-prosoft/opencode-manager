@@ -1,0 +1,12 @@
+{
+  "name": "Implement a change in Gerrit",
+  "description": "Describe a change; the agent implements it, the platform pushes it to Gerrit for review and follows its Jenkins build.",
+  "activity": "implement",
+  "agent": "engineer",
+  "harness": "sandboxed",
+  "project": "demo-service",
+  "options": {
+    "guidelines_file": "context/coding-guidelines.md",
+    "ci": { "timeout_minutes": 30, "on_failure": "build-failure" }
+  }
+}

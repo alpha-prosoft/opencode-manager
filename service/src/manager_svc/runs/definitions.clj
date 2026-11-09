@@ -51,9 +51,9 @@
 (defn workflow
   "A valid workflow spec {:id :name :description :activity :agent :harness
    :trigger :options :visibility}, or nil."
-  [system team-id workflow-id]
+  [system tenant team-id workflow-id]
   (let [definition
-        (platform/definition system team-id :workflows workflow-id)]
+        (platform/definition system tenant team-id :workflows workflow-id)]
     (when (valid? definition)
       (let [spec
             (kebab (:spec definition))]
@@ -66,34 +66,39 @@
                :options (or (:options spec) {})
                :trigger (trigger (:trigger spec)))))))
 
+(defn missing-workflow
+  "What a person or a failed run is told about a workflow that can't run."
+  [team-id workflow-id]
+  (str "Workflow " team-id "/" workflow-id " does not exist or is invalid"))
+
 (defn workflows
-  [system team-id]
-  (for [definition (platform/workflows system team-id)
+  [system tenant team-id]
+  (for [definition (platform/workflows system tenant team-id)
         :when (valid? definition)
-        :let [spec (workflow system team-id (:id definition))]
+        :let [spec (workflow system tenant team-id (:id definition))]
         :when spec]
     spec))
 
 (defn workflow-names
-  "{[team-id workflow-id] name} for the given teams."
-  [system team-ids]
+  "{[team-id workflow-id] name} for the given teams of tenant."
+  [system tenant team-ids]
   (into {}
         (for [team-id team-ids
-              definition (platform/workflows system team-id)]
+              definition (platform/workflows system tenant team-id)]
           [[team-id (:id definition)]
            (or (get-in definition [:spec :name]) (:id definition))])))
 
 (defn agent-spec
-  [system team-id agent-id]
+  [system tenant team-id agent-id]
   (let [definition
-        (platform/definition system team-id :agents agent-id)]
+        (platform/definition system tenant team-id :agents agent-id)]
     (when (valid? definition)
       (kebab (:spec definition)))))
 
 (defn harness-spec
-  [system team-id harness-id]
+  [system tenant team-id harness-id]
   (let [definition
-        (platform/definition system team-id :harnesses harness-id)]
+        (platform/definition system tenant team-id :harnesses harness-id)]
     (when (valid? definition)
       (let [spec
             (kebab (:spec definition))]
@@ -108,5 +113,5 @@
                 :policy (merge {:deny-commands [] :deny-paths []} (:policy spec))})))))
 
 (defn team
-  [system team-id]
-  (kebab (platform/team system team-id)))
+  [system tenant team-id]
+  (kebab (platform/team system tenant team-id)))

@@ -36,3 +36,11 @@
     (is
      (= "skill"
         (get files "opencode/skills/lint/SKILL.md")))))
+
+(deftest the-team-caps-the-idle-timeout
+  (is
+   (= [10 15 30 nil]
+      [(sandbox/idle-minutes {:idle-minutes 15} {:budget {:idle-minutes 10}})
+       (sandbox/idle-minutes {:idle-minutes 15} {:budget {:idle-minutes 30}})
+       (sandbox/idle-minutes {} {:budget {:idle-minutes 30}})
+       (sandbox/idle-minutes {} {})])))

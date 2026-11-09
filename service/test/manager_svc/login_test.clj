@@ -69,3 +69,33 @@
         (:status (call support/settings :post "/api/query"
                        :cookies {"oc_auth" "forged.token.value"}
                        :body "{\"query\":{\"query-id\":\"get-me\"}}"))))))
+
+(deftest a-login-the-claims-parser-refuses-says-why
+  (let [response
+        (call support/settings :post "/api/auth/login" :body "{\"username\":\"nobody\"}")]
+    (is
+     (= 403
+        (:status response)))
+    (is
+     (string/includes? (:body response) "belongs to no tenant"))
+    (is
+     (nil? (get-in response [:headers "Set-Cookie"])))))
+
+(deftest personas-are-the-dev-users-with-their-parsed-roles
+  (let [response
+        (call support/settings :get "/api/auth/personas")
+
+        personas
+        (into {} (map (juxt :username identity)) (server/read-json {:body (ByteArrayInputStream. (.getBytes (str (:body response)) StandardCharsets/UTF_8))}))]
+    (is
+     (= 200
+        (:status response)))
+    (is
+     (= {:username "alice" :tenant "acme" :roles ["Tenant admin" "Team admin · alpha"]}
+        (get personas "alice")))
+    (is
+     (= {:username "oscar" :tenant nil :roles ["Operator"]}
+        (get personas "oscar")))
+    (is
+     (= ["Login refused: your account belongs to no tenant"]
+        (:roles (get personas "nobody"))))))

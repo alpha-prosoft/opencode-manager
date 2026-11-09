@@ -2,6 +2,7 @@
   "A fake platform (team, workflows, agents, harnesses), fake sessions and an
    edd backend on the mock DAL for runs tests."
   (:require [clojure.string :as string]
+            [edd.core :as edd]
             [edd.security :as security]
             [manager-svc.auth :as auth]
             [manager-svc.client :as client]
@@ -11,20 +12,40 @@
             [manager-svc.credentials.api :as credentials]
             [manager-svc.observability.api :as observability]
             [manager-svc.platform.api :as platform]
+            [manager-svc.roles :as roles]
             [manager-svc.runs.core :as core]
             [manager-svc.sessions.api :as sessions]
             [manager-svc.test-support :as support]))
 
+(def tenant
+  "The tenant whose team alpha the fake platform knows."
+  "acme")
+
 (def team
   {:id "alpha"
+   :tenant tenant
    :name "Alpha"
-   :members ["alice" "bob"]
-   :admins ["carol"]
    :budget {}
    :notifications {}})
 
+(def personas
+  "What each test person's claims say: alice and bob are members of acme's
+   alpha, carol its admin, root acme's tenant admin, mallory of acme in no
+   team, gina a member of a team alpha of tenant globex."
+  {"alice" {:teams {"alpha" :member}}
+   "bob" {:teams {"alpha" :member}}
+   "carol" {:teams {"alpha" :admin}}
+   "root" {:tenant-admin true}
+   "mallory" {}
+   "gina" {:tenant "globex" :teams {"alpha" :member}}})
+
+(defn person
+  [username]
+  (get personas username {}))
+
 (def workflows
   {"review-prs" {:name "Review PRs"
+                 :project "app"
                  :activity "review"
                  :agent "reviewer"
                  :harness "default"
@@ -49,6 +70,7 @@
               :harness "default"
               :trigger {:type "schedule" :every-minutes 60 :inputs {:brief "Weekly architecture review"}}}
    "workspace" {:name "Workspace"
+                :project "app"
                 :activity "session"
                 :agent "coder"
                 :harness "default"}})
@@ -94,9 +116,10 @@
                       (str (name k) ": " message)))})))
 
 (defn- definition
-  [kind id]
-  (when-let [spec (get (case kind :workflows workflows :agents agents :harnesses harnesses) id)]
-    {:kind kind :id id :spec spec :valid true :errors []}))
+  [tenant-name _team-id kind id]
+  (when (= tenant tenant-name)
+    (when-let [spec (get (case kind :workflows workflows :agents agents :harnesses harnesses) id)]
+      {:kind kind :id id :spec spec :valid true :errors []})))
 
 (defn sessions-store
   []
@@ -113,41 +136,34 @@
 (defn fake-facades
   "Facade replacements; sessions live in the given atom {session-id session}."
   [store]
-  {#'platform/role (fn [_ user team-id]
-                     (when (= "alpha" team-id)
-                       (cond
-                         (some #{user} (:admins team)) :admin
-                         (some #{user} (:members team)) :member)))
-   #'platform/teams-of (fn [_ user]
-                         (if (some #{user} (concat (:members team) (:admins team))) #{"alpha"} #{}))
-   #'platform/teams (fn [_] [team])
-   #'platform/team (fn [_ team-id] (when (= "alpha" team-id) team))
-   #'platform/platform-admin? (fn [_ user] (= "root" user))
-   #'platform/require-admin! (fn [ctx]
-                               (when-not (or (auth/platform? ctx) (= "root" (auth/user-id ctx)))
-                                 (throw (ex-info "Platform administrators only" {:status 403}))))
-   #'platform/definition (fn [_ _team kind id] (definition kind id))
-   #'platform/workflows (fn [_ _team] (keep #(definition :workflows %) (keys workflows)))
-   #'platform/read-team-file (fn [_ _team relative] (str "contents of " relative))
-   #'platform/read-skills (fn [_ _team _skills] {})
-   #'platform/secret-host-allowed? (fn [_ _secret _url] true)
-   #'platform/mcp-server (fn [_ server-id]
+  {#'platform/teams-of (fn [_ caller]
+                         (set (filter #(roles/member? caller tenant %) ["alpha"])))
+   #'platform/tenants (fn [_] [{:name tenant} {:name "globex"}])
+   #'platform/teams (fn [_ tenant-name] (if (= tenant tenant-name) [team] []))
+   #'platform/team (fn [_ tenant-name team-id] (when (and (= tenant tenant-name) (= "alpha" team-id)) team))
+   #'platform/definition (fn [_ tenant-name team-id kind id] (definition tenant-name team-id kind id))
+   #'platform/workflows (fn [_ tenant-name team-id]
+                          (keep #(definition tenant-name team-id :workflows %) (keys workflows)))
+   #'platform/read-team-file (fn [_ _tenant _team relative] (str "contents of " relative))
+   #'platform/read-skills (fn [_ _tenant _team _skills] {})
+   #'platform/secret-host-allowed? (fn [_ _tenant _secret _url] true)
+   #'platform/mcp-server (fn [_ _tenant server-id]
                            (when (= "jenkins" server-id) {:id "jenkins" :name "Jenkins" :url "http://jenkins/mcp"}))
    #'platform/activity (fn [_ activity-id] (dissoc (get activities activity-id) :inputs))
    #'platform/validate-inputs (fn [_ activity-id inputs _options] (validate-inputs activity-id inputs))
-   #'credentials/secret (fn [_ secret-name] (str "secret-" secret-name))
-   #'credentials/resolve-credential (fn [_ credential-id _user]
-                                      {:value {:secret (str "token-" credential-id)} :source :platform})
+   #'credentials/secret (fn [_ _tenant secret-name] (str "secret-" secret-name))
+   #'credentials/resolve-credential (fn [_ _scope credential-id]
+                                      {:value {:secret (str "token-" credential-id)} :source :tenant})
    #'observability/usage-for-run (fn [_ _run-id] {:calls 3 :prompt-tokens 10 :completion-tokens 5
                                                   :cached-tokens 0 :errors 0 :avg-latency-ms 12})
    #'client/query (fn [_ q] ((:query @edd-backend) q))
    #'client/command (fn [_ & commands] (run-commands commands))
    #'client/command-no-settle (fn [_ & commands] (run-commands commands))
    #'sessions/get-session (fn [_ session-id] (get @store session-id))
-   #'sessions/can-view? (fn [_ session user] (or (= user (:sub session)) (not= :private (:visibility session))))
-   #'sessions/describe-session (fn [_ session user]
+   #'sessions/can-view? (fn [_ session caller] (or (= (:id caller) (:sub session)) (not= :private (:visibility session))))
+   #'sessions/describe-session (fn [_ session caller]
                                  (assoc (select-keys session [:id :sub :visibility])
-                                        :is-owner (= user (:sub session))))
+                                        :is-owner (= (:id caller) (:sub session))))
    #'sessions/create-session! (fn [_ opts]
                                 (let [session (assoc (dissoc opts :sandbox :identity)
                                                      :sub (get-in opts [:identity :sub])
@@ -163,9 +179,12 @@
    #'sessions/hand-over! (fn [_ session-id] (swap! store assoc-in [session-id :handed-over] true))
    #'sessions/start-session! (fn [_ session-id] (swap! store assoc-in [session-id :started] true))
    #'sessions/ready? (fn [_ session-id] (boolean (get-in @store [session-id :ready])))
-   #'sessions/running-session-ids (fn [_] (keep (fn [[id s]] (when-not (:stopped s) id)) @store))
-   #'sessions/running-count (fn [_ team-id]
-                              (count (filter (fn [s] (and (= team-id (:team-id s)) (not (:stopped s)))) (vals @store))))
+   #'sessions/running-session-ids (fn [& _] (keep (fn [[id s]] (when-not (:stopped s) id)) @store))
+   #'sessions/running-count (fn [_ tenant-name team-id]
+                              (count (filter (fn [s] (and (= tenant-name (:tenant s))
+                                                          (= team-id (:team-id s))
+                                                          (not (:stopped s))))
+                                             (vals @store))))
    #'sessions/stop-session! (fn [_ session-id] (swap! store assoc-in [session-id :stopped] true))
    #'sessions/label! (fn [_ session-id k v] (swap! store assoc-in [session-id :labels k] v))
    #'sessions/session-base-url (fn [_ session-id] (str "http://session-" session-id ":4096"))
@@ -187,6 +206,30 @@
     (throw (ex-info message {:status status :message message})))
   response)
 
+(defn- with-sessions-count
+  "The sessions domain's :count-running-sessions (the dependency of
+   :start-run) over the faked sessions facade."
+  [ctx]
+  (edd/reg-query ctx :count-running-sessions
+                 (fn [query-ctx {:keys [tenant team-id]}]
+                   {:count (sessions/running-count (:manager/system query-ctx) tenant team-id)})
+                 :auth {:role [:non-interactive]}))
+
+(def ^:dynamic *missing-credentials*
+  "{[username team-id] [{:id :name}]}: required credentials people lack."
+  {})
+
+(defn- with-required-credentials
+  "The credentials domain's :get-missing-required-credentials (a dependency
+   of the commands that start work in a team) over *missing-credentials*."
+  [ctx]
+  (edd/reg-query ctx :get-missing-required-credentials
+                 (fn [_ {:keys [team-id user]}]
+                   {:team-id team-id
+                    :team-name (:name team)
+                    :missing (get *missing-credentials* [user team-id] [])})
+                 :auth {:role [:non-interactive]}))
+
 (defn env
   "{:ctx :system} on the mock DAL. Inside with-fakes, client/query and
    client/command run as the platform on that ctx; the system's :test/edd
@@ -205,16 +248,21 @@
          (merge {:settings support/settings :test/edd backend} extra)
 
          ctx
-         (security/register (core/register (support/ctx system)))]
+         (security/register (with-required-credentials (with-sessions-count (core/register (support/ctx system)))))]
      (reset! ctx-ref ctx)
      (reset! edd-backend backend)
      {:ctx ctx
       :system (:manager/system ctx)})))
 
+(defn as
+  "ctx as the test person username (see personas)."
+  [ctx username]
+  (support/as-user ctx username (person username)))
+
 (defn command!
   [ctx user cmd]
-  (raise-on-error (support/apply! (support/as-user ctx user) cmd)))
+  (raise-on-error (support/apply! (as ctx user) cmd)))
 
 (defn query
   [ctx user q]
-  (mock/query (support/as-user ctx user) q))
+  (mock/query (as ctx user) q))

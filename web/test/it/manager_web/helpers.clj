@@ -6,11 +6,14 @@
             [manager-web.el :as el]
             [manager-web.login.elements :as login-els]
             [manager-web.run.elements :as run-els]
+            [manager-web.session.elements :as session-els]
             [manager-web.setup.elements :as setup-els]
             [manager-web.shell.elements :as shell-els]
             [testing.pw :refer [*current-page*]])
   (:import [com.microsoft.playwright Download Locator Locator$FilterOptions Locator$WaitForOptions Page]
-           [com.microsoft.playwright.options WaitForSelectorState]
+           [java.net URI]
+           [java.net.http HttpClient HttpRequest HttpResponse$BodyHandlers]
+           [com.microsoft.playwright.options RequestOptions WaitForSelectorState]
            [java.nio.file Files]))
 
 (def base-url
@@ -19,29 +22,56 @@
       "http://localhost:18000"))
 
 (def fixture
-  "What the tests expect of the onboarding repository the server runs with
-   (MANAGER_ONBOARDING_URL, local/sources/onboarding as published by
-   scripts/seed-local-repos.sh), in test login mode: team admin and platform
-   admin alice, member bob of team demo with the valid workflows
-   bitbucket-workspace, requirements (analysis) and workspace (session), the
-   personal credential JIRA_TOKEN (kind basic, provided by each user, no test
-   request), BITBUCKET_TOKEN (checked against its service, platform value from
-   a secret file), the LLM connection copilot, the MCP server bitbucket, and
-   carol, who is not in demo and whose devops harness exporter needs a
-   credential nobody added."
-  {:platform-admin "alice"
+  "What the tests expect of the tenants the server runs with (MANAGER_TENANTS,
+   the example onboarding repositories published by scripts/seed-local-repos.sh)
+   and of its dev users file (MANAGER_DEV_USERS_FILE) in test login mode:
+   tenant acme with tenant admin and demo team admin alice, member bob of team
+   demo with the valid workflows bitbucket-workspace, requirements (analysis)
+   and workspace (session), the personal credential JIRA_TOKEN (kind basic,
+   provided by each user, no test request), BITBUCKET_TOKEN (checked against
+   its service, tenant value from a secret file), NEXUS_TOKEN (provided only by
+   tenant and team admins), the LLM connection copilot,
+   the MCP server bitbucket; tenant globex with tenant admin gina; operator
+   oscar; erin, who is not in demo and whose payments harness exporter
+   needs a credential nobody added; carol, in acme but in no team; hank, a
+   member of globex. People in two teams: bob (member of demo and payments), dave
+   (admin of payments, member of ops) and ivy of globex (member of research, admin
+   of lab); henry is only in ops. acme requires PAGERDUTY_TOKEN (tenant.json,
+   teams ops) and ops requires JIRA_TOKEN (its team.json) of each person in ops,
+   so dave and henry must add their own. An operator registers tenants from the onboarding
+   repository MANAGER_IT_TENANT_ONBOARDING (default the compose path of
+   globex's)."
+  {:tenant-admin "alice"
+   :tenant "acme"
    :member "bob"
-   :outsider "carol"
+   :other-tenant "globex"
+   :other-tenant-admin "gina"
+   :operator "oscar"
+   :outsider "erin"
+   :teamless "carol"
+   :other-tenant-member "hank"
+   :two-teams-member "bob"
+   :two-teams-admin "dave"
+   :other-team-member "henry"
+   :other-tenant-two-teams "ivy"
+   :other-team "research"
+   :register-onboarding (or (System/getenv "MANAGER_IT_TENANT_ONBOARDING") "file:///repos/globex-onboarding")
    :team "demo"
    :workflow "bitbucket-workspace"
    :analysis-workflow "requirements"
    :session-workflow "workspace"
    :personal-credential "JIRA_TOKEN"
    :checked-credential "BITBUCKET_TOKEN"
+   :admin-only-credential "NEXUS_TOKEN"
+   :required-member "henry"
+   :required-team "ops"
+   :required-workflow "workspace"
+   :tenant-required-credential "PAGERDUTY_TOKEN"
+   :team-required-credential "JIRA_TOKEN"
    :connection "copilot"
    :mcp-server "bitbucket"
    :ready-harness ["demo" "bitbucket-tools"]
-   :unready-harness ["devops" "exporter"]
+   :unready-harness ["payments" "exporter"]
    :activity "implement"})
 
 (def run-timeout-ms
@@ -200,39 +230,125 @@
   [path]
   (.navigate ^Page *current-page* (str base-url path)))
 
-(defn login
-  "Logs in; people with credentials to connect land on the setup page first
-   and leave it with \"Do this later\"."
+(def auth-mode
+  "The server's authentication mode from /api/auth/config: \"login\",
+   \"oidc\" or \"jwt\", nil when it doesn't answer."
+  (delay
+    (let [response
+          (.send (HttpClient/newHttpClient)
+                 (.build (HttpRequest/newBuilder (URI/create (str base-url "/api/auth/config"))))
+                 (HttpResponse$BodyHandlers/ofString))]
+      (when (= 200 (.statusCode response))
+        (second (re-find #"\"mode\"\s*:\s*\"([a-z]+)\"" (.body response)))))))
+
+(defn oidc-mode?
+  []
+  (= "oidc" @auth-mode))
+
+(def ^:private keycloak-inputs
+  "Keycloak's login page is a third-party page without el-ids; its login
+   theme keeps these ids stable (see oidc_it)."
+  {:username "#username"
+   :password "#password"
+   :submit "#kc-login"})
+
+(defn keycloak-locator
+  ^Locator [input]
+  (.locator ^Page *current-page* ^String (get keycloak-inputs input)))
+
+(defn sign-in-at-keycloak
+  "Signs in through Keycloak; the local realm's password is the username."
   [username]
-  (goto "/login")
-  (fill login-els/username username)
-  (.press (locator login-els/username) "Escape")
-  (click login-els/submit)
-  (when (= setup-els/page (wait-any shell-els/user-name setup-els/page))
-    (click setup-els/later))
-  (wait-visible shell-els/user-name))
+  (click login-els/sign-in)
+  (.waitFor (keycloak-locator :username) (doto (Locator$WaitForOptions.) (.setTimeout 30000.0)))
+  (.fill (keycloak-locator :username) username)
+  (.fill (keycloak-locator :password) username)
+  (.click (keycloak-locator :submit)))
 
 (defn submit-login
   "Logs in as username without leaving the setup page."
   [username]
   (goto "/login")
-  (fill login-els/username username)
-  (.press (locator login-els/username) "Escape")
-  (click login-els/submit))
+  (if (oidc-mode?)
+    (sign-in-at-keycloak username)
+    (do (fill login-els/username username)
+        (.press (locator login-els/username) "Escape")
+        (click login-els/submit))))
+
+(defn enabled?
+  [element]
+  (and (visible? element) (.isEnabled (locator element))))
+
+(defn- step-saved?
+  "The visible credential form is a fresh one (the next step's), or setup is done."
+  []
+  (or (not (visible? setup-els/page))
+      (enabled? setup-els/later)
+      (and (visible? component-els/credential-secret)
+           (= "" (.inputValue (locator component-els/credential-secret))))))
+
+(defn add-required-in-setup
+  "Saves a placeholder value for each required step setup won't let the
+   person leave for later."
+  []
+  (loop [steps 0]
+    (when (and (< steps 10) (visible? setup-els/later) (not (enabled? setup-els/later)))
+      (when (visible? component-els/credential-username)
+        (fill component-els/credential-username "it-user@example.com"))
+      (fill component-els/credential-secret "it-required-value")
+      (click component-els/credential-submit)
+      (wait-until "the step to be saved" default-timeout-ms 200 step-saved?)
+      (recur (inc steps)))))
+
+(def ^:private announce-seed
+  "Prints the seed of kaocha's random test order once, to repeat a pass."
+  (delay
+    (when-let [seed
+               (some-> (resolve 'kaocha.testable/*test-plan*) deref :kaocha.plugin.randomize/seed)]
+      (println (str "Test order: kaocha seed " seed " (repeat it with --seed " seed ")")))))
+
+(defn login
+  "Logs in (with the persona form, or through Keycloak in oidc mode); people
+   with credentials to connect land on the setup page first, add the ones
+   their teams require and leave it with \"Do this later\"."
+  [username]
+  @announce-seed
+  (submit-login username)
+  (when (= setup-els/page (wait-any shell-els/user-name setup-els/page))
+    (when (= setup-els/later (wait-any setup-els/later setup-els/continue))
+      (add-required-in-setup))
+    (let [next-step
+          (wait-until "the app or a way out of setup" default-timeout-ms 100
+                      #(some (fn [element] (when (enabled? element) element))
+                             [shell-els/user-name setup-els/later setup-els/continue]))]
+      (when (not= shell-els/user-name next-step)
+        (click next-step))))
+  (wait-visible shell-els/user-name))
 
 (defn logout
   []
   (click shell-els/logout)
-  (wait-visible login-els/page))
+  (wait-visible login-els/page 30000))
+
+(defn fork!
+  "Forks the open session, from the banner when it offers the fork, else from
+   the actions, and confirms; waits for the copy's page."
+  [session-id]
+  (let [before
+        (current-path)]
+    (click (wait-any session-els/fork-to-continue (component-els/session-action :fork session-id)))
+    (wait-visible component-els/confirm-dialog)
+    (click component-els/confirm-accept)
+    (wait-path-change before)))
 
 (defn start-workflow
   "Starts the workflow from its start button on the current page with inputs
    ({field value}) and returns the id of the run page it opens."
   [team-id workflow-id inputs]
+  (click (component-els/workflow-start team-id workflow-id))
+  (wait-visible component-els/run-dialog)
   (let [before
         (current-path)]
-    (click (component-els/workflow-start team-id workflow-id))
-    (wait-visible component-els/run-dialog)
     (doseq [[field value] inputs]
       (fill (component-els/schema-field (name field)) value))
     (click component-els/run-dialog-submit)
@@ -245,3 +361,59 @@
                    true))
     (wait-visible run-els/page)
     (path-id)))
+
+(defn search
+  "The query string of the page's URL."
+  []
+  (str (.evaluate ^Page *current-page* "() => location.search")))
+
+(defn become
+  "Logs in as username, whoever is logged in and wherever the page is."
+  [username]
+  (goto "/")
+  (let [where
+        (wait-any shell-els/logout setup-els/logout login-els/page)]
+    (when (not= login-els/page where)
+      (click where)
+      (wait-visible login-els/page 30000)))
+  (login username))
+
+(defn command!
+  "Sends an edd command as the person logged in in this browser; the HTTP
+   status. attrs is the JSON of its attributes."
+  ([cmd-id id]
+   (command! cmd-id id nil))
+  ([cmd-id id attrs]
+   (let [fields
+         (cond-> [(str "\"cmd-id\":\":" (name cmd-id) "\"")]
+           id (conj (str "\"id\":\"#" id "\""))
+           attrs (conj (str "\"attrs\":" attrs)))
+
+         body
+         (str "{\"request-id\":\"#" (random-uuid) "\",\"interaction-id\":\"#" (random-uuid)
+              "\",\"commands\":[{" (string/join "," fields) "}]}")]
+     (.status (.post (.request ^Page *current-page*)
+                     (str base-url "/api/command")
+                     (-> (RequestOptions/create)
+                         (.setHeader "Content-Type" "application/json")
+                         (.setHeader "X-Requested-With" "manager-web")
+                         (.setData ^String body)))))))
+
+(defn clean-up!
+  "Sends commands ([cmd-id id] or [cmd-id id attrs-json], those without what
+   they name left out) as owner, whatever the test left behind; for a
+   finally, so it never throws."
+  [owner commands]
+  (when-let [due
+             (seq (filter (fn [[_ id attrs]] (or id attrs)) commands))]
+    (try
+      (become owner)
+      (doseq [[cmd-id id attrs] due]
+        (command! cmd-id id attrs))
+      (catch Exception e
+        (println "Could not clean up after" owner (ex-message e))))))
+
+(defn delete-sessions!
+  "Deletes the sessions as their owner; for a finally."
+  [owner session-ids]
+  (clean-up! owner (mapv (fn [id] [:delete-session id]) session-ids)))

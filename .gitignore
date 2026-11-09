@@ -8,3 +8,18 @@ auth.json
 
 # Environment-specific config (private review baselines, local .env)
 /local/
+
+# Build output and caches
+.cpcache/
+target/
+node_modules/
+.shadow-cljs/
+.nrepl-port
+.lsp/.cache/
+.clj-kondo/.cache/
+/web/www/js/
+/web/www/fonts/
+
+# MkDocs
+/site/
+/.venv-docs/

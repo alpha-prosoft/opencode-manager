@@ -4,7 +4,8 @@
      [::confirm/ask {:title .. :body .. :confirm \"Delete session\" :run run-spec}]
 
    where run-spec is a manager-web.data/::run spec. The dialog stays open,
-   disabled, until the command finishes."
+   disabled, until the command finishes; the spec's own busy flag says so,
+   to the dialog and to the page alike."
   (:require ["@mui/material/Button" :default Button]
             ["@mui/material/Dialog" :default Dialog]
             ["@mui/material/DialogActions" :default DialogActions]
@@ -30,7 +31,7 @@
  ::accept
  (fn [{:keys [db]} _]
    (when-let [spec (get-in db [::request :run])]
-     {:fx [[:dispatch [::data/run (assoc spec :busy ::busy :finally [::close])]]]})))
+     {:fx [[:dispatch [::data/run (assoc spec :finally [::close])]]]})))
 
 (rf/reg-sub ::request (fn [db _] (::request db)))
 
@@ -40,7 +41,7 @@
         @(rf/subscribe [::request])
 
         busy?
-        @(rf/subscribe [::data/busy? ::busy])
+        @(rf/subscribe [::data/busy? (data/busy-key (:run request))])
 
         close
         #(when-not busy? (rf/dispatch [::close]))]
@@ -51,6 +52,6 @@
       [:> DialogContentText (:body request)]]
      [:> DialogActions
       [:> Button {:on-click close :disabled busy? :data-testid (el/id els/confirm-keep)} "Keep"]
-      [:> Button {:on-click #(rf/dispatch [::accept]) :color "error" :variant "contained" :loading busy?
+      [:> Button {:on-click #(rf/dispatch [::accept]) :color (or (:color request) "error") :variant "contained" :loading busy?
                   :data-testid (el/id els/confirm-accept)}
        (:confirm request)]]]))

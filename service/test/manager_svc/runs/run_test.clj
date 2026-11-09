@@ -32,6 +32,19 @@
     (catch Exception e
       (or (get-in (ex-data e) [:error]) (ex-message e)))))
 
+(defn- refusal
+  "{:status :message} a call fails with, or nil."
+  [f]
+  (try
+    (f)
+    nil
+    (catch clojure.lang.ExceptionInfo e
+      (select-keys (ex-data e) [:status :message]))))
+
+(defn- run-of
+  [system id]
+  (:run ((get-in system [:test/edd :query]) {:query-id :get-run-source :run-id id})))
+
 (deftest members-start-runs-with-validated-inputs
   (mock/with-mock-dal
     (f/with-fakes [_]
@@ -67,10 +80,18 @@
     (f/with-fakes [_]
       (let [{:keys [ctx]}
             (f/env)]
-        (testing "for people outside the team, without revealing it exists"
+        (testing "for people of the tenant outside the team, with the reason"
           (is
-           (= "Team not found"
-              (failure #(start! ctx "mallory" "implement" {:task "Add a health endpoint"})))))
+           (= {:status 403
+               :message "Only members of alpha can work in it. Ask an admin of alpha or your tenant admin to add you."}
+              (refusal #(start! ctx "mallory" "implement" {:task "Add a health endpoint"})))))
+        (testing "for a team the tenant doesn't have"
+          (is
+           (= {:status 404 :message "Team not found"}
+              (refusal #(f/command! ctx "mallory" {:cmd-id :start-run
+                                                   :id run-id
+                                                   :attrs {:team-id "nope" :workflow-id "implement"
+                                                           :inputs {:task "Add a health endpoint"}}})))))
         (testing "for inputs the activity rejects"
           (is
            (= "task: should be at least 10 characters"
@@ -198,7 +219,7 @@
             #uuid "33333333-3333-3333-3333-333333333333"]
         (start! ctx "alice" "implement" {:task "Add a health endpoint"})
         (platform! system :fail-run {:message "boom"})
-        (f/command! ctx "bob" {:cmd-id :retry-run :id retry-id :attrs {:source-id (str run-id)}})
+        (f/command! ctx "bob" {:cmd-id :retry-run :id retry-id :attrs {:source-id run-id}})
         (let [retried
               (:run ((get-in system [:test/edd :query]) {:query-id :get-run-source :run-id retry-id}))]
           (is
@@ -207,6 +228,72 @@
           (is
            (= {:type "manual" :by "bob" :retry-of run-id}
               (:trigger retried))))))))
+
+(deftest only-finished-runs-are-run-again
+  (mock/with-mock-dal
+    (f/with-fakes [_]
+      (let [{:keys [ctx system]}
+            (f/env)
+
+            retry-id
+            #uuid "33333333-3333-3333-3333-333333333333"
+
+            retry
+            (fn []
+              (refusal #(f/command! ctx "bob" {:cmd-id :retry-run :id retry-id :attrs {:source-id run-id}})))]
+        (start! ctx "alice" "implement" {:task "Add a health endpoint"})
+        (is
+         (= {:status 409 :message "Run is still active; cancel it before running it again"}
+            (retry)))
+        (is
+         (nil? (run-of system retry-id)))
+        (f/command! ctx "alice" {:cmd-id :cancel-run :id run-id})
+        (is
+         (nil? (retry)))
+        (is
+         (= :queued
+            (:status (run-of system retry-id))))))))
+
+(deftest a-retry-waits-for-a-free-session-like-a-start
+  (mock/with-mock-dal
+    (f/with-fakes [store]
+      (let [{:keys [ctx system]}
+            (f/env)
+
+            team
+            (assoc f/team :budget {:max-running-sessions 1})
+
+            running
+            #uuid "22222222-2222-2222-2222-222222222222"
+
+            retry-id
+            #uuid "33333333-3333-3333-3333-333333333333"
+
+            retry
+            (fn []
+              (refusal #(f/command! ctx "bob" {:cmd-id :retry-run :id retry-id :attrs {:source-id run-id}})))]
+        (start! ctx "alice" "analyse" {:brief "Look at the architecture"})
+        (platform! system :fail-run {:message "boom"})
+        (with-redefs [platform/team (fn [_ _ _] team)]
+          (swap! store assoc running {:tenant "acme" :team-id "alpha"})
+          (is
+           (= {:status 422 :message "Team alpha already has 1 running sessions (limit 1). Stop one and retry."}
+              (retry)))
+          (swap! store assoc-in [running :stopped] true)
+          (is
+           (nil? (retry)))
+          (is
+           (= :queued
+              (:status (run-of system retry-id)))))))))
+
+(deftest the-platforms-own-starts-read-no-session-count
+  (is
+   (nil? (run/running-sessions-dep {:meta {:user {:id "platform" :role :non-interactive}}}
+                                   {:attrs {:tenant "acme" :team-id "alpha"}})))
+  (is
+   (= {:query-id :count-running-sessions :tenant "acme" :team-id "alpha"}
+      (run/running-sessions-dep {:meta {:user {:id "alice" :tenant "acme"}}}
+                                {:attrs {:team-id "alpha"}}))))
 
 (deftest list-and-get-runs
   (mock/with-mock-dal
@@ -228,15 +315,37 @@
                :status :finalizing
                :workflow-name "Review PRs"
                :has-result true
-               :outcome {:pull-request {:id 4 :url "u"} :verdict "APPROVE"}}
-              (select-keys listed [:id :status :workflow-name :has-result :outcome])))
+               :outcome {:pull-request {:id 4 :url "u"} :verdict "APPROVE"}
+               :scm-provider :github}
+              (select-keys listed [:id :status :workflow-name :has-result :outcome :scm-provider])))
           (is
-           (not (contains? listed :result))))
+           (not (contains? listed :result)))
+          (is
+           (= "app"
+              (:project listed))))
+        (testing "a project's runs: those of the workflows naming it"
+          (is
+           (= [run-id]
+              (mapv :id (f/query ctx "bob" {:query-id :list-runs :team-id "alpha" :project-id "app"}))))
+          (is
+           (= []
+              (f/query ctx "bob" {:query-id :list-runs :team-id "alpha" :project-id "other"})))
+          (is
+           (= []
+              (f/query ctx "gina" {:query-id :list-runs :team-id "alpha" :project-id "app"}))))
+        (testing "a project id alone names no project: ids are only unique within a team"
+          (is
+           (= [run-id]
+              (mapv :id (f/query ctx "bob" {:query-id :list-runs :project-id "other"})))))
+        (testing "an id that is no UUID is refused"
+          (is
+           (= {:run-id ["should be a uuid"]}
+              (failure #(f/query ctx "bob" {:query-id :get-run :run-id "nope"})))))
         (is
          (= []
             (f/query ctx "mallory" {:query-id :list-runs})))
         (let [detail
-              (f/query ctx "bob" {:query-id :get-run :run-id (str run-id)})]
+              (f/query ctx "bob" {:query-id :get-run :run-id run-id})]
           (is
            (= {:id session-id :sub "alice" :visibility :team :is-owner false}
               (:session detail)))
@@ -245,10 +354,13 @@
               (get-in detail [:usage :calls])))
           (is
            (= "APPROVE"
-              (get-in detail [:result :review :verdict]))))
+              (get-in detail [:result :review :verdict])))
+          (is
+           (= "app"
+              (:project detail))))
         (is
-         (= "Run not found"
-            (failure #(f/query ctx "mallory" {:query-id :get-run :run-id run-id}))))))))
+         (re-find #"Only members of"
+                  (failure #(f/query ctx "mallory" {:query-id :get-run :run-id run-id}))))))))
 
 (deftest run-counts-for-the-admin-console
   (mock/with-mock-dal
@@ -259,13 +371,18 @@
         (f/command! ctx "alice" {:cmd-id :cancel-run :id run-id})
         (is
          (= {:cancelled 1}
-            (api/run-counts-by-status system "2000-01-01T00:00:00Z")))
+            (api/run-counts-by-status system "acme" "2000-01-01T00:00:00Z")))
         (is
          (= {"alice" 1}
-            (api/run-counts-by-user system "2000-01-01T00:00:00Z")))
+            (api/run-counts-by-user system "acme" "2000-01-01T00:00:00Z")))
         (is
          (= {}
-            (api/run-counts-by-status system "2999-01-01T00:00:00Z")))))))
+            (api/run-counts-by-status system "acme" "2999-01-01T00:00:00Z")))
+        (testing "another tenant counts none of them"
+          (is
+           (= [{} {}]
+              [(api/run-counts-by-status system "globex" "2000-01-01T00:00:00Z")
+               (api/run-counts-by-user system "globex" "2000-01-01T00:00:00Z")])))))))
 
 (deftest runs-are-listed-from-team-and-person-directories
   (mock/with-mock-dal
@@ -282,7 +399,7 @@
         (start! ctx "alice" "review-prs" {:pull-request 4})
         ((get-in system [:test/edd :command]) {:cmd-id :start-run
                                                :id beta-run
-                                               :attrs {:team-id "beta" :workflow-id "analyse"
+                                               :attrs {:tenant "acme" :team-id "beta" :workflow-id "analyse"
                                                        :inputs {:brief "Weekly architecture review"}}})
         (is
          (= #{[run-id :queued]}
@@ -303,10 +420,10 @@
         (testing "the person's directory holds the runs they started"
           (is
            (= [run-id]
-              (map :id (directory/rows ctx "user:alice" :runs))))
+              (map :id (directory/rows ctx (directory/user "alice") :runs))))
           (is
            (= []
-              (directory/rows ctx "user:platform" :runs))))))))
+              (directory/rows ctx (directory/user "platform") :runs))))))))
 
 (deftest the-platform-marks-runs-it-starts-on-its-own
   (testing "a run of its own works with team credentials"
@@ -334,7 +451,7 @@
     (f/with-fakes [_]
       (let [{:keys [system]}
             (f/env)]
-        (platform! system :start-run {:team-id "alpha" :workflow-id "analyse" :inputs {:brief "Look at the architecture"}
+        (platform! system :start-run {:tenant "acme" :team-id "alpha" :workflow-id "analyse" :inputs {:brief "Look at the architecture"}
                                       :created-by "platform:schedule"})
         (is
          (= [true "platform:schedule"]
@@ -357,8 +474,8 @@
 
             team
             (assoc f/team :budget {:max-running-sessions 1})]
-        (with-redefs [platform/team (fn [_ _] team)]
-          (swap! store assoc #uuid "22222222-2222-2222-2222-222222222222" {:team-id "alpha"})
+        (with-redefs [platform/team (fn [_ _ _] team)]
+          (swap! store assoc #uuid "22222222-2222-2222-2222-222222222222" {:tenant "acme" :team-id "alpha"})
           (is
            (= "Team alpha already has 1 running sessions (limit 1). Stop one and retry."
               (failure #(start! ctx "alice" "analyse" {:brief "Look at the architecture"}))))
@@ -367,3 +484,81 @@
           (is
            (= :queued
               (:status (state system)))))))))
+
+(deftest a-person-chooses-who-sees-the-session-of-their-run
+  (mock/with-mock-dal
+    (f/with-fakes [_]
+      (let [{:keys [ctx system]}
+            (f/env)]
+        (f/command! ctx "alice" {:cmd-id :start-run
+                                 :id run-id
+                                 :attrs {:team-id "alpha" :workflow-id "implement" :inputs {:task "Add a health endpoint"}
+                                         :visibility "private"}})
+        (is
+         (= :private
+            (:session-visibility (state system))))
+        (testing "a retry keeps the choice"
+          (platform! system :fail-run {:message "boom"})
+          (let [retry-id (random-uuid)]
+            (f/command! ctx "bob" {:cmd-id :retry-run :id retry-id :attrs {:source-id run-id}})
+            (is
+             (= :private
+                (:session-visibility (:run ((get-in system [:test/edd :query])
+                                            {:query-id :get-run-source :run-id retry-id})))))))
+        (testing "without a choice the workflow decides"
+          (let [other-id (random-uuid)]
+            (f/command! ctx "alice" {:cmd-id :start-run
+                                     :id other-id
+                                     :attrs {:team-id "alpha" :workflow-id "implement" :inputs {:task "Add a health endpoint"}}})
+            (is
+             (nil? (:session-visibility (:run ((get-in system [:test/edd :query])
+                                               {:query-id :get-run-source :run-id other-id})))))))))))
+
+(deftest work-in-a-team-needs-the-credentials-it-requires-of-the-person
+  (mock/with-mock-dal
+    (f/with-fakes [_]
+      (let [{:keys [ctx system]}
+            (f/env)
+
+            refused
+            "Team Alpha requires your own Jira and PagerDuty credentials. Add them under Accounts, then start again; team and tenant values don't count."
+
+            missing
+            [{:id "JIRA_TOKEN" :name "Jira"} {:id "PAGERDUTY_TOKEN" :name "PagerDuty"}]]
+        (binding [f/*missing-credentials* {["alice" "alpha"] missing
+                                           ["carol" "alpha"] missing}]
+          (testing "a person starting a run"
+            (is
+             (= refused
+                (failure #(start! ctx "alice" "implement" {:task "Add a health endpoint"}))))
+            (is
+             (nil? (state system))))
+          (testing "a team admin opening a team session"
+            (is
+             (= refused
+                (failure #(f/command! ctx "carol" {:cmd-id :start-team-session
+                                                   :id run-id
+                                                   :attrs {:team-id "alpha" :workflow-id "workspace" :inputs {}}})))))
+          (testing "someone who has added them starts as before"
+            (start! ctx "bob" "implement" {:task "Add a health endpoint"})
+            (is
+             (= :queued
+                (:status (state system)))))
+          (testing "a person retrying a run"
+            (platform! system :fail-run {:message "boom"})
+            (is
+             (= refused
+                (failure #(f/command! ctx "alice" {:cmd-id :retry-run
+                                                   :id (random-uuid)
+                                                   :attrs {:source-id run-id}}))))))
+        (testing "the platform's own runs need no person's credentials"
+          (binding [f/*missing-credentials* {["platform" "alpha"] missing}]
+            (let [platform-run
+                  (random-uuid)]
+              ((get-in system [:test/edd :command]) {:cmd-id :start-run
+                                                     :id platform-run
+                                                     :attrs {:tenant "acme" :team-id "alpha" :workflow-id "analyse"
+                                                             :inputs {:brief "Weekly architecture review"}}})
+              (is
+               (= :queued
+                  (:status (:run ((get-in system [:test/edd :query]) {:query-id :get-run-source :run-id platform-run}))))))))))))

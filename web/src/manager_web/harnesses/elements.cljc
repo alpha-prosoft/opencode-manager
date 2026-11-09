@@ -21,3 +21,11 @@
   [:harnesses :add-credential team-id harness-id])
 
 (def grid [:harnesses :grid])
+
+(defn team-group
+  [team-id]
+  [:harnesses :team team-id])
+
+(defn team-link
+  [team-id]
+  [:harnesses :team-link team-id])

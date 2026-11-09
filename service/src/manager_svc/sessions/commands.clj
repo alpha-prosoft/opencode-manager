@@ -5,24 +5,26 @@
   (:require [edd.core :as edd]
             [edd.el.ctx :as el-ctx]
             [manager-svc.auth :as auth]
+            [manager-svc.credentials.api :as credentials]
             [manager-svc.errors :as errors]
-            [manager-svc.platform.api :as platform]
             [manager-svc.sessions.access :as access]
             [manager-svc.sessions.aggregate :as aggregate]
             [manager-svc.sessions.links :as links]
+            [manager-svc.sessions.live :as live]
+            [manager-svc.roles :as roles]
             [manager-svc.system :as system]
             [manager-svc.time :as time]))
 
 (def Visibility
-  [:enum :private :team :public])
+  [:enum :private :team :tenant])
 
 (def name-max 100)
 
 (defn- person
-  "Username of the caller, nil when the platform calls."
+  "The calling person, nil when the platform calls."
   [ctx]
   (when-not (auth/platform? ctx)
-    (auth/user-id ctx)))
+    (roles/caller ctx)))
 
 (defn- current
   [ctx]
@@ -30,19 +32,22 @@
 
 (defn- visible!
   [ctx session]
-  (let [username
-        (person ctx)]
-    (when (or (not (aggregate/session? session))
-              (and username (not (access/can-view? (system/of ctx) session username))))
-      (errors/not-found! "Session not found"))
-    session))
+  (access/visible! (system/of ctx) session (person ctx)))
+
+(defn- limit-checked!
+  "Fails with 422 when the session's team already runs as many sessions as
+   it may (:running-sessions, read before the command)."
+  [ctx {:keys [tenant team-id]}]
+  (when-let [limit-error
+             (live/limit-error (system/of ctx) tenant team-id (get-in ctx [:running-sessions :count] 0))]
+    (errors/invalid! limit-error)))
 
 (defn- managed!
   [ctx session]
-  (let [username
+  (let [caller
         (person ctx)]
     (visible! ctx session)
-    (when (and username (not (access/can-manage? (system/of ctx) session username)))
+    (when (and caller (not (access/can-manage? (system/of ctx) session caller)))
       (errors/forbidden! "Only the owner or a team admin can change this session"))
     session))
 
@@ -76,7 +81,9 @@
                      :labels (or (:labels attrs) {})
                      :env (or (:env attrs) {})
                      :image (or (:image attrs) "")
+                     :tenant (:tenant attrs)
                      :team-id (:team-id attrs)
+                     :project (:project attrs)
                      :run-id (:run-id attrs)
                      :activity (:activity attrs)
                      :created-at now
@@ -93,22 +100,34 @@
     (when (seq changes)
       (event :session-updated changes))))
 
+(defn running-beside-dep
+  "How many sessions run in the session's team beside it, read before a
+   person starts it; the platform's own starts are not limited here."
+  [ctx cmd]
+  (when-not (auth/platform? ctx)
+    {:query-id :count-running-sessions
+     :session-id (:id cmd)}))
+
 (defn start-session
   [ctx _cmd]
   (let [session
         (visible! ctx (current ctx))
 
-        username
+        caller
         (person ctx)
 
         blocked
-        (if username
-          (access/open-blocked (system/of ctx) session username)
+        (if caller
+          (access/open-blocked (system/of ctx) session caller)
           (when (:locked-at session) :locked))]
     (when blocked
       (errors/fail! 409 (access/blocked-reasons blocked)))
+    (when (= :delete (:pending session))
+      (errors/fail! 409 "This session is being deleted"))
     (when-not (= :start (:pending session))
-      (event :session-start-requested {:at (time/now) :by (or username auth/platform-user)}))))
+      (when caller
+        (limit-checked! ctx session))
+      (event :session-start-requested {:at (time/now) :by (or (:id caller) auth/platform-user)}))))
 
 (defn stop-session
   [ctx _cmd]
@@ -130,7 +149,7 @@
         (visible! ctx (current ctx))
 
         username
-        (person ctx)]
+        (:id (person ctx))]
     (when (not= username (:sub session))
       (errors/forbidden! "Only the owner can lock a session"))
     (when (:locked-at session)
@@ -142,10 +161,30 @@
   {:query-id :get-session-record
    :session-id (get-in cmd [:attrs :source-id])})
 
+(defn fork-credentials-dep
+  "Which credentials the source's team requires of the person forking that
+   they haven't added."
+  [ctx _cmd]
+  (let [source
+        (get-in ctx [:source :session])]
+    (credentials/required-credentials-dep ctx (:tenant source) (:team-id source))))
+
+(defn fork-running-sessions-dep
+  "How many sessions run in the source's team, where the fork will run."
+  [ctx _cmd]
+  (let [{:keys [tenant team-id]}
+        (get-in ctx [:source :session])]
+    (when (and tenant team-id)
+      {:query-id :count-running-sessions
+       :tenant tenant
+       :team-id team-id})))
+
 (defn fork-session
+  "Anyone who may see a session (in its tenant) may fork it into their own
+   private copy, which stays in the source's team."
   [ctx {:keys [attrs]}]
   (let [username
-        (person ctx)
+        (auth/user-id ctx)
 
         source
         (visible! ctx (get-in ctx [:source :session]))
@@ -162,8 +201,8 @@
       (errors/invalid! "Session already exists"))
     (when-not (and team-id workflow)
       (errors/invalid! "This session was not started from a workflow, so it can't be forked"))
-    (when-not (access/member? (system/of ctx) username team-id)
-      (errors/forbidden! (str "Only members of team " team-id " can fork this session")))
+    (credentials/require-credentials! (:missing-credentials ctx))
+    (limit-checked! ctx source)
     [(event :session-created
             {:sub username
              :email (get-in ctx [:meta :user :email])
@@ -174,7 +213,9 @@
                             {:workflow workflow})
              :env {}
              :image ""
+             :tenant (:tenant source)
              :team-id team-id
+             :project (:project source)
              :activity "session"
              :forked-from (:source-id attrs)
              :fork-pending true
@@ -224,15 +265,16 @@
       (event :session-action-failed {:at (time/now) :error (:error attrs) :action action}))))
 
 (defn stop-idle-sessions
+  "A tenant admin asks to stop the idle sessions of their tenant."
   [ctx _cmd]
-  (platform/require-admin! ctx)
-  (event :idle-sessions-stop-requested {:at (time/now) :by (auth/user-id ctx)}))
+  (roles/require-tenant-admin! ctx)
+  (when-not (roles/tenant-of ctx)
+    (errors/invalid! "Stopping idle sessions needs a tenant"))
+  (event :idle-sessions-stop-requested {:at (time/now) :by (auth/user-id ctx) :tenant (roles/tenant-of ctx)}))
 
-(def ^:private people-and-platform
-  {:role [:user :non-interactive]})
-
-(def ^:private platform-only
-  {:role [:non-interactive]})
+(defn- reaper-of-caller
+  [ctx _cmd]
+  (aggregate/reaper-id (roles/tenant-of ctx)))
 
 (def ^:private Id
   [:map [:id uuid?]])
@@ -241,53 +283,56 @@
   [ctx]
   (-> ctx
       (edd/reg-cmd :create-session create-session
-                   :auth platform-only
-                   :consumes [:map [:attrs [:map [:sub string?]]]])
+                   :auth roles/platform-only
+                   :consumes [:map [:attrs [:map [:sub string?] [:tenant string?] [:team-id string?]]]])
       (edd/reg-cmd :update-session update-session
-                   :auth people-and-platform
+                   :auth roles/people
                    :consumes [:map [:attrs [:map
                                             [:name {:optional true} [:maybe string?]]
                                             [:description {:optional true} [:maybe string?]]
                                             [:visibility {:optional true} [:maybe Visibility]]]]])
       (edd/reg-cmd :start-session start-session
-                   :auth people-and-platform
+                   :auth roles/people-and-platform
+                   :deps [:running-sessions running-beside-dep]
                    :consumes Id)
       (edd/reg-cmd :stop-session stop-session
-                   :auth people-and-platform
+                   :auth roles/people-and-platform
                    :consumes Id)
       (edd/reg-cmd :delete-session delete-session
-                   :auth people-and-platform
+                   :auth roles/people
                    :consumes Id)
       (edd/reg-cmd :lock-session lock-session
-                   :auth {:role [:user]}
+                   :auth roles/people
                    :consumes Id)
       (edd/reg-cmd :fork-session fork-session
-                   :auth {:role [:user]}
-                   :deps [:source source-dep]
-                   :consumes [:map [:attrs [:map [:source-id uuid?]]]])
+                   :auth roles/people
+                   :deps [:source source-dep
+                          :missing-credentials fork-credentials-dep
+                          :running-sessions fork-running-sessions-dep]
+                   :consumes [:map [:id uuid?] [:attrs [:map [:source-id uuid?]]]])
       (edd/reg-cmd :touch-session touch-session
-                   :auth platform-only
+                   :auth roles/platform-only
                    :consumes Id)
       (edd/reg-cmd :label-session label-session
-                   :auth platform-only
+                   :auth roles/platform-only
                    :consumes [:map [:attrs [:map [:key [:or string? keyword?]] [:value string?]]]])
       (edd/reg-cmd :record-session-started (recorded :session-started :start)
-                   :auth platform-only
+                   :auth roles/platform-only
                    :consumes Id)
       (edd/reg-cmd :record-session-stopped (recorded :session-stopped :stop)
-                   :auth platform-only
+                   :auth roles/platform-only
                    :consumes Id)
       (edd/reg-cmd :record-session-deleted (recorded :session-deleted :delete)
-                   :auth platform-only
+                   :auth roles/platform-only
                    :consumes Id)
       (edd/reg-cmd :record-session-fork-prepared record-fork-prepared
-                   :auth platform-only
+                   :auth roles/platform-only
                    :consumes Id)
       (edd/reg-cmd :record-session-failed record-failed
-                   :auth platform-only
+                   :auth roles/platform-only
                    :consumes [:map [:attrs [:map
                                             [:error string?]
                                             [:action [:enum :fork :start :stop :delete]]]]])
       (edd/reg-cmd :stop-idle-sessions stop-idle-sessions
-                   :auth people-and-platform
-                   :id-fn (constantly aggregate/reaper-id))))
+                   :auth roles/people
+                   :id-fn reaper-of-caller)))

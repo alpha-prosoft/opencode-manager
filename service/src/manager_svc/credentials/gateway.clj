@@ -1,8 +1,9 @@
 (ns manager-svc.credentials.gateway
   "MCP gateway: sandboxes reach MCP servers only through /mcp-gw/<server-id>.
    The sandbox authenticates with its session key; the harness's MCP server
-   allow-list and the server's tool allow-list are enforced, and the right
-   credential is added on the way out. Responses stream through."
+   allow-list and the server's tool allow-list are enforced, the server is
+   looked up in the session's tenant, and the right credential is added on
+   the way out. Responses stream through."
   (:require [clojure.string :as string]
             [clojure.tools.logging :as log]
             [manager-svc.credentials.api :as credentials-api]
@@ -118,18 +119,20 @@
 (defn- available-server!
   [system session server-id]
   (let [mcp-server
-        (spec/mcp-server (spec/spec system) server-id)]
+        (spec/mcp-server (spec/spec system (:tenant session)) server-id)]
     (if (and mcp-server
              (spec/for-teams? (:teams mcp-server) (keep identity [(:team-id session)])))
       mcp-server
       (errors/not-found! (str "MCP server " server-id " is not available")))))
 
-(defn- person-of
-  "Whose personal credentials a session uses; nil for platform-owned
-   sessions, which use platform values only."
+(defn- owner-of
+  "Whose values a session uses: its tenant's, its team's and, unless the
+   platform owns it (team and tenant values only), its owner's."
   [session]
-  (when-not (sessions-api/platform-owned? session)
-    (:sub session)))
+  {:tenant (:tenant session)
+   :team-id (:team-id session)
+   :user (when-not (sessions-api/platform-owned? session)
+           (:sub session))})
 
 (defn- upstream-request
   [request mcp-server body credential-header]
@@ -179,7 +182,7 @@
 
         resolved
         (when (and (nil? blocked) (:credential mcp-server))
-          (credentials-api/resolve-credential system (:credential mcp-server) (person-of session)))]
+          (credentials-api/resolve-credential system (owner-of session) (:credential mcp-server)))]
     (cond
       blocked
       (rpc-error rpc (str "Tool " (get-in blocked [:params :name]) " is not allowed on " (:name mcp-server)))

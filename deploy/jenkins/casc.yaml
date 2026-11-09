@@ -1,0 +1,26 @@
+jenkins:
+  systemMessage: "Local Jenkins of the agent platform (compose.ci.yml). Builds every new patch set of the Gerrit projects in GERRIT_POLL_PROJECTS."
+  numExecutors: 4
+  mode: NORMAL
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "${JENKINS_ADMIN_USER:-admin}"
+          password: "${JENKINS_ADMIN_PASSWORD}"
+        - id: "${JENKINS_PLATFORM_USER:-platform}"
+          name: "Agent Platform"
+          password: "${JENKINS_PLATFORM_PASSWORD}"
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+  globalNodeProperties:
+    - envVars:
+        env:
+          - key: GERRIT_URL
+            value: "${GERRIT_URL:-http://gerrit:8080}"
+unclassified:
+  location:
+    url: "${JENKINS_PUBLIC_URL:-http://jenkins.localhost:8080/}"
+jobs:
+  - file: /var/jenkins_conf/jobs.groovy

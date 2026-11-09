@@ -60,44 +60,62 @@ as a question.
   [ctx]
   (str (io/file (:workspace ctx) repo-dir)))
 
-(defn secret!
-  "The value of a credential as the run's person (or the platform) sees it."
+(defn credential!
+  "{:secret :username} of a credential as the run's person (or the platform) sees it."
   [{:keys [system run]} credential-id]
-  (or (get-in (credentials/resolve-credential system credential-id (model/person run)) [:value :secret])
-      (throw (handler-error (str "Credential " credential-id " is not set up")))))
+  (let [value
+        (:value (credentials/resolve-credential system (model/credential-scope run) credential-id))]
+    (if (string/blank? (:secret value))
+      (throw (handler-error (str "Credential " credential-id " is not set up")))
+      value)))
 
 (defn team-file
   [{:keys [system run]} relative default]
   (if relative
-    (platform/read-team-file system (:team-id run) relative)
+    (platform/read-team-file system (:tenant run) (:team-id run) relative)
     default))
 
-(defn- source-token
-  [{:keys [system] :as ctx} {:keys [url credentials]}]
-  (when credentials
-    (when-not (platform/secret-host-allowed? system credentials url)
-      (throw (handler-error (str "Secret " credentials " may not be sent to " (git/host-of url)))))
-    (secret! ctx credentials)))
+(defn- source-credential
+  "{:secret :username} for a git source; the credential's own username (a
+   Gerrit account) wins over the source's."
+  [{:keys [system run] :as ctx} {:keys [url credentials username]}]
+  (if credentials
+    (do
+      (when-not (platform/secret-host-allowed? system (:tenant run) credentials url)
+        (throw (handler-error (str "Secret " credentials " may not be sent to " (git/host-of url)))))
+      (let [credential
+            (credential! ctx credentials)]
+        (assoc credential :username (or (:username credential) username "x-token-auth"))))
+    {:username (or username "x-token-auth")}))
+
+(defn- git-access
+  [{:keys [system]}]
+  {:local-roots (get-in system [:settings :local-repo-roots])
+   :http-hosts (get-in system [:settings :http-git-hosts])})
 
 (defn checkout!
-  [{:keys [system] :as ctx} {:keys [url username] :as source} branch]
-  (git/checkout! {:url url
-                  :branch (or branch (:branch source) "main")
-                  :target (repo ctx)
-                  :username (or username "x-token-auth")
-                  :token (source-token ctx source)
-                  :depth 50
-                  :local-roots (get-in system [:settings :local-repo-roots])}))
+  [ctx {:keys [url] :as source} branch]
+  (let [{:keys [secret username]}
+        (source-credential ctx source)]
+    (git/checkout! (merge (git-access ctx)
+                          {:url url
+                           :branch (or branch (:branch source) "main")
+                           :target (repo ctx)
+                           :username username
+                           :token secret
+                           :depth 50}))))
 
 (defn branch-diff!
   "The diff of the checked-out branch against base (base...branch)."
-  [ctx {:keys [url username] :as source} base]
-  (git/branch-diff {:target (repo ctx)
-                    :url url
-                    :base base
-                    :username (or username "x-token-auth")
-                    :token (source-token ctx source)
-                    :depth 50}))
+  [ctx {:keys [url] :as source} base]
+  (let [{:keys [secret username]}
+        (source-credential ctx source)]
+    (git/branch-diff {:target (repo ctx)
+                      :url url
+                      :base base
+                      :username username
+                      :token secret
+                      :depth 50})))
 
 (defn- activity-of
   [ctx]
@@ -133,7 +151,7 @@ as a question.
   (let [source
         (or (:scm options)
             (throw (handler-error "The review activity needs options.scm (or a pull_request trigger)")))]
-    [source (scm/provider system (:provider source) (secret! ctx (:credentials source)))]))
+    [source (scm/provider system source (credential! ctx (:credentials source)))]))
 
 (defn- branch-review?
   [{:keys [options]}]
@@ -152,12 +170,13 @@ as a question.
         ((:pull-request provider) (:repository source) (:pull-request inputs))]
     (when-not (= (git/host-of (:clone-url pr)) (:git-host provider))
       (throw (handler-error (str "Refusing to clone " (:clone-url pr) ": not hosted on " (:git-host provider)))))
-    (git/checkout! {:url (:clone-url pr)
-                    :branch (:source-branch pr)
-                    :target (repo ctx)
-                    :username (:git-username provider)
-                    :token (:token provider)
-                    :depth 50})
+    (git/checkout! (merge (git-access ctx)
+                          {:url (:clone-url pr)
+                           :branch (:source-branch pr)
+                           :target (repo ctx)
+                           :username (:git-username provider)
+                           :token (:token provider)
+                           :depth 50}))
     (write-context! ctx "pr.diff" ((:diff provider) (:repository source) (:id pr)))
     (write-context! ctx "pull-request.md"
                     (str "# PR #" (:id pr) ": " (:title pr) "\n\n"
@@ -243,13 +262,13 @@ as a question.
         (if (and (= "auto" mode) (not (branch-review? ctx)))
           (let [[source provider]
                 (review-scm ctx)]
-            (count
-             (for [{:keys [key content path line]} (:comments plan)
-                   :when (not (contains? already key))]
-               (let [comment-id
-                     ((:comment provider) (:repository source) (:pull-request inputs) content path line)]
-                 (record! :record-review-comment {:key key :comment-id comment-id})
-                 key))))
+            (scm/post-review! provider
+                              (:repository source)
+                              (:pull-request inputs)
+                              (assoc plan :verdict (:verdict submission))
+                              already
+                              (fn [key comment-id]
+                                (record! :record-review-comment {:key key :comment-id comment-id}))))
           0)]
     (cond-> {:review submission
              :plan {:mode mode
@@ -272,13 +291,12 @@ as a question.
          (str (string/replace at-word #"[ ,;:]+$" "") "…"))))))
 
 (defn- delivery-provider
+  "The provider pull requests are delivered to, and the credential pushes
+   go with."
   [{:keys [system options] :as ctx}]
-  (let [source
-        (:repository options)
-
-        token
-        (when (:credentials source) (secret! ctx (:credentials source)))]
-    [(scm/provider system (get-in options [:pull-request :provider]) (or token "")) token]))
+  (let [credential
+        (source-credential ctx (:repository options))]
+    [(scm/provider system (:pull-request options) (when (:secret credential) credential)) credential]))
 
 (defmethod prepare! "implement"
   [{:keys [options inputs] :as ctx}]
@@ -340,49 +358,52 @@ as a question.
         source
         (:repository options)
 
-        [provider token]
+        [provider credential]
         (delivery-provider ctx)
 
         title
         (or (not-empty (short-title (or (not-empty (:title submission)) (:summary submission))))
             (:name workflow))
 
-        message
+        default-message
         (str title "\n\nMade by an agent for " (:created-by run) " (run " (:id run) ").")
 
         push!
-        (fn [branch]
+        (fn [{:keys [ref trailer message amend]}]
           (git/commit-and-push! {:target (repo ctx)
                                  :url (:url source)
-                                 :branch branch
-                                 :username (:git-username provider)
-                                 :token token
-                                 :message message
-                                 :author author}))]
+                                 :ref ref
+                                 :trailer trailer
+                                 :amend amend
+                                 :username (:username credential)
+                                 :token (:secret credential)
+                                 :message (or message default-message)
+                                 :author author}))
+
+        delivered
+        (fn [pr extra]
+          (merge {:id (:id pr) :url (:url pr) :branch (:source-branch pr) :target (:destination-branch pr)
+                  :commit (:commit pr) :pushed-at (time/now) :provider (some-> (:provider delivery) name)}
+                 extra))]
     (if (:pull-request inputs)
       (let [pr
-            ((:pull-request provider) (:repository delivery) (:pull-request inputs))
-
-            commit
-            (push! (:source-branch pr))]
-        {:id (:id pr) :url (:url pr) :branch (:source-branch pr) :target (:destination-branch pr)
-         :commit commit :updated true :pushed-at (time/now)})
-      (let [branch
-            (str "agent/" (:id run))
-
-            commit
-            (push! branch)
-
-            target
+            ((:pull-request provider) (:repository delivery) (:pull-request inputs))]
+        (delivered (scm/update-change! provider (:repository delivery) pr push!) {:updated true}))
+      (let [target
             (or (:target-branch delivery) (:branch inputs) (:branch source) "main")
 
             draft
-            (not (:verified submission))
-
-            pr
-            ((:create-pull-request provider) (:repository delivery) branch target title (description ctx submission) draft)]
-        {:id (:id pr) :url (:url pr) :branch branch :target target :commit commit :draft draft
-         :pushed-at (time/now)}))))
+            (not (:verified submission))]
+        (delivered (scm/open-change! provider
+                                     (:repository delivery)
+                                     {:key (str "run:" (:id run))
+                                      :branch (str "agent/" (:id run))
+                                      :target target
+                                      :title title
+                                      :description (description ctx submission)
+                                      :draft draft}
+                                     push!)
+                   {:target target :draft draft})))))
 
 (defmethod finalize! "implement"
   [{:keys [run options record!] :as ctx} submission]

@@ -30,22 +30,44 @@
    :secret-key nil
    :jwt-secret nil
    :jwt-jwks-url nil
+   :jwt-jwks-file nil
+   :jwt-discovery-url nil
+   :jwt-jwks-refresh-seconds 3600
+   :jwt-jwks-refresh-retry-seconds 10
+   :jwt-jwks-default-algorithm nil
    :jwt-audience nil
    :jwt-issuer nil
    :content-security-policy nil
    :jwt-cookie "access_token"
+   :oidc-issuer nil
+   :oidc-discovery-url nil
+   :oidc-jwks-file nil
+   :oidc-jwks-refresh-seconds 3600
+   :oidc-jwks-refresh-retry-seconds 10
+   :oidc-jwks-default-algorithm nil
+   :oidc-client-id nil
+   :oidc-client-secret nil
+   :oidc-client-secret-file nil
+   :oidc-scopes "openid profile email"
+   :oidc-redirect-url nil
+   :oidc-claims-source "id_token"
    :email-domain "users.local"
    :credentials-key nil
-   :onboarding-url nil
-   :onboarding-type nil
-   :onboarding-branch "main"
-   :onboarding-credentials nil
-   :onboarding-username "x-token-auth"
-   :onboarding-file "platform.json"
+   :tenants nil
+   :tenants-file nil
+   :tenant-file "tenant.json"
+   :team-config-file "team.json"
+   :claims-parser "manager-svc.claims/default-parser"
+   :claims-parser-file nil
+   :config-reload-seconds 10
+   :operators []
+   :dev-users-file nil
    :sync-interval-minutes 10
    :secrets-dir "/config/secrets"
    :repos-dir "/data/repos"
    :local-repo-roots ["/repos"]
+   :http-git-hosts []
+   :trusted-proxies []
    :session-image "ghcr.io/anomalyco/opencode:1.19.5"
    :session-port 4096
    :shared-mount-path "/shared"
@@ -59,10 +81,12 @@
 
 (def ^:private integer-keys
   #{:public-port-internal :sandbox-port :edd-port :public-port :max-body-bytes :auth-ttl-hours :sync-interval-minutes
-    :session-port :reap-interval-seconds :idle-grace-seconds})
+    :session-port :reap-interval-seconds :idle-grace-seconds :config-reload-seconds
+    :jwt-jwks-refresh-seconds :jwt-jwks-refresh-retry-seconds
+    :oidc-jwks-refresh-seconds :oidc-jwks-refresh-retry-seconds})
 
 (def ^:private list-keys
-  #{:local-repo-roots})
+  #{:local-repo-roots :http-git-hosts :operators :trusted-proxies})
 
 (defn- env-name
   [k]

@@ -49,3 +49,8 @@
   (str url
        (if (string/includes? url "?") "&" "?")
        (js/encodeURIComponent (name key)) "=" (js/encodeURIComponent (str value))))
+
+(defn setup-url
+  "The setup page, going on to next-path once it is done."
+  [next-path]
+  (with-query "/setup" :next next-path))

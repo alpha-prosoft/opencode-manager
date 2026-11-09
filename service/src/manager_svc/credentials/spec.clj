@@ -1,12 +1,12 @@
 (ns manager-svc.credentials.spec
-  "Credential and MCP server declarations of the onboarding spec. The
+  "Credential and MCP server declarations of a tenant's tenant.json. The
    platform decodes the spec with every default applied, so these only read
    it (platform.api)."
   (:require [manager-svc.platform.api :as platform-api]))
 
 (defn spec
-  [system]
-  (or (platform-api/platform-spec system) {}))
+  [system tenant]
+  (platform-api/tenant-spec system tenant))
 
 (defn for-teams?
   "True when a declaration limited to teams applies to one of team-ids."
@@ -14,23 +14,35 @@
   (boolean (some #(platform-api/in-scope? teams %) team-ids)))
 
 (defn credentials
-  [platform-spec]
-  (vec (:credentials platform-spec)))
+  [tenant-spec]
+  (vec (:credentials tenant-spec)))
 
 (defn credential
-  [platform-spec credential-id]
-  (platform-api/credential-of platform-spec (name credential-id)))
+  [tenant-spec credential-id]
+  (platform-api/credential-of tenant-spec (name credential-id)))
+
+(defn undeclared
+  "What a secret no credential declares is: a tenant value."
+  [credential-id]
+  {:id (name credential-id) :name (name credential-id) :kind :token :provided-by [:tenant] :test nil})
 
 (defn mcp-servers
-  [platform-spec]
-  (vec (:mcp-servers platform-spec)))
+  [tenant-spec]
+  (vec (:mcp-servers tenant-spec)))
 
 (defn mcp-server
-  [platform-spec server-id]
-  (platform-api/mcp-server-of platform-spec (name server-id)))
+  [tenant-spec server-id]
+  (platform-api/mcp-server-of tenant-spec (name server-id)))
+
+(def provides?
+  platform-api/provides?)
 
 (def personal?
   platform-api/personal?)
+
+(defn personal-only?
+  [credential]
+  (= [:user] (vec (:provided-by credential))))
 
 (def credential-hosts
   platform-api/credential-hosts)

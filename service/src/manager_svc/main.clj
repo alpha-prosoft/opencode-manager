@@ -12,6 +12,8 @@
             [manager-svc.config :as config]
             [manager-svc.edge.server :as edge]
             [manager-svc.module :as module]
+            [manager-svc.oidc :as oidc]
+            [manager-svc.platform.tenants :as tenants]
             [manager-svc.service :as service]
             [manager-svc.workers :as workers])
   (:import [java.util.concurrent ExecutorService]))
@@ -52,6 +54,8 @@
 (defn start
   [settings & {:keys [workers?] :or {workers? true}}]
   (auth/check-settings! settings)
+  (oidc/check-settings! settings)
+  (tenants/check-settings! settings)
   (let [system
         (module/build settings)
 

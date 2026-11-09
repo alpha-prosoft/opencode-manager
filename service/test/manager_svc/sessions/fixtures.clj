@@ -1,11 +1,10 @@
 (ns manager-svc.sessions.fixtures
   "Fake backend and route provider, and a system wired to the mock DAL."
-  (:require [edd.security :as security]
+  (:require [edd.core :as edd]
+            [edd.security :as security]
             [edd.test.fixture.dal :as mock]
-            [manager-svc.auth :as auth]
             [manager-svc.client :as client]
             [manager-svc.credentials.api :as credentials]
-            [manager-svc.errors :as errors]
             [manager-svc.observability.api :as observability]
             [manager-svc.platform.api :as platform]
             [manager-svc.sessions.backend :as backend]
@@ -78,9 +77,18 @@
   [system]
   @(get-in system [:sessions/routes :synced]))
 
+(defn- without-required-credentials
+  "The credentials domain's :get-missing-required-credentials (a dependency
+   of :fork-session): nobody lacks one unless a test registers its own."
+  [ctx]
+  (edd/reg-query ctx :get-missing-required-credentials
+                 (fn [_ {:keys [team-id]}]
+                   {:team-id team-id :missing []})
+                 :auth {:role [:non-interactive]}))
+
 (defn ctx
   [system]
-  (security/register (core/register (support/ctx system))))
+  (security/register (without-required-credentials (core/register (support/ctx system)))))
 
 (def sandbox
   {:image "opencode:test"
@@ -96,10 +104,31 @@
    :env {"OPENCODE_SERVER_PASSWORD" "secret"}
    :files {"opencode/opencode.json" "{}"}})
 
-(def teams
-  {"alpha" {"alice" :admin "bob" :member "carol" :member}})
+(def people
+  "What the tokens of test people carry. Team alpha of acme: alice admin,
+   bob and carol members; mallory is in acme without a team; root is acme's
+   tenant admin. gina and hank are of globex, which also has a team alpha."
+  {"alice" {:teams {"alpha" :admin}}
+   "bob" {:teams {"alpha" :member}}
+   "carol" {:teams {"alpha" :member}}
+   "mallory" {}
+   "root" {:tenant-admin true}
+   "gina" {:tenant "globex" :tenant-admin true :teams {"alpha" :admin}}
+   "hank" {:tenant "globex" :teams {"alpha" :member}}})
+
+(defn person
+  "The caller map of a test person."
+  [username]
+  (support/person username (get people username {})))
+
+(defn as
+  "ctx as a test person."
+  [ctx username]
+  (support/as-user ctx username (get people username {})))
 
 (def ^:dynamic *personal* #{})
+
+(def ^:dynamic *team* nil)
 
 (defn command!
   "Runs a command as the given ctx, applies its events to the view store and
@@ -108,18 +137,14 @@
   (support/apply! ctx cmd))
 
 (defmacro with-domains
-  "Other domains' facades replaced by fixed teams and admins; edd calls of the
-   edge, workers and facade run against the mock DAL as the platform."
+  "Other domains' facades replaced (the team's entry is *team*, personal
+   credentials *personal*); edd calls of the edge, workers and facade run
+   against the mock DAL as the platform."
   [ctx & body]
   `(let [platform-ctx#
          (support/as-platform ~ctx)]
-     (with-redefs [platform/platform-admin? (fn [_# username#] (= "root" username#))
-                   platform/require-admin! (fn [ctx#]
-                                             (when-not (or (auth/platform? ctx#) (= "root" (auth/user-id ctx#)))
-                                               (errors/forbidden! "Platform administrators only")))
-                   platform/role (fn [_# username# team-id#] (get-in teams [team-id# username#]))
-                   platform/teams-of (fn [_# username#] (set (keep (fn [[team# members#]] (when (contains? members# username#) team#)) teams)))
-                   credentials/uses-personal? (fn [_# owner# _servers#] (contains? *personal* owner#))
+     (with-redefs [platform/team (fn [_# _tenant# _team-id#] *team*)
+                   credentials/uses-personal? (fn [_# scope# _servers#] (contains? *personal* (:user scope#)))
                    observability/usage-for-session (fn [_# _id#] {:calls 3})
                    observability/audit-count (fn [_# _id#] 7)
                    observability/audit-conversations (fn [_# _id#] [{:id "ses_abcdefgh12" :title "Fix" :messages 2 :started nil :last nil}])
@@ -131,8 +156,8 @@
 
 (defn create-session!
   "A session as the runs domain creates it, with a sandbox config."
-  [system ctx {:keys [id owner visibility labels team-id start]
-               :or {visibility :private team-id "alpha" labels {:workflow "fix"}}}]
+  [system ctx {:keys [id owner visibility labels tenant team-id project start]
+               :or {visibility :private tenant "acme" team-id "alpha" labels {:workflow "fix"}}}]
   (storage/prepare! (:settings system) id)
   (storage/write-sandbox! (:settings system) id sandbox)
   (command! (support/as-platform ctx)
@@ -143,6 +168,8 @@
                      :name "Fix the bug"
                      :visibility visibility
                      :labels labels
+                     :tenant tenant
                      :team-id team-id
+                     :project project
                      :activity "fix"
                      :start (boolean start)}}))

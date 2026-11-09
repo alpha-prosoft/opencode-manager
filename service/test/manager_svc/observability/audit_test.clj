@@ -3,6 +3,7 @@
             [edd.security :as security]
             [edd.test.fixture.dal :as mock]
             [lambda.test.fixture.state :as state]
+            [manager-svc.hash :as hash]
             [manager-svc.observability.audit :as audit]
             [manager-svc.observability.collector :as collector]
             [manager-svc.observability.core :as core]
@@ -16,7 +17,7 @@
   #uuid "6f1c5a43-1111-4a52-9c1b-6a3f0b6a0001")
 
 (def sessions
-  {session-id {:id session-id :sub "alice" :visibility :private :team-id "alpha"}})
+  {session-id {:id session-id :sub "alice" :visibility :private :tenant "acme" :team-id "alpha"}})
 
 (defn- ctx
   []
@@ -25,7 +26,7 @@
 (defmacro with-domain
   [& body]
   `(with-redefs [sessions/get-session (fn [_# id#] (get sessions id#))
-                 sessions/can-view? (fn [_# session# username#] (= username# (:sub session#)))]
+                 sessions/can-view? (fn [_# session# caller#] (= (:id caller#) (:sub session#)))]
      ~@body))
 
 (defn- append!
@@ -68,12 +69,20 @@
          (= [1 2 3]
             (mapv :seq listed)))
         (is
-         (= (audit/entry-hash audit/genesis "conversation" "conversation:c1" "{\"id\":\"c1\",\"title\":\"Fix the build\"}")
+         (= (audit/entry-hash 2 audit/genesis {:ts "2026-11-08T10:00:00Z"
+                                               :type "conversation"
+                                               :key "conversation:c1"
+                                               :body "{\"id\":\"c1\",\"title\":\"Fix the build\"}"})
             (:hash first-entry)))
         (is
-         (= (audit/entry-hash (:hash first-entry) "message" "message:m1"
-                              "{\"id\":\"m1\",\"role\":\"user\",\"sessionID\":\"c1\"}")
+         (= (audit/entry-hash 2 (:hash first-entry) {:ts "2026-11-08T10:00:00Z"
+                                                     :type "message"
+                                                     :key "message:m1"
+                                                     :body "{\"id\":\"m1\",\"role\":\"user\",\"sessionID\":\"c1\"}"})
             (:hash (second listed))))
+        (is
+         (= [2 2 2]
+            (mapv :hash-version listed)))
         (is
          (= {"id" "c1" "title" "Fix the build"}
             (:payload first-entry)))))))
@@ -118,15 +127,73 @@
               (verify))))
         (testing "a recomputed hash still breaks the link of the next entry"
           (tamper! 2 #(assoc-in % [:attrs :hash]
-                                (audit/entry-hash (get-in % [:attrs :prev-hash]) "message" "message:m1"
-                                                  (get-in % [:attrs :body]))))
+                                (audit/entry-hash 2 (get-in % [:attrs :prev-hash]) (:attrs %))))
           (is
            (= {:valid false :checked 2 :broken-at 3}
               (verify))))))))
 
+(deftest verify-detects-a-changed-time
+  (with-domain
+    (mock/with-mock-dal
+      (let [ctx
+            (support/as-user (ctx) "alice")
+
+            _
+            (append! ctx entries)]
+        (tamper! 3 #(assoc-in % [:attrs :ts] "2026-11-07T10:00:00Z"))
+        (is
+         (= {:valid false :checked 2 :broken-at 3}
+            (mock/query ctx {:query-id :verify-audit :session-id session-id})))))))
+
+(deftest every-hashed-field-is-told-apart
+  (is
+   (= 4
+      (count (set (map #(audit/entry-hash 2 audit/genesis %)
+                       [{:ts "t" :type "a|b" :key "c" :body "{}"}
+                        {:ts "t" :type "a" :key "b|c" :body "{}"}
+                        {:ts "t\",\"a" :type "b" :key "c" :body "{}"}
+                        {:ts "t" :type "a" :key "b" :body "c|{}"}]))))))
+
+(deftest chains-recorded-before-hash-versions-still-verify
+  (let [attrs-of
+        (fn [previous entry]
+          (assoc entry :prev-hash previous :hash (audit/entry-hash nil previous entry)))
+
+        first-attrs
+        (attrs-of audit/genesis {:ts "t1" :type "t" :key "k1" :body "{}"})
+
+        second-attrs
+        (attrs-of (:hash first-attrs) {:ts "t2" :type "t" :key "k2" :body "{}"})
+
+        third-entry
+        {:ts "t3" :type "t" :key "k3" :body "{}" :hash-version 2}
+
+        third-attrs
+        (assoc third-entry
+               :prev-hash (:hash second-attrs)
+               :hash (audit/entry-hash 2 (:hash second-attrs) third-entry))
+
+        chain
+        [{:event-seq 1 :attrs first-attrs} {:event-seq 2 :attrs second-attrs} {:event-seq 3 :attrs third-attrs}]]
+    (is
+     (= (hash/sha256-hex (str audit/genesis "|t|k1|{}"))
+        (:hash first-attrs)))
+    (is
+     (= {:valid true :checked 3 :head (:hash third-attrs)}
+        (audit/verify-events {:count 3 :head (:hash third-attrs)} chain))
+     "an old chain continued with versioned entries")
+    (testing "an old entry's time was never covered; a versioned one's is"
+      (is
+       (:valid (audit/verify-events {:count 3 :head (:hash third-attrs)}
+                                    (assoc-in chain [0 :attrs :ts] "changed"))))
+      (is
+       (= {:valid false :checked 2 :broken-at 3}
+          (audit/verify-events {:count 3 :head (:hash third-attrs)}
+                               (assoc-in chain [2 :attrs :ts] "changed")))))))
+
 (deftest verify-detects-a-missing-tail
   (let [first-hash
-        (audit/entry-hash audit/genesis "t" "k1" "{}")
+        (audit/entry-hash nil audit/genesis {:type "t" :key "k1" :body "{}"})
 
         first-entry
         {:event-seq 1 :attrs {:type "t" :key "k1" :body "{}" :prev-hash audit/genesis :hash first-hash}}]
@@ -284,4 +351,34 @@
             (get line "payload")))
         (is
          (= (:hash entry)
-            (audit/entry-hash audit/genesis "tool" "part:p9" (:body entry))))))))
+            (audit/entry-hash (get line "hash_version") audit/genesis entry)))
+        (is
+         (= 2
+            (get line "hash_version")))))))
+
+(deftest a-follower-reads-the-recorded-keys-once-and-keeps-them-over-reconnects
+  (let [reads
+        (atom 0)
+
+        attempts
+        (atom [])
+
+        follower
+        (atom {})]
+    (with-redefs-fn {#'collector/reconnect-ms 0
+                     #'collector/recorded-keys (fn [_ _]
+                                                 (swap! reads inc)
+                                                 #{"k1"})
+                     #'collector/follow-once! (fn [_ _ seen follower]
+                                                (swap! attempts conj @seen)
+                                                (swap! seen conj (str "k" (inc (count @seen))))
+                                                (when (= 3 (count @attempts))
+                                                  (swap! follower assoc :stopped true))
+                                                (throw (ex-info "stream closed" {})))}
+      #(collector/follow! {:settings {}} session-id follower))
+    (is
+     (= 1
+        @reads))
+    (is
+     (= [#{"k1"} #{"k1" "k2"} #{"k1" "k2" "k3"}]
+        @attempts))))

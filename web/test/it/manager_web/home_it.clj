@@ -7,7 +7,11 @@
             [manager-web.run.elements :as run-els]
             [manager-web.runs.elements :as runs-els]
             [manager-web.shell.elements :as shell-els]
-            [testing.pw :refer [with-ui step]]))
+            [testing.pw :refer [*current-page* with-ui step]])
+  (:import [com.microsoft.playwright Page]))
+
+(def last-run
+  (atom nil))
 
 (deftest home-it
   (with-ui [_page]
@@ -15,7 +19,7 @@
           (fn []
             (h/login (:member h/fixture))
             (is
-             (string/includes? (h/text els/title) (:member h/fixture)))))
+             (string/includes? (string/lower-case (h/text els/title)) (:member h/fixture)))))
 
     (step "Home shows what can be started and recent runs"
           (fn []
@@ -57,7 +61,7 @@
                   (h/start-workflow (:team h/fixture) (:analysis-workflow h/fixture)
                                     {:brief "Members get 5% off orders over 100 EUR. Keep the analysis to one short page."})]
               (is
-               (= (str "/runs/" run-id)
+               (= (str "/" (:tenant h/fixture) "/runs/" run-id)
                   (h/current-path)))
               (is
                (= (:member h/fixture)
@@ -79,4 +83,16 @@
               (h/click (shell-els/nav-item :home))
               (is
                (true?
-                (.isVisible (h/wait-visible (component-els/run-link run-id))))))))))
+                (.isVisible (h/wait-visible (component-els/run-link run-id)))))
+              (reset! last-run run-id))))
+
+    (step "On a narrow screen a run keeps its team as a caption under its name"
+          (fn []
+            (.setViewportSize ^Page *current-page* 390 844)
+            (h/goto "/runs")
+            (h/wait-visible (component-els/run-link @last-run))
+            (is
+             (= [true false]
+                [(h/visible? (component-els/run-context @last-run))
+                 (h/visible? (component-els/run-team @last-run))]))
+            (.setViewportSize ^Page *current-page* 1280 720)))))

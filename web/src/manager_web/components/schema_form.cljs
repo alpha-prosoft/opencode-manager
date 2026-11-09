@@ -42,16 +42,17 @@
   [schema]
   (boolean (some pull-request-field? (keys (:properties schema)))))
 
-(defn- pr-label
-  [^js pr]
-  (str "#" (.-id pr) " " (.-title pr) " (" (.-author pr) ")"))
+(defn pull-request-label
+  "A pull request as the picker lists it, named as its provider names it."
+  [scm-provider {:keys [id title author]}]
+  (str (format/change-name scm-provider id) " " title " (" author ")"))
 
 (defn- text-field
   [props & children]
   (into [:> TextField (merge {:fullWidth true} props)] children))
 
 (defn- field-view
-  [{:keys [field schema required? value on-set pull-requests]}]
+  [{:keys [field schema required? value on-set pull-requests scm-provider]}]
   (let [label
         (format/label field)
 
@@ -92,7 +93,7 @@
       [:> Autocomplete
        {:options (clj->js pull-requests)
         :value (some-> (some #(when (= (:id %) current) %) pull-requests) clj->js)
-        :getOptionLabel pr-label
+        :getOptionLabel #(pull-request-label scm-provider (js->clj % :keywordize-keys true))
         :isOptionEqualToValue (fn [^js a ^js b] (= (.-id a) (.-id b)))
         :onChange (fn [_ ^js pr] (on-set field (some-> pr .-id)))
         :id id
@@ -127,7 +128,7 @@
 
 (defn schema-form
   "on-change is called with the field name and its new value."
-  [{:keys [schema value on-change pull-requests]}]
+  [{:keys [schema value on-change pull-requests scm-provider]}]
   (let [required
         (set (map field-name (:required schema)))]
     (into [RawStack {:spacing 2}]
@@ -138,4 +139,5 @@
                          :required? (contains? required (field-name field))
                          :value value
                          :on-set on-change
-                         :pull-requests pull-requests}]))))
+                         :pull-requests pull-requests
+                         :scm-provider scm-provider}]))))

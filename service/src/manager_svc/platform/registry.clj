@@ -1,10 +1,13 @@
 (ns manager-svc.platform.registry
-  "Fetching the onboarding repository and team repositories and loading
-   their definitions; the results are recorded in aggregates by the sync
+  "Fetching a tenant's onboarding repository and its team repositories and
+   loading their configuration and definitions; the results are recorded in
+   the tenant's and teams' aggregates by the sync
    (manager-svc.platform.api/sync!)."
   (:require [clojure.java.io :as io]
             [clojure.string :as string]
+            [clojure.tools.logging :as log]
             [manager-svc.platform.catalog :as catalog]
+            [manager-svc.platform.projects :as projects]
             [manager-svc.git :as git]
             [manager-svc.paths :as paths]
             [manager-svc.platform.sources :as sources]
@@ -20,10 +23,6 @@
 
 (def file-options
   [:guidelines-file :instructions-file :template-file])
-
-(def scm-api-hosts
-  {:bitbucket "api.bitbucket.org"
-   :github "api.github.com"})
 
 (def skills-max-bytes
   1000000)
@@ -111,8 +110,8 @@
     (boolean (some #{credential-id} (:secrets team)))))
 
 (defn harness-credentials
-  [platform harness]
-  (vec (sort (set (keep #(:credential (spec/mcp-server-of platform %)) (:mcp harness))))))
+  [_platform harness]
+  (vec (sort (set (keep #(:credential (spec/mcp-server-of _platform %)) (:mcp harness))))))
 
 (defn source-root
   "Directory a source is checked out to (path sources are used in place)."
@@ -121,15 +120,20 @@
     (.toFile (paths/resolved (:location source)))
     (io/file (:repos-dir settings) key)))
 
+(defn onboarding-key
+  [tenant]
+  (str "tenants/" tenant "/onboarding"))
+
 (defn team-key
-  [team-id]
-  (str "teams/" team-id))
+  [tenant team-id]
+  (str "tenants/" tenant "/teams/" team-id))
 
 (defn team-dir
+  "Directory of a team's definitions; team is an entry carrying :tenant."
   [settings team]
   (if (nil? team)
     nil
-    (io/file (source-root settings (team-key (:id team)) (:repository team))
+    (io/file (source-root settings (team-key (:tenant team) (:id team)) (:repository team))
              (str (get-in team [:repository :path])))))
 
 (defn read-team-file
@@ -148,6 +152,10 @@
    :spec spec
    :errors (vec errors)})
 
+(defn- invalid-json
+  [^Exception error]
+  (str "invalid JSON: " (first (string/split-lines (ex-message error)))))
+
 (defn- load-file-definition
   [kind ^File file source]
   (let [id
@@ -157,7 +165,7 @@
             (spec/validate (spec/definition-kinds kind) (spec/read-json (slurp file)))]
         (definition kind id source value errors))
       (catch com.fasterxml.jackson.core.JacksonException error
-        (definition kind id source nil [(str "invalid JSON: " (first (string/split-lines (ex-message error))))])))))
+        (definition kind id source nil [(invalid-json error)])))))
 
 (defn- read-kind
   [base path kind]
@@ -184,16 +192,30 @@
         connection
         (spec/llm-connection-of platform (get-in harness [:llm :connection]))
 
+        team-connection
+        (some #(when (= (:id connection) (:id %)) %) (:llm-connections team))
+
         connection-errors
         (if (nil? connection)
           [(str "llm.connection " (get-in harness [:llm :connection]) " does not exist")]
           (let [unknown
-                (vec (remove (set (:models connection)) (get-in harness [:llm :models])))]
+                (vec (remove (set (:models connection)) (get-in harness [:llm :models])))
+
+                not-chosen
+                (vec (remove (set (:models team-connection)) (get-in harness [:llm :models])))]
             (concat
-             (when-not (spec/in-scope? (:teams connection) (:id team))
-               [(str "team " (:id team) " may not use llm connection " (:id connection))])
-             (when (seq unknown)
-               [(str "models " (pr-str unknown) " are not offered by connection " (:id connection))]))))
+             (cond
+               (not (spec/in-scope? (:teams connection) (:id team)))
+               [(str "team " (:id team) " may not use llm connection " (:id connection))]
+
+               (nil? team-connection)
+               [(str "llm connection " (:id connection) " is not in the team's team.json llm_connections")])
+             (cond
+               (seq unknown)
+               [(str "models " (pr-str unknown) " are not offered by connection " (:id connection))]
+
+               (and team-connection (seq not-chosen))
+               [(str "models " (pr-str not-chosen) " are not allowed by the team's team.json")]))))
 
         skill-errors
         (try
@@ -207,6 +229,7 @@
               :let [server (spec/mcp-server-of platform server-id)]
               :when (or (nil? server)
                         (not (spec/in-scope? (:teams server) (:id team)))
+                        (not (some #{server-id} (:mcp-servers team)))
                         (and (:credential server) (not (team-may-use? platform team (:credential server)))))]
           (cond
             (nil? server)
@@ -214,6 +237,9 @@
 
             (not (spec/in-scope? (:teams server) (:id team)))
             (str "team " (:id team) " may not use MCP server " server-id)
+
+            (not (some #{server-id} (:mcp-servers team)))
+            (str "MCP server " server-id " is not in the team's team.json mcp_servers")
 
             :else
             (str "MCP server " server-id " needs credential " (:credential server)
@@ -228,7 +254,9 @@
           (spec/mcp-server-of platform (:mcp-server ci))
 
           needed
-          (if (:on-failure ci) #{"get_build" "get_build_log"} #{"get_build"})
+          (cond-> #{"get_build"}
+            (:on-failure ci) (conj "get_build_log")
+            (not (string/includes? (:job ci) "{pr}")) (conj "get_builds"))
 
           follow-up
           (get-in loaded [:workflows (:on-failure ci)])
@@ -268,7 +296,7 @@
   (when repository
     (concat
      (try
-       (git/check-url (:url repository) (:local-repo-roots settings))
+       (git/check-url (:url repository) (:local-repo-roots settings) (:http-git-hosts settings))
        nil
        (catch clojure.lang.ExceptionInfo error
          [(str "options.repository.url: " (ex-message error))]))
@@ -281,7 +309,7 @@
   [platform repository delivery]
   (when delivery
     (let [api-host
-          (scm-api-hosts (:provider delivery))]
+          (spec/scm-api-host delivery)]
       (cond
         (not (:credentials repository))
         ["options.pull_request needs options.repository.credentials to push and open the pull request"]
@@ -300,9 +328,22 @@
                        (harness-credentials platform (:spec harness))))]
       (for [secret (sort needed)
             :let [declared (spec/credential platform secret)]
-            :when (and declared (= :user (:provided-by declared)))]
+            :when (and declared (= [:user] (:provided-by declared)))]
         (str "runs automatically, but credential " secret
-             " only has personal values; use provided_by platform_or_user")))))
+             " only has personal values; let the tenant or team provide it too (provided_by)")))))
+
+(defn- check-trigger-source
+  [workflow]
+  (let [trigger
+        (:trigger workflow)]
+    (when (= :pull-request (:type trigger))
+      (let [missing
+            (remove #(get trigger %) [:provider :repository :credentials])]
+        (if (seq missing)
+          [(str "trigger: set " (string/join ", " (map spec/snake missing)) " (or name a project)")]
+          (map #(str "trigger: " %)
+               (:errors (spec/validate (spec/scm-source)
+                                       (select-keys trigger [:provider :repository :url :web-url :credentials])))))))))
 
 (defn- check-review-source
   [workflow options]
@@ -320,8 +361,7 @@
         (and branch? (= :auto (:post-mode options)))
         ["options.post_mode: branch reviews never post; use off or dry-run"]))))
 
-(defn- check-workflow
-  "Errors of a workflow and its options decoded against its activity."
+(defn- check-resolved-workflow
   [settings platform team base loaded workflow]
   (if-not (catalog/activity (:activity workflow))
     {:errors [(str "unknown activity " (:activity workflow))]}
@@ -362,6 +402,7 @@
               (when (and (= :pull-request (get-in workflow [:trigger :type])) (not= "review" (:activity workflow)))
                 ["pull_request triggers can only start the review activity"])]
           {:options options
+           :trigger (:trigger workflow)
            :errors (vec (concat reference-errors
                                 file-errors
                                 (check-repository settings platform repository)
@@ -370,7 +411,18 @@
                                 grant-errors
                                 (check-automation platform loaded workflow used)
                                 trigger-errors
+                                (check-trigger-source workflow)
                                 (check-review-source workflow options)))})))))
+
+(defn- check-workflow
+  "Errors of a workflow and its options decoded against its activity, with
+   its team project applied (:options and :trigger as resolved)."
+  [settings platform team base loaded named-workflow]
+  (let [{workflow :workflow project-errors :errors}
+        (projects/apply-project team named-workflow)]
+    (if (seq project-errors)
+      {:errors project-errors}
+      (check-resolved-workflow settings platform team base loaded workflow))))
 
 (defn- check-agent
   [base agent]
@@ -410,10 +462,11 @@
         with-workflows
         (update-valid with-harnesses :workflows
                       (fn [item]
-                        (let [{:keys [options errors]}
+                        (let [{:keys [options trigger errors]}
                               (check-workflow settings platform team base with-harnesses (:spec item))]
                           (cond-> (update item :errors into errors)
-                            options (assoc-in [:spec :options] options)))))]
+                            options (assoc-in [:spec :options] options)
+                            trigger (assoc-in [:spec :trigger] trigger)))))]
     (vec (for [kind kinds
                item (vals (get with-workflows kind))]
            (with-validity item)))))
@@ -444,120 +497,130 @@
                      :target target
                      :username (:username source)
                      :token token
-                     :local-roots roots}))))
+                     :local-roots roots
+                     :http-hosts (:http-git-hosts settings)}))))
 
 (defn fetch!
   "Fetches a team source; its secret must be allowed for the source's host."
   [{:keys [settings] :as env} key source platform]
   (fetch-source settings key source (token env platform (:credentials source) (:url source))))
 
-(defn onboarding-source
-  "Source of the onboarding repository from MANAGER_ONBOARDING_*. A plain
-   directory (absolute path, or a file:// URL that is not a git repository)
-   is a path source."
-  [{:keys [onboarding-url onboarding-type onboarding-branch onboarding-credentials onboarding-username]}]
-  (let [location
-        (str onboarding-url)
-
-        file-directory?
-        (and (string/starts-with? location "file://")
-             (not (.isDirectory (io/file (git/file-url->path location) ".git")))
-             (.isDirectory (io/file (git/file-url->path location))))
-
-        kind
-        (cond
-          (not (string/blank? onboarding-type)) (keyword onboarding-type)
-          (string/starts-with? location "/") :path
-          file-directory? :path
-          (some #(string/ends-with? location %) [".tar.gz" ".tgz" ".zip"]) :url
-          :else :git)]
-    (case kind
-      :path {:type :path
-             :location (if (string/starts-with? location "file://") (git/file-url->path location) location)
-             :path "."}
-      :url {:type :url :url location :credentials onboarding-credentials :path "."}
-      {:type :git
-       :url location
-       :branch onboarding-branch
-       :credentials onboarding-credentials
-       :username onboarding-username
-       :path "."})))
-
-(defn configured?
-  [settings]
-  (not (string/blank? (:onboarding-url settings))))
+(def sync-failed
+  "The sync failed; the manager's log says why")
 
 (defn- failure-message
-  [error]
-  (or (:message (ex-data error)) (ex-message error) (str error)))
+  "What people read in the sync status: the message of an error the sync
+   raised itself. Anything else may name server paths, so it is only logged."
+  [what error]
+  (or (:message (ex-data error))
+      (do
+        (log/warn error "Sync failed:" what)
+        sync-failed)))
 
 (defn- fetch-onboarding
-  "The onboarding token has no host check: no platform spec declares its
+  "The onboarding token has no host check: no tenant spec declares its
    hosts before the onboarding repository is read."
-  [{:keys [settings secret]}]
-  (let [source
-        (onboarding-source settings)
-
-        token
-        (when-let [name (:onboarding-credentials settings)]
-          (secret name))
+  [{:keys [settings secret]} {:keys [name source]}]
+  (let [token
+        (when-let [secret-name (:credentials source)]
+          (secret secret-name))
 
         commit
-        (fetch-source settings "onboarding" source token)
+        (fetch-source settings (onboarding-key name) source token)
 
         file
-        (io/file (source-root settings "onboarding" source) (:onboarding-file settings))
+        (io/file (source-root settings (onboarding-key name) source) (str (:path source)) (:tenant-file settings))
 
         {:keys [value errors]}
-        (spec/parse-platform (slurp file))]
+        (cond
+          (not (.isFile file))
+          {:errors ["not found at the root of the onboarding source"]}
+
+          :else
+          (try
+            (spec/parse-tenant (slurp file))
+            (catch com.fasterxml.jackson.core.JacksonException error
+              {:errors [(invalid-json error)]})))]
     (if (seq errors)
-      {:error (string/join "; " errors)}
+      {:error (str (:tenant-file settings) ": " (string/join "; " errors))}
       {:commit commit
        :spec value})))
 
-(defn sync-team
-  "Fetches a team repository and loads its definitions."
-  [{:keys [settings] :as env} platform team]
-  (let [{:keys [commit definitions error]}
+(defn team-entry
+  "A team as the platform uses it: its tenant.json entry with its tenant and
+   what its team.json grants (:budget :llm-connections :mcp-servers
+   :projects) and requires of its members (:required-credentials)."
+  [tenant-name tenant-spec entry config]
+  (assoc entry
+         :tenant tenant-name
+         :budget (or (:budget config) {})
+         :llm-connections (spec/team-llm-connections tenant-spec (:id entry) config)
+         :mcp-servers (spec/team-mcp-servers tenant-spec (:id entry) config)
+         :projects (vec (:projects config))
+         :required-credentials (vec (:required-credentials config))))
+
+(defn- read-team-config
+  [settings tenant-spec entry]
+  (let [file
+        (io/file (team-dir settings entry) (:team-config-file settings))
+
+        {:keys [value errors]}
         (try
-          {:commit (fetch! env (team-key (:id team)) (:repository team) platform)
-           :definitions (load-definitions settings platform team)}
+          (spec/parse-team-config tenant-spec (:id entry) (when (.isFile file) (slurp file)))
+          (catch com.fasterxml.jackson.core.JacksonException error
+            {:errors [(invalid-json error)]}))]
+    (when (seq errors)
+      (throw (sources/source-error (str (:team-config-file settings) ": " (string/join "; " errors)))))
+    value))
+
+(defn sync-team
+  "Fetches a team repository and loads its team.json and definitions."
+  [{:keys [settings] :as env} tenant-name tenant-spec entry]
+  (let [located
+        (assoc entry :tenant tenant-name)
+
+        {:keys [commit config definitions error]}
+        (try
+          (let [commit
+                (fetch! env (team-key tenant-name (:id entry)) (:repository entry) tenant-spec)
+
+                config
+                (read-team-config settings tenant-spec located)]
+            {:commit commit
+             :config config
+             :definitions (load-definitions settings tenant-spec (team-entry tenant-name tenant-spec entry config))})
           (catch Exception error
-            {:error (failure-message error)}))]
-    {:team-id (:id team)
-     :spec team
+            {:error (failure-message (str "team " (:id entry) " of " tenant-name) error)}))]
+    {:tenant tenant-name
+     :team-id (:id entry)
+     :spec entry
+     :config config
      :commit commit
      :synced-at (time/now)
      :status (if error :error :ok)
      :error error
-     :members (vec (concat (for [username (:members team)
-                                 :when (not (some #{username} (:admins team)))]
-                             {:username username :role :member})
-                           (for [username (distinct (:admins team))]
-                             {:username username :role :admin})))
      :definitions (when-not error definitions)}))
 
 (defn run-sync
-  "Fetches the onboarding repository and every team repository.
-   env: {:settings :secret (fn [name] value-or-nil)}. Returns
-   {:synced-at :commit :spec :teams [...]} or {:synced-at :error}."
-  [{:keys [settings] :as env}]
-  (if-not (configured? settings)
-    {:error "No onboarding repository configured (MANAGER_ONBOARDING_URL)"
-     :unconfigured true}
-    (let [synced-at
-          (time/now)
+  "Fetches a tenant's onboarding repository and every team repository.
+   env: {:settings :secret (fn [name] value-or-nil)}, tenant: {:name
+   :source}. Returns {:tenant :synced-at :commit :spec :teams [...]} or
+   {:tenant :synced-at :error}."
+  [env {:keys [name] :as tenant}]
+  (let [synced-at
+        (time/now)
 
-          onboarding
-          (try
-            (fetch-onboarding env)
-            (catch Exception error
-              {:error (failure-message error)}))]
-      (if (:error onboarding)
-        (assoc onboarding :synced-at synced-at)
-        (assoc onboarding
-               :synced-at synced-at
-               :teams (mapv #(sync-team env (:spec onboarding) %) (get-in onboarding [:spec :teams])))))))
+        onboarding
+        (try
+          (fetch-onboarding env tenant)
+          (catch Exception error
+            {:error (failure-message (str "onboarding of " name) error)}))]
+    (if (:error onboarding)
+      (assoc onboarding :tenant name :synced-at synced-at)
+      (assoc onboarding
+             :tenant name
+             :synced-at synced-at
+             :teams (mapv #(sync-team env name (:spec onboarding) %) (get-in onboarding [:spec :teams]))))))
 
 (defn summary
   [{:keys [error commit teams]}]

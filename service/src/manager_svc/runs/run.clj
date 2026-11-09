@@ -3,46 +3,64 @@
    :cancelled. People start, retry and cancel runs; the executor records each
    step it carries out with the :non-interactive lifecycle commands. Lifecycle
    commands on a finished run produce no event, so a step that races a cancel
-   changes nothing."
+   changes nothing.
+
+   A run belongs to a team of a tenant (:tenant :team-id). People start runs
+   in their own tenant; only the team's members (and the tenant's admins)
+   see them. A team admin may also start a team-scoped session
+   (:start-team-session): a platform-started run of an interactive workflow
+   whose session belongs to the team, not to a person."
   (:require [clojure.string :as string]
             [edd.core :as edd]
             [edd.el.ctx :as el-ctx]
             [manager-svc.auth :as auth]
+            [manager-svc.credentials.api :as credentials]
             [manager-svc.directory :as directory]
             [manager-svc.errors :as errors]
             [manager-svc.platform.api :as platform]
+            [manager-svc.roles :as roles]
             [manager-svc.runs.definitions :as definitions]
             [manager-svc.runs.model :as model]
+            [manager-svc.sessions.api :as sessions]
             [manager-svc.system :as system]
             [manager-svc.time :as time]))
 
-(defn ->uuid
-  [value]
-  (cond
-    (uuid? value) value
-    (string? value) (parse-uuid value)
-    :else nil))
-
-(defn session-limit-error
-  "Why the team may not start another session, or nil."
-  [system team-id running]
-  (let [limit
-        (get-in (definitions/team system team-id) [:budget :max-running-sessions])]
-    (when (and limit (>= running limit))
-      (str "Team " team-id " already has " running
-           " running sessions (limit " limit "). Stop one and retry."))))
+(defn- running-sessions-of
+  [tenant team-id]
+  (when (and tenant team-id)
+    {:query-id :count-running-sessions
+     :tenant tenant
+     :team-id team-id}))
 
 (defn running-sessions-dep
-  "The team's running session count, read before :start-run runs, so the
-   command itself stays pure."
-  [_deps cmd]
-  {:query-id :count-running-sessions
-   :team-id (get-in cmd [:attrs :team-id])})
+  "The team's running session count, read before a person starts work in
+   it, so the command itself stays pure. The platform's own runs are checked
+   when the executor prepares their session."
+  [ctx cmd]
+  (running-sessions-of (roles/tenant-of ctx) (get-in cmd [:attrs :team-id])))
+
+(defn retry-running-sessions-dep
+  [ctx _cmd]
+  (let [source
+        (get-in ctx [:source :run])]
+    (running-sessions-of (:tenant source) (:team-id source))))
+
+(defn required-credentials-dep
+  "Which credentials the team requires of the person starting work in it
+   that they haven't added, read before the command."
+  [ctx cmd]
+  (credentials/required-credentials-dep ctx (roles/tenant-of ctx) (get-in cmd [:attrs :team-id])))
+
+(defn retry-credentials-dep
+  [ctx _cmd]
+  (let [source
+        (get-in ctx [:source :run])]
+    (credentials/required-credentials-dep ctx (:tenant source) (:team-id source))))
 
 (defn- workflow!
-  [system team-id workflow-id]
-  (or (definitions/workflow system team-id workflow-id)
-      (errors/invalid! (str "Workflow " team-id "/" workflow-id " does not exist or is invalid"))))
+  [system tenant team-id workflow-id]
+  (or (definitions/workflow system tenant team-id workflow-id)
+      (errors/invalid! (definitions/missing-workflow team-id workflow-id))))
 
 (defn- scm-of
   [{:keys [trigger]}]
@@ -51,9 +69,11 @@
 
 (defn created-event
   "The :run-created event of a new run; validates the workflow and inputs."
-  [system id {:keys [team-id workflow-id inputs trigger created-by platform-started]}]
+  [system id {:keys [tenant team-id workflow-id inputs trigger created-by platform-started session-visibility]}]
+  (when-not (string? tenant)
+    (errors/invalid! "A run needs a tenant"))
   (let [workflow
-        (workflow! system team-id workflow-id)
+        (workflow! system tenant team-id workflow-id)
 
         {:keys [value errors]}
         (platform/validate-inputs system (:activity workflow) inputs (:options workflow))
@@ -66,14 +86,17 @@
         (time/now)]
     {:event-id :run-created
      :id id
-     :attrs {:team-id team-id
-             :workflow-id workflow-id
-             :activity (:activity workflow)
-             :trigger trigger
-             :inputs value
-             :created-by created-by
-             :platform-started (boolean platform-started)
-             :at stamp}}))
+     :attrs (cond-> {:tenant tenant
+                     :team-id team-id
+                     :workflow-id workflow-id
+                     :activity (:activity workflow)
+                     :trigger trigger
+                     :inputs value
+                     :created-by created-by
+                     :platform-started (boolean platform-started)
+                     :at stamp}
+              session-visibility (assoc :session-visibility session-visibility)
+              (:project workflow) (assoc :project (:project workflow)))}))
 
 (defn- ensure-new!
   [ctx]
@@ -91,6 +114,34 @@
            {:created-by (or person created-by auth/platform-user)
             :platform-started (nil? person)})))
 
+(defn- limit-checked!
+  [ctx system tenant team-id]
+  (when-let [limit-error
+             (sessions/session-limit-error system tenant team-id (get-in ctx [:running-sessions :count] 0))]
+    (errors/invalid! limit-error)))
+
+(defn member!
+  "Fails unless caller works in team-id of their tenant: 403 with the reason
+   for a team of the tenant they aren't in, 404 for a team it doesn't have."
+  [system caller team-id]
+  (let [tenant
+        (:tenant caller)]
+    (cond
+      (roles/member? caller tenant team-id)
+      nil
+
+      (definitions/team system tenant team-id)
+      (errors/forbidden! (str "Only members of " team-id " can work in it. Ask an admin of " team-id
+                              " or your tenant admin to add you."))
+
+      :else
+      (errors/not-found! "Team not found"))))
+
+(def person-visibilities
+  "Who may see the session of a run a person starts; without one the
+   workflow's visibility decides."
+  #{:private :team :tenant})
+
 (defn start-run
   [ctx {:keys [id attrs]}]
   (ensure-new! ctx)
@@ -104,19 +155,20 @@
       (let [user
             (auth/user-id ctx)
 
+            tenant
+            (roles/tenant-of ctx)
+
             _
-            (when-not (platform/role system user team-id)
-              (errors/not-found! "Team not found"))
+            (member! system (roles/caller ctx) team-id)
 
             workflow
-            (workflow! system team-id workflow-id)
-
-            limit-error
-            (session-limit-error system team-id (get-in ctx [:running-sessions :count] 0))
+            (workflow! system tenant team-id workflow-id)
 
             _
-            (when limit-error
-              (errors/invalid! limit-error))
+            (credentials/require-credentials! (:missing-credentials ctx))
+
+            _
+            (limit-checked! ctx system tenant team-id)
 
             scm
             (scm-of workflow)
@@ -124,19 +176,69 @@
             trigger
             (cond-> {:type "manual" :by user}
               scm (assoc :scm scm))]
-        (created-event system id {:team-id team-id
+        (created-event system id {:tenant tenant
+                                  :team-id team-id
                                   :workflow-id workflow-id
                                   :inputs (:inputs attrs)
                                   :trigger trigger
-                                  :created-by user})))))
+                                  :created-by user
+                                  :session-visibility (some-> (:visibility attrs) keyword person-visibilities)})))))
+
+(def session-visibilities
+  #{:team :tenant})
+
+(defn start-team-session
+  "A team admin opens a session in the team's scope: a platform-started run
+   of an interactive workflow, so the session works with the team's
+   credentials and only team members may work in it."
+  [ctx {:keys [id attrs]}]
+  (ensure-new! ctx)
+  (let [system
+        (system/of ctx)
+
+        tenant
+        (roles/tenant-of ctx)
+
+        {:keys [team-id workflow-id inputs visibility]}
+        attrs
+
+        _
+        (roles/require-team-admin! ctx tenant team-id)
+
+        workflow
+        (workflow! system tenant team-id workflow-id)
+
+        _
+        (when-not (:interactive (platform/activity system (:activity workflow)))
+          (errors/invalid! (str "Workflow " workflow-id " is not interactive: team sessions need an interactive workflow")))
+
+        _
+        (credentials/require-credentials! (:missing-credentials ctx))
+
+        _
+        (limit-checked! ctx system tenant team-id)]
+    (created-event system id {:tenant tenant
+                              :team-id team-id
+                              :workflow-id workflow-id
+                              :inputs (or inputs {})
+                              :trigger {:type "team_session" :by (auth/user-id ctx)}
+                              :created-by auth/platform-user
+                              :platform-started true
+                              :session-visibility (or (some-> visibility keyword session-visibilities) :team)})))
 
 (defn visible!
-  "The run when the person is a member of its team; 404 otherwise."
-  [system user run]
-  (if (and (:status run)
-           (contains? (set (platform/teams-of system user)) (:team-id run)))
-    run
-    (errors/not-found! "Run not found")))
+  "The run when the caller is a member of its team (or an admin of its
+   tenant); 403 for someone else of its tenant, 404 for other tenants."
+  [caller run]
+  (cond
+    (not (and (:status run) (roles/same-tenant? caller (:tenant run))))
+    (errors/not-found! "Run not found")
+
+    (not (roles/member? caller (:tenant run) (:team-id run)))
+    (errors/forbidden! (str "Only members of " (:team-id run) " can see its runs. Ask an admin of " (:team-id run)
+                            " or your tenant admin to add you."))
+
+    :else run))
 
 (defn retry-run
   [ctx {:keys [id]}]
@@ -148,25 +250,32 @@
         (auth/user-id ctx)
 
         source
-        (visible! system user (get-in ctx [:source :run]))]
-    (created-event system id {:team-id (:team-id source)
+        (visible! (roles/caller ctx) (get-in ctx [:source :run]))]
+    (when-not (model/finished? source)
+      (errors/fail! 409 "Run is still active; cancel it before running it again"))
+    (credentials/require-credentials! (:missing-credentials ctx))
+    (limit-checked! ctx system (:tenant source) (:team-id source))
+    (created-event system id {:tenant (:tenant source)
+                              :team-id (:team-id source)
                               :workflow-id (:workflow-id source)
                               :inputs (:inputs source)
                               :trigger (assoc (:trigger source) :retry-of (:id source) :by user)
-                              :created-by user})))
+                              :created-by user
+                              :session-visibility (when-not (model/platform-created? source)
+                                                    (:session-visibility source))})))
 
 (defn cancel-run
   [ctx {:keys [id]}]
-  (let [system
-        (system/of ctx)
+  (let [caller
+        (roles/caller ctx)
 
         user
         (auth/user-id ctx)
 
         run
-        (visible! system user (el-ctx/get-aggregate ctx))]
+        (visible! caller (el-ctx/get-aggregate ctx))]
     (when (and (not= user (:created-by run))
-               (not= :admin (some-> (platform/role system user (:team-id run)) keyword)))
+               (not (roles/team-admin? caller (:tenant run) (:team-id run))))
       (errors/forbidden! "Only the run's creator or a team admin can do that"))
     (when (model/finished? run)
       (errors/fail! 409 (str "Run is already " (name (:status run)))))
@@ -338,9 +447,6 @@
   [run event]
   (assoc (touched run event) :notified true))
 
-(def ^:private platform-only
-  {:role [:non-interactive]})
-
 (def lifecycle-commands
   [[:mark-run-preparing :run-preparing apply-preparing]
    [:record-run-session :run-session-created apply-session]
@@ -369,7 +475,7 @@
   "Wrapped as {:run}: edd treats a dependency answer with :error as failed."
   [_deps cmd]
   {:query-id :get-run-source
-   :run-id (->uuid (get-in cmd [:attrs :source-id]))})
+   :run-id (get-in cmd [:attrs :source-id])})
 
 (def unlisted-events
   "Events that change nothing a run list shows."
@@ -388,7 +494,7 @@
 
         person
         (model/person run)]
-    (cond-> [(directory/upsert (directory/team (:team-id run)) :runs row)]
+    (cond-> [(directory/upsert (directory/team (:tenant run) (:team-id run)) :runs row)]
       person (conj (directory/upsert (directory/user person) :runs row)))))
 
 (defn register
@@ -400,19 +506,34 @@
                                     [:id uuid?]
                                     [:attrs [:map
                                              [:team-id :string]
-                                             [:workflow-id :string]]]]
-                         :deps [:running-sessions running-sessions-dep]
+                                             [:workflow-id :string]
+                                             [:visibility {:optional true}
+                                              [:maybe [:enum :private :team :tenant "private" "team" "tenant"]]]]]]
+                         :deps [:running-sessions running-sessions-dep
+                                :missing-credentials required-credentials-dep]
                          :auth {:role [:user :non-interactive]})
+            (edd/reg-cmd :start-team-session start-team-session
+                         :consumes [:map
+                                    [:id uuid?]
+                                    [:attrs [:map
+                                             [:team-id :string]
+                                             [:workflow-id :string]
+                                             [:visibility {:optional true} [:maybe [:enum :team :tenant "team" "tenant"]]]]]]
+                         :deps [:running-sessions running-sessions-dep
+                                :missing-credentials required-credentials-dep]
+                         :auth roles/people)
             (edd/reg-cmd :retry-run retry-run
-                         :consumes [:map [:id uuid?] [:attrs [:map [:source-id any?]]]]
-                         :deps [:source source-dep]
-                         :auth {:role [:user]})
+                         :consumes [:map [:id uuid?] [:attrs [:map [:source-id uuid?]]]]
+                         :deps [:source source-dep
+                                :missing-credentials retry-credentials-dep
+                                :running-sessions retry-running-sessions-dep]
+                         :auth roles/people)
             (edd/reg-cmd :cancel-run cancel-run
                          :consumes id-command
-                         :auth {:role [:user]})
+                         :auth roles/people)
             (edd/reg-cmd :submit-run-result submit-result
                          :consumes id-command
-                         :auth platform-only)
+                         :auth roles/platform-only)
             (edd/reg-event :run-created apply-created)
             (edd/reg-event :run-cancelled apply-cancelled)
             (edd/reg-event :run-result-submitted apply-submitted))
@@ -422,7 +543,7 @@
                   (-> acc
                       (edd/reg-cmd cmd-id (lifecycle event-id)
                                    :consumes id-command
-                                   :auth platform-only)
+                                   :auth roles/platform-only)
                       (edd/reg-event event-id apply-fn)))
                 with-user-commands
                 lifecycle-commands)]
@@ -431,7 +552,7 @@
                (-> acc
                    (edd/reg-cmd cmd-id (lifecycle event-id :when-finished true)
                                 :consumes id-command
-                                :auth platform-only)
+                                :auth roles/platform-only)
                    (edd/reg-event event-id apply-fn)))
              with-lifecycle
              after-finish-commands)

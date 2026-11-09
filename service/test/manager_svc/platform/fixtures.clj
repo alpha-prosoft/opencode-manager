@@ -1,6 +1,6 @@
 (ns manager-svc.platform.fixtures
   "Temporary git repositories and a platform system whose sync records into
-   the mock DAL."
+   the mock DAL. The tenant is acme unless a test configures others."
   (:require [clojure.java.io :as io]
             [clojure.java.shell :as shell]
             [edd.security :as security]
@@ -61,12 +61,19 @@
   [dir]
   (str "file://" (.getPath (io/file dir))))
 
+(def tenant
+  "acme")
+
+(defn tenants-setting
+  "MANAGER_TENANTS for {tenant onboarding-location}."
+  [locations]
+  (json/write-value-as-string (for [[tenant-name location] locations]
+                                {:name tenant-name :onboarding location})))
+
 (defn settings
   [roots & {:as overrides}]
   (merge support/settings
-         {:onboarding-url (file-url (io/file roots "onboarding"))
-          :onboarding-branch "main"
-          :onboarding-file "platform.json"
+         {:tenants (tenants-setting {tenant (file-url (io/file roots "onboarding"))})
           :repos-dir (.getPath (io/file roots "data"))
           :local-repo-roots [(.getPath (io/file roots))]}
          overrides))
@@ -106,28 +113,26 @@
 (def agent-spec
   {:prompt "You are helpful."})
 
-(defn platform-json
+(defn tenant-json
   [roots & {:as team}]
-  {:admins ["root"]
-   :llm_connections [{:id "llm" :base_url "https://llm.example" :secret "LLM_KEY" :models ["model-a"]}]
+  {:llm_connections [{:id "llm" :base_url "https://llm.example" :secret "LLM_KEY" :models ["model-a" "model-b"]}]
    :secret_hosts {:GIT_TOKEN ["git.example.com"]}
    :teams [(merge {:id "team"
                    :name "Team"
-                   :repository {:url (file-url (io/file roots "team"))}
-                   :members ["dev"]}
+                   :repository {:url (file-url (io/file roots "team"))}}
                   team)]})
 
 (defn build!
   "Creates the team and onboarding repositories under roots and syncs; call
    inside mock/with-mock-dal. {:system :ctx :summary}."
-  [roots platform team-files & {:as overrides}]
+  [roots tenant-spec team-files & {:as overrides}]
   (git-repo! (io/file roots "team")
              (into {} (map (fn [[k v]] [(str ".platform/" k) v])) team-files))
-  (git-repo! (io/file roots "onboarding") {"platform.json" platform})
+  (git-repo! (io/file roots "onboarding") {"tenant.json" tenant-spec})
   (let [{:keys [system] :as built}
         (system (apply settings roots (mapcat identity overrides)))]
     (assoc built :summary (api/sync! system))))
 
 (defn errors-of
   [system kind id]
-  (:errors (some #(when (= id (:id %)) %) (api/definitions system "team" kind))))
+  (:errors (some #(when (= id (:id %)) %) (api/definitions system tenant "team" kind))))

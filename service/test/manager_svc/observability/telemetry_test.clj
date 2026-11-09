@@ -6,7 +6,6 @@
             [manager-svc.observability.core :as core]
             [manager-svc.observability.edge :as edge]
             [manager-svc.observability.telemetry :as telemetry]
-            [manager-svc.platform.api :as platform]
             [manager-svc.sessions.api :as sessions]
             [manager-svc.test-support :as support]))
 
@@ -22,6 +21,7 @@
   (mock/apply-cmd (support/as-platform ctx)
                   {:commands (telemetry/commands (assoc (telemetry/parse-report body)
                                                         :session-id (str session-id)
+                                                        :tenant "acme"
                                                         :team-id "alpha"
                                                         :ts ts))}))
 
@@ -29,9 +29,11 @@
   [visibility & body]
   `(with-redefs [sessions/get-session (fn [_# id#]
                                         (when (= session-id id#)
-                                          {:id session-id :sub "alice" :visibility ~visibility :team-id "alpha"}))
-                 platform/role (fn [_# user# _#] (when (= "bob" user#) :member))
-                 platform/platform-admin? (constantly false)]
+                                          {:id session-id :sub "alice" :visibility ~visibility :tenant "acme" :team-id "alpha"}))
+                 sessions/can-view? (fn [_# session# caller#]
+                                      (or (= (:id caller#) (:sub session#))
+                                          (= :tenant (:visibility session#))
+                                          (and (= :team (:visibility session#)) (= "bob" (:id caller#)))))]
      ~@body))
 
 (deftest activity-summarises-reports
@@ -76,9 +78,9 @@
          (= [8 7 6 5 4 3 2 1]
             (mapv :id (:events activity))))
         (is
-         (= #{{:team-id "alpha" :tool "bash" :kind :tool.end :n 2 :total-ms 400}
-              {:team-id "alpha" :tool "read" :kind :tool.end :n 1 :total-ms 300}
-              {:team-id "alpha" :tool "bash" :kind :tool.blocked :n 1 :total-ms 0}}
+         (= #{{:tenant "acme" :team-id "alpha" :tool "bash" :kind :tool.end :n 2 :total-ms 400}
+              {:tenant "acme" :team-id "alpha" :tool "read" :kind :tool.end :n 1 :total-ms 300}
+              {:tenant "acme" :team-id "alpha" :tool "bash" :kind :tool.blocked :n 1 :total-ms 0}}
             (set (:tools (mock/query (support/as-platform ctx) {:query-id :get-observability-metrics})))))))))
 
 (deftest idle-after-session-idle-event
@@ -105,7 +107,7 @@
                   (:status (ex-data e)))))))))))
 
 (deftest only-the-last-hundred-reports-are-listed
-  (with-session :public
+  (with-session :tenant
     (mock/with-mock-dal
       (let [ctx
             (ctx)
@@ -207,3 +209,47 @@
     (is
      (= #{"/metrics"}
         (paths core/routes)))))
+
+(defn- refusal
+  [body]
+  (try
+    (telemetry/parse-report body)
+    nil
+    (catch clojure.lang.ExceptionInfo e
+      (ex-message e))))
+
+(deftest names-are-text-and-details-are-kept-short
+  (is
+   (= ["tool must be text" "call_id must be text" "conversation must be text" "event must be text"]
+      (mapv refusal [{"kind" "tool.end" "tool" {"a" 1}}
+                     {"kind" "tool.end" "tool" "bash" "call_id" 7}
+                     {"kind" "tool.end" "tool" "bash" "conversation" ["c1"]}
+                     {"kind" "event" "event" true}])))
+  (let [{:keys [args details output-bytes]}
+        (:detail (telemetry/parse-report {"kind" "tool.end"
+                                          "tool" "bash"
+                                          "args" {"b" 1 "a" [1 2]}
+                                          "details" (vec (repeat 5000 "x"))
+                                          "output_bytes" 40}))]
+    (is
+     (= "{\"a\":[1,2],\"b\":1}"
+        args))
+    (is
+     (= [telemetry/max-detail-chars 40]
+        [(count details) output-bytes]))))
+
+(deftest a-team-counts-a-bounded-number-of-tools
+  (with-redefs [telemetry/max-tools 2]
+    (let [report
+          (fn [aggregate tenant tool]
+            (telemetry/apply-rolled-up aggregate {:attrs {:tenant tenant :team-id "alpha" :tool tool :kind :tool.end
+                                                          :duration-ms 5}}))
+
+          rows
+          (:rows (reduce (fn [aggregate [tenant tool]] (report aggregate tenant tool))
+                         {}
+                         [["acme" "bash"] ["acme" "read"] ["acme" "x1"] ["acme" "x2"] ["acme" "bash"]
+                          ["globex" "x1"]]))]
+      (is
+       (= [["acme" "bash" 2 10] ["acme" "read" 1 5] ["acme" "other" 2 10] ["globex" "x1" 1 5]]
+          (mapv (juxt :tenant :tool :n :total-ms) rows))))))

@@ -3,7 +3,7 @@
     "id": "session",
     "name": "Workspace",
     "category": "Workspace",
-    "description": "A personal OpenCode workspace in the browser, optionally with a repository checked out.",
+    "description": "An OpenCode workspace in the browser, for one person or shared by a team, optionally with a repository checked out.",
     "icon": "terminal",
     "interactive": true,
     "result_tool": null,
@@ -152,14 +152,28 @@
             "provider": {
               "enum": [
                 "bitbucket",
-                "github"
+                "github",
+                "gerrit"
               ],
               "title": "Provider",
               "type": "string"
             },
             "repository": {
-              "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+              "description": "workspace/repository (Bitbucket, GitHub) or the project name (Gerrit)",
+              "pattern": "^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$",
               "title": "Repository",
+              "type": "string"
+            },
+            "url": {
+              "description": "Base URL of a self-hosted provider (Gerrit), e.g. http://gerrit:8080",
+              "pattern": "^https?://",
+              "title": "Url",
+              "type": "string"
+            },
+            "web_url": {
+              "description": "Where browsers reach the provider, for links to changes (default: url)",
+              "pattern": "^https?://",
+              "title": "Web Url",
               "type": "string"
             },
             "credentials": {
@@ -349,8 +363,7 @@
               "type": "string"
             },
             "job": {
-              "description": "Job that builds the pull request; {pr} is replaced by its number, e.g. folder/repo/PR-{pr}",
-              "pattern": "\\{pr\\}",
+              "description": "Job that builds the change. With {pr} (replaced by the pull request number, e.g. folder/repo/PR-{pr}) its last build is followed; without, the job is shared (a Gerrit verify job) and the build whose description names the pushed commit is followed",
               "title": "Job",
               "type": "string"
             },
@@ -441,15 +454,28 @@
             "provider": {
               "enum": [
                 "bitbucket",
-                "github"
+                "github",
+                "gerrit"
               ],
               "title": "Provider",
               "type": "string"
             },
             "repository": {
-              "description": "workspace/repository on the provider",
-              "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+              "description": "workspace/repository (Bitbucket, GitHub) or the project name (Gerrit)",
+              "pattern": "^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$",
               "title": "Repository",
+              "type": "string"
+            },
+            "url": {
+              "description": "Base URL of a self-hosted provider (Gerrit), e.g. http://gerrit:8080",
+              "pattern": "^https?://",
+              "title": "Url",
+              "type": "string"
+            },
+            "web_url": {
+              "description": "Where browsers reach the provider, for links to changes (default: url)",
+              "pattern": "^https?://",
+              "title": "Web Url",
               "type": "string"
             },
             "target_branch": {
@@ -471,7 +497,8 @@
             "repository"
           ],
           "title": "PullRequestDelivery",
-          "type": "object"
+          "type": "object",
+          "description": "Push the change for review: a new branch and pull request (Bitbucket, GitHub) or a change pushed to refs/for/<branch> (Gerrit)"
         }
       },
       "additionalProperties": false,

@@ -1,12 +1,15 @@
 (ns manager-web.components.credential-form
-  "The form and dialog to set a credential. The secret is PUT to the edge,
-   which seals it before it reaches edd, so it never enters the command log."
+  "Setting and clearing a credential value of a scope (:mine, :tenant or
+   [:team team-id]): the form, its dialog, the buttons of a row and the
+   confirmation before a value goes. The secret is PUT to the edge, which
+   seals it before it reaches edd, so it never enters the command log."
   (:require ["@mui/material/Button" :default Button]
             ["@mui/material/Dialog" :default Dialog]
             ["@mui/material/DialogContent" :default DialogContent]
             ["@mui/material/DialogTitle" :default DialogTitle]
             ["@mui/material/TextField" :default TextField]
             [clojure.string :as string]
+            [manager-web.components.confirm :as confirm]
             [manager-web.components.elements :as els]
             [manager-web.data :as data]
             [manager-web.el :as el]
@@ -28,7 +31,14 @@
 
 (def ^:private paths
   {:mine "/api/credentials/"
-   :platform "/api/admin/credentials/"})
+   :tenant "/api/admin/credentials/"})
+
+(defn- scope-path
+  "scope is :mine, :tenant or [:team team-id]."
+  [scope]
+  (if (vector? scope)
+    (str "/api/teams/" (js/encodeURIComponent (str (second scope))) "/credentials/")
+    (get paths scope)))
 
 (defn run-id
   [scope credential-id]
@@ -36,7 +46,7 @@
 
 (defn save-path
   [scope credential-id]
-  (str (get paths scope) (js/encodeURIComponent (str credential-id))))
+  (str (scope-path scope) (js/encodeURIComponent (str credential-id))))
 
 (defn save-spec
   "The ::data/run spec that stores value. refetch lists load keys to refresh
@@ -114,10 +124,45 @@
 
 (rf/reg-sub ::editing (fn [db _] (::editing db)))
 
+(defn- scope-kind
+  [scope]
+  (if (vector? scope) :team scope))
+
+(defn tenant-help
+  "Who a tenant value serves, from who else may provide the credential."
+  [{:keys [provided-by]}]
+  (let [allowed
+        (format/scopes provided-by)]
+    (cond
+      (and (allowed :team) (allowed :user))
+      "Used by everyone in the tenant unless their team or they themselves set their own, and by automated runs."
+
+      (allowed :team)
+      "Used by every team that hasn't set its own value, and by automated runs."
+
+      (allowed :user)
+      "Used by everyone who hasn't added their own, and by automated runs."
+
+      :else
+      "Used by everyone in the tenant and by automated runs.")))
+
+(defn describe
+  "The dialog's :title, :help and :checks? for a credential value of scope."
+  [scope {:keys [name help test] :as credential}]
+  (case (scope-kind scope)
+    :mine {:title (str "Your " name " credential")
+           :help help
+           :checks? (some? test)}
+    :team {:title (str "Team value of " name)
+           :help (or help "Used by this team's sessions and runs instead of the tenant value; people may still use their own where allowed.")
+           :checks? (some? test)}
+    :tenant {:title (str "Tenant value of " name)
+             :help (tenant-help credential)}))
+
 (defn credential-dialog
-  "The dialog opened by [::edit scope credential]. describe gives the
-   credential's :title, :help and :checks?."
-  [{:keys [scope refetch describe]}]
+  "The dialog opened by [::edit scope credential]. refetch lists the load
+   keys to refresh after a save."
+  [{:keys [scope refetch]}]
   (let [editing
         @(rf/subscribe [::editing])
 
@@ -127,7 +172,7 @@
                 :data-testid (el/id els/credential-dialog)}
      (when editing
        (let [{:keys [title help checks?]}
-             (describe editing)]
+             (describe scope editing)]
          [:<>
           [:> DialogTitle title]
           [:> DialogContent
@@ -143,3 +188,58 @@
              :on-saved [::close]
              :extra-actions [[:> Button {:data-testid (el/id els/credential-cancel) :on-click close}
                               "Cancel"]]}]]]))]))
+
+(defn clear-command
+  [scope credential-id]
+  (case (scope-kind scope)
+    :mine {:cmd-id :delete-my-credential :attrs {:credential-id credential-id}}
+    :team {:cmd-id :delete-team-credential :attrs {:team-id (second scope) :credential-id credential-id}}
+    :tenant {:cmd-id :delete-tenant-credential :attrs {:credential-id credential-id}}))
+
+(defn- clear-texts
+  [scope {:keys [name provided-by required]}]
+  (case (scope-kind scope)
+    :mine {:title (str "Remove your " name " credential?")
+           :body (cond
+                   required "Your teams require your own value, so the platform stays closed to you until you add it again."
+                   (some #{:tenant :team} (format/scopes provided-by)) "Tools will use the shared team or tenant account again, where one is set."
+                   :else "Tools that need it stop working for you until you add it again.")
+           :confirm "Remove"}
+    :team {:title (str "Clear the team value of " name "?")
+           :body "The team's tools fall back to the tenant value, where one is set. People who added their own keep using theirs."
+           :confirm "Clear"}
+    :tenant {:title (str "Clear the tenant value of " name "?")
+             :body "Anything using the shared value stops working until it is set again. Values from secret files stay in place."
+             :confirm "Clear"}))
+
+(defn clear-request
+  "The confirmation before the value of credential in scope goes. error is
+   where a failure shows, refetch the load keys to refresh after."
+  [scope credential {:keys [error refetch]}]
+  (assoc (clear-texts scope credential)
+         :run {:id [::clear scope (:id credential)]
+               :error error
+               :command (clear-command scope (:id credential))
+               :refetch refetch}))
+
+(rf/reg-event-fx
+ ::clear
+ (fn [_ [_ scope credential opts]]
+   {:fx [[:dispatch [::confirm/ask (clear-request scope credential opts)]]]}))
+
+(defn actions
+  "The buttons of a credential's row: set or replace its value in scope
+   and, when clear is given ({:label :el-id :error :refetch}), clear it.
+   dense? is for table rows."
+  [{:keys [scope credential has-value? set-label set-el-id clear dense?]}]
+  [RawStack {:direction "row" :spacing 1 :sx (:end-aligned-row theme/sx)}
+   [:> Button (cond-> {:data-testid (el/id set-el-id)
+                       :on-click #(rf/dispatch [::edit scope credential])}
+                dense? (assoc :size "small")
+                (not dense?) (assoc :variant (if has-value? "text" "contained")))
+    (if has-value? "Replace" set-label)]
+   (when clear
+     [:> Button (cond-> {:color "error" :data-testid (el/id (:el-id clear))
+                         :on-click #(rf/dispatch [::clear scope credential (select-keys clear [:error :refetch])])}
+                  dense? (assoc :size "small"))
+      (:label clear)])])

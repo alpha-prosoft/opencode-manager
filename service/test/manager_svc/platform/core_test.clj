@@ -15,15 +15,18 @@
        (= {:sub "alice"
            :email "alice@users.local"
            :name "alice"
-           :platform-admin false
-           :teams []}
+           :tenant "acme"
+           :tenant-admin false
+           :operator false
+           :teams []
+           :tenant-teams []}
           (mock/query ctx {:query-id :get-me}))))))
 
 (deftest workers-sync-at-startup-and-on-request
   (let [jobs
         (platform/workers {:settings (assoc support/settings :sync-interval-minutes 5)})]
     (is
-     (= [[:platform-sync 300 0 nil] [:platform-sync-requested 60 30 true]]
+     (= [[:tenant-sync 300 0 nil] [:tenant-sync-requested 60 30 true] [:config-reload 10 0 nil]]
         (map (juxt :id :interval-seconds :initial-delay-seconds :reactive) jobs)))))
 
 (deftest a-failed-cache-load-does-not-skip-the-startup-sync

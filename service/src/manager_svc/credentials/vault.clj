@@ -4,14 +4,13 @@
   (:require [clojure.string :as string]
             [clojure.tools.logging :as log]
             [lambda.util :as util]
+            [manager-svc.errors :as errors]
             [manager-svc.files :as files])
   (:import [java.nio.charset StandardCharsets]
            [java.security SecureRandom]
            [java.util Arrays Base64]
            [javax.crypto Cipher]
            [javax.crypto.spec GCMParameterSpec SecretKeySpec]))
-
-(def platform-owner "")
 
 (def ^:private nonce-length 12)
 (def ^:private tag-bits 128)
@@ -102,6 +101,15 @@
         plaintext
         (.doFinal (cipher settings Cipher/DECRYPT_MODE nonce credential-id owner) ciphertext)]
     (select-keys (util/to-edn (String. plaintext StandardCharsets/UTF_8)) [:secret :username])))
+
+(defn open
+  "unseal, failing with 422 and message when sealed was made for another
+   purpose or owner, or is no sealed value at all."
+  [settings credential-id owner sealed message]
+  (try
+    (unseal settings credential-id owner sealed)
+    (catch Exception _
+      (errors/invalid! message))))
 
 (defn hint
   "What people see of a stored value: the username and the last four

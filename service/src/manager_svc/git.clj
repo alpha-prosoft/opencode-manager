@@ -50,18 +50,25 @@
     "an allowed root (none configured)"))
 
 (defn check-url
-  "Throws a git error unless url is ssh, https, or file:// under a local root."
-  [url local-roots]
-  (cond
-    (ssh? url)
-    nil
+  "Throws a git error unless url is ssh, https, file:// under a local root,
+   or http:// to one of http-hosts (local CI systems only)."
+  ([url local-roots]
+   (check-url url local-roots []))
+  ([url local-roots http-hosts]
+   (cond
+     (ssh? url)
+     nil
 
-    (string/starts-with? url "file://")
-    (when-not (paths/under-any? (file-url->path url) local-roots)
-      (throw (git-error (str "file:// repositories must live under " (roots-label local-roots)))))
+     (string/starts-with? url "file://")
+     (when-not (paths/under-any? (file-url->path url) local-roots)
+       (throw (git-error (str "file:// repositories must live under " (roots-label local-roots)))))
 
-    (not (string/starts-with? url "https://"))
-    (throw (git-error "only https://, ssh (git@host:repo) and file:// repositories are supported"))))
+     (string/starts-with? url "http://")
+     (when-not (some #{(host-of url)} http-hosts)
+       (throw (git-error (str "http:// is only allowed for the hosts in MANAGER_HTTP_GIT_HOSTS, not " (host-of url)))))
+
+     (not (string/starts-with? url "https://"))
+     (throw (git-error "only https://, ssh (git@host:repo) and file:// repositories are supported")))))
 
 (def ^:private git-config
   (delay
@@ -162,25 +169,40 @@
 
 (defn checkout
   "Clones or fast-forwards branch of url into target; returns the commit id.
-   Anything at target that is not a checkout is removed (links are not followed)."
-  [{:keys [url branch target username token local-roots depth] :or {depth 1}}]
-  (check-url url local-roots)
+   branch may also be a ref (refs/changes/01/1/1), which is fetched into a
+   new repository. Anything at target that is not a checkout is removed
+   (links are not followed)."
+  [{:keys [url branch target username token local-roots http-hosts depth] :or {depth 1}}]
+  (check-url url local-roots http-hosts)
   (let [target-file
         (io/file target)]
     (with-credentials url username token
       (fn [auth env]
-        (when (and (Files/exists (.toPath target-file) (into-array LinkOption [LinkOption/NOFOLLOW_LINKS]))
-                   (not (git-dir? target-file)))
-          (paths/delete-tree! target-file))
-        (if (git-dir? target-file)
-          (do
-            (run ["remote" "set-url" "origin" url] :token token :dir target-file)
-            (run (concat auth ["fetch" "--quiet" "--depth" (str depth) "origin" branch])
-                 :token token :dir target-file :env env)
-            (run ["reset" "--quiet" "--hard" "FETCH_HEAD"] :token token :dir target-file))
-          (do
-            (io/make-parents target-file)
-            (run (concat auth ["clone" "--quiet" "--depth" (str depth) "--single-branch" "--branch" branch
-                               url (.getPath target-file)])
-                 :token token :env env)))))
+        (let [fetch!
+              (fn []
+                (run (concat auth ["fetch" "--quiet" "--depth" (str depth) "origin" branch])
+                     :token token :dir target-file :env env)
+                (run ["reset" "--quiet" "--hard" "FETCH_HEAD"] :token token :dir target-file))]
+          (when (and (Files/exists (.toPath target-file) (into-array LinkOption [LinkOption/NOFOLLOW_LINKS]))
+                     (not (git-dir? target-file)))
+            (paths/delete-tree! target-file))
+          (cond
+            (git-dir? target-file)
+            (do
+              (run ["remote" "set-url" "origin" url] :token token :dir target-file)
+              (fetch!))
+
+            (string/starts-with? branch "refs/")
+            (do
+              (io/make-parents target-file)
+              (run ["init" "--quiet" (.getPath target-file)] :token token)
+              (run ["remote" "add" "origin" url] :token token :dir target-file)
+              (fetch!))
+
+            :else
+            (do
+              (io/make-parents target-file)
+              (run (concat auth ["clone" "--quiet" "--depth" (str depth) "--single-branch" "--branch" branch
+                                 url (.getPath target-file)])
+                   :token token :env env))))))
     (run ["rev-parse" "HEAD"] :token token :dir target-file)))

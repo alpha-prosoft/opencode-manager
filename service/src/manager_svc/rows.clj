@@ -1,6 +1,11 @@
 (ns manager-svc.rows
   "Vectors of maps kept unique by a key.")
 
+(defn by-id
+  "The row of rows with id, or nil."
+  [rows id]
+  (some #(when (= id (:id %)) %) rows))
+
 (defn upsert
   "rows with (f row) applied to the first row matching match?, or with
    (f init) appended when none does."

@@ -9,14 +9,16 @@
      call of a run on the run's rollup.
    The user is the session's owner: the person who started the run, or who
    forked the session.
-   Admin and team usage sum day rollups (day granularity), metrics read the
-   all-time rollup, and a rollup also keeps tokens per team, which the
-   budget check reads, so no view scans every session."
+   Rollup rows carry the session's tenant and team, and every read is of one
+   tenant. Admin and team usage sum day rollups (day granularity), metrics
+   read the all-time rollup, and a rollup also keeps tokens per tenant and
+   team, which the budget check reads, so no view scans every session."
   (:require [edd.common :as common]
             [edd.core :as edd]
             [lambda.uuid :as uuid]
             [manager-svc.platform.api :as platform]
             [manager-svc.rows :as rows]
+            [manager-svc.roles :as roles]
             [manager-svc.system :as system]
             [manager-svc.time :as time])
   (:import [java.time LocalDate ZoneOffset]))
@@ -28,10 +30,15 @@
   (zipmap counters (repeat 0)))
 
 (def row-keys
-  [:team-id :connection :model])
+  [:tenant :team-id :connection :model])
 
 (def rollup-keys
-  [:team-id :username :connection :model])
+  [:tenant :team-id :username :connection :model])
+
+(defn team-key
+  "Key of a team's tokens in a rollup's :team-tokens."
+  [tenant team-id]
+  (str tenant "/" (or team-id "")))
 
 (defn aggregate-id
   [session-id]
@@ -78,7 +85,8 @@
 
 (defn- row-of
   [call]
-  {:team-id (or (:team-id call) "")
+  {:tenant (:tenant call)
+   :team-id (or (:team-id call) "")
    :username (:username call)
    :connection (:connection call)
    :model (:model call)})
@@ -105,13 +113,14 @@
          (add-totals aggregate (call-totals attrs))
          {:session-id (str (:session-id attrs))
           :run-id (some-> (:run-id attrs) str)
+          :tenant (:tenant attrs)
           :team-id (:team-id attrs)}))
 
 (defn apply-rolled-up
   [aggregate {:keys [attrs]}]
   (-> aggregate
       (assoc :rows (add-to-rows (:rows aggregate) attrs))
-      (update-in [:team-tokens (or (:team-id attrs) "")] (fnil + 0) (tokens attrs))))
+      (update-in [:team-tokens (team-key (:tenant attrs) (:team-id attrs))] (fnil + 0) (tokens attrs))))
 
 (defn summary
   "{:calls :prompt-tokens :completion-tokens :cached-tokens :errors :avg-latency-ms}"
@@ -158,6 +167,15 @@
     (mapcat #(:rows (common/get-by-id ctx {:id (day-id %)})) (days-since since))
     (:rows (common/get-by-id ctx {:id total-id}))))
 
+(defn tenant-rows-since
+  "rows-since of one tenant."
+  [ctx tenant since]
+  (filter #(= tenant (:tenant %)) (rows-since ctx since)))
+
+(defn- of-team?
+  [team-id row]
+  (= (or team-id "") (:team-id row)))
+
 (defn record-cmd
   [_ctx {:keys [id attrs]}]
   {:event-id :usage-recorded
@@ -192,7 +210,7 @@
     (:run-id call) (conj (roll-up call :run))))
 
 (defn- summary-query
-  [ctx {:keys [session-id run-id team-id since]}]
+  [ctx {:keys [session-id run-id tenant team-id since]}]
   (cond
     session-id
     (summary (common/get-by-id ctx {:id (aggregate-id session-id)}))
@@ -203,42 +221,43 @@
 
     :else
     (summary (reduce add-totals empty-totals
-                     (filter #(= (or team-id "") (:team-id %)) (rows-since ctx since))))))
+                     (filter #(of-team? team-id %) (tenant-rows-since ctx tenant since))))))
 
 (defn- priced
   [ctx rows]
   (let [system
         (system/of ctx)]
-    (mapv #(assoc % :cost (price (platform/llm-connection system (:connection %)) %)) rows)))
+    (mapv #(assoc % :cost (price (platform/llm-connection system (:tenant %) (:connection %)) %)) rows)))
 
 (defn rows-query
-  "Rows per team, connection and model since, each with its :cost (nil
-   without pricing)."
-  [ctx {:keys [team-ids since]}]
+  "Rows of a tenant per team, connection and model since, each with its
+   :cost (nil without pricing)."
+  [ctx {:keys [tenant team-ids since]}]
   (let [teams
         (when team-ids (set team-ids))]
-    (priced ctx (group-rows (filter #(or (nil? teams) (contains? teams (:team-id %))) (rows-since ctx since))
+    (priced ctx (group-rows (filter #(or (nil? teams) (contains? teams (:team-id %)))
+                                    (tenant-rows-since ctx tenant since))
                             row-keys))))
 
 (defn team-tokens-today
   "Tokens of a team's calls today, from today's rollup."
-  [ctx team-id]
+  [ctx tenant team-id]
   (let [day
         (common/get-by-id ctx {:id (day-id (day-of (time/now)))})]
-    (or (get-in day [:team-tokens (or team-id "")])
-        (reduce + 0 (map tokens (filter #(= (or team-id "") (:team-id %)) (:rows day)))))))
+    (or (get-in day [:team-tokens (team-key tenant team-id)])
+        (reduce + 0 (map tokens (filter #(and (= tenant (:tenant %)) (of-team? team-id %)) (:rows day)))))))
 
 (defn- team-tokens-query
-  [ctx {:keys [team-id]}]
-  {:tokens (team-tokens-today ctx team-id)})
+  [ctx {:keys [tenant team-id]}]
+  {:tokens (team-tokens-today ctx tenant team-id)})
 
 (defn team-usage-query
   "What a team page shows: {:usage summary :used-today tokens :by-model rows}."
-  [ctx {:keys [team-id since]}]
+  [ctx {:keys [tenant team-id since]}]
   (let [team-rows
-        (filter #(= team-id (:team-id %)) (rows-since ctx since))]
+        (filter #(= team-id (:team-id %)) (tenant-rows-since ctx tenant since))]
     {:usage (summary (reduce add-totals empty-totals team-rows))
-     :used-today (team-tokens-today ctx team-id)
+     :used-today (team-tokens-today ctx tenant team-id)
      :by-model (mapv #(select-keys % [:model :calls :prompt-tokens :completion-tokens])
                      (group-rows team-rows [:team-id :model]))}))
 
@@ -254,8 +273,8 @@
                      :tokens (reduce + 0 (map tokens items))})))))
 
 (defn- users-query
-  [ctx {:keys [since]}]
-  (tokens-by-user (rows-since ctx since)))
+  [ctx {:keys [tenant since]}]
+  (tokens-by-user (tenant-rows-since ctx tenant since)))
 
 (defn since-days
   "Start of the window of `days` UTC days that ends today."
@@ -263,9 +282,10 @@
   (time/start-of-day (dec (max 1 days))))
 
 (defn admin-usage-query
+  "Usage of the caller's tenant over the last days."
   [ctx {:keys [days]}]
-  (platform/require-admin! ctx)
-  (priced ctx (group-rows (rows-since ctx (since-days (or days 7))) row-keys)))
+  (roles/require-tenant-admin! ctx)
+  (priced ctx (group-rows (tenant-rows-since ctx (roles/tenant-of ctx) (since-days (or days 7))) row-keys)))
 
 (def RecordUsage
   [:map
@@ -296,15 +316,16 @@
       (edd/reg-query :get-usage-summary summary-query
                      :auth {:role [:non-interactive]})
       (edd/reg-query :get-usage-rows rows-query
+                     :consumes [:map [:tenant string?]]
                      :auth {:role [:non-interactive]})
       (edd/reg-query :get-team-tokens-today team-tokens-query
-                     :consumes [:map [:team-id [:maybe string?]]]
+                     :consumes [:map [:tenant string?] [:team-id [:maybe string?]]]
                      :auth {:role [:non-interactive]})
       (edd/reg-query :get-team-usage team-usage-query
-                     :consumes [:map [:team-id string?] [:since string?]]
+                     :consumes [:map [:tenant string?] [:team-id string?] [:since string?]]
                      :auth {:role [:non-interactive]})
       (edd/reg-query :get-usage-by-user users-query
-                     :consumes [:map [:since string?]]
+                     :consumes [:map [:tenant string?] [:since string?]]
                      :auth {:role [:non-interactive]})
       (edd/reg-query :get-admin-usage admin-usage-query
                      :consumes [:map [:days {:optional true} [:int {:min 1 :max 90}]]]

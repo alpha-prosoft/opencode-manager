@@ -36,5 +36,6 @@
   [session]
   [data/loaded {:key [:conversations (:id session)]
                 :query {:query-id :list-conversations :session-id (:id session)}
-                :interval (when (format/session-live? (:status session)) 10000)}
+                :interval (when (format/session-live? (:status session)) 10000)
+                :error-el-id els/conversations-error}
    #(conversation-list session %)])

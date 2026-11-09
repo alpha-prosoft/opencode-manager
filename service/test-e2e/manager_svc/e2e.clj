@@ -13,8 +13,9 @@
             [jsonista.core :as jsonista]
             [lambda.util :as util]
             [lambda.uuid :as uuid])
-  (:import [java.net URI]
+  (:import [java.net URI URLEncoder]
            [java.net.http HttpClient HttpClient$Redirect HttpRequest HttpRequest$BodyPublishers HttpResponse$BodyHandlers]
+           [java.nio.charset StandardCharsets]
            [java.time Duration]
            [java.util UUID]))
 
@@ -26,6 +27,26 @@
 
 (def results
   (atom []))
+
+(def started-runs
+  "[person run-id] of every run a pass starts, cancelled and cleaned up at its end."
+  (atom []))
+
+(def started-sessions
+  "[person session-id] of sessions a pass creates besides those of its runs (forks)."
+  (atom []))
+
+(defn track-run!
+  [person run-id]
+  (when run-id
+    (swap! started-runs conj [person run-id]))
+  run-id)
+
+(defn track-session!
+  [person session-id]
+  (when session-id
+    (swap! started-sessions conj [person session-id]))
+  session-id)
 
 (def token-file
   (io/file ".." "local" "secrets" "BITBUCKET_TOKEN"))
@@ -43,6 +64,43 @@
 (defn section
   [title]
   (println title))
+
+(defonce timings
+  (atom []))
+
+(defn- seconds-since
+  [started-ms]
+  (quot (- (System/currentTimeMillis) started-ms) 1000))
+
+(defn guarded
+  "Runs f and records how long it took; an exception is a failed check named
+   after title, so the pass goes on to its summary and cleanup."
+  [title f]
+  (let [started
+        (System/currentTimeMillis)]
+    (try
+      (f)
+      (catch Throwable e
+        (check (str title " ran to its end") false (str (.getSimpleName (class e)) ": " (ex-message e)))
+        nil)
+      (finally
+        (swap! timings conj [title (seconds-since started)])
+        (println (str "  TIME  " title ": " (seconds-since started) " s"))))))
+
+(defn- print-timings!
+  []
+  (println "\nSlowest sections:")
+  (doseq [[title seconds] (take 15 (sort-by (comp - second) @timings))]
+    (println (format "  %5d s  %s" seconds title))))
+
+(defn session-host-url
+  "The URL of a session's own host, next to the manager's (MANAGER_URL)."
+  [session-id]
+  (let [uri
+        (URI/create base-url)]
+    (str (.getScheme uri) "://" session-id "." (.getHost uri)
+         (when (pos? (.getPort uri)) (str ":" (.getPort uri)))
+         "/")))
 
 (defn- http-client
   "An HTTP client with its own cookie jar (the session hosts and the manager
@@ -100,7 +158,75 @@
       (catch Exception _
         text))))
 
-(defn login
+(def auth-mode
+  "The server's MANAGER_AUTH_MODE as /api/auth/config tells it."
+  (delay
+    (let [{:keys [status body]}
+          (send! (http-client) "GET" (str base-url "/api/auth/config") {})]
+      (if (= 200 status)
+        (str (:mode (parse body)))
+        "login"))))
+
+(defn oidc-mode?
+  []
+  (= "oidc" @auth-mode))
+
+(defn provider-password
+  "The local Keycloak realm's password of a user (deploy/keycloak, README)."
+  [username]
+  username)
+
+(defn- unescape-html
+  [text]
+  (-> text
+      (string/replace "&amp;" "&")
+      (string/replace "&quot;" "\"")
+      (string/replace "&#39;" "'")))
+
+(defn- form-body
+  [params]
+  (string/join "&" (for [[k v] params]
+                     (str (URLEncoder/encode (str k) StandardCharsets/UTF_8) "="
+                          (URLEncoder/encode (str v) StandardCharsets/UTF_8)))))
+
+(defn- login-form-action
+  "The action of Keycloak's login form (form id kc-form-login)."
+  [html]
+  (some->> (re-find #"<form[^>]*id=\"kc-form-login\"[^>]*>" (str html))
+           (re-find #"action=\"([^\"]+)\"")
+           second
+           unescape-html))
+
+(defn provider-login
+  "Logs in through the identity provider's login page as a browser does.
+   {:client :submitted (the login form's answer) :callback (the manager's
+   answer to the provider's redirect)}."
+  [username password]
+  (let [client
+        (http-client)
+
+        started
+        (send! client "GET" (str base-url "/api/auth/oidc/login?next=%2F") {})
+
+        login-page
+        (send! client "GET" (get-in started [:headers "location"]) {})
+
+        action
+        (or (login-form-action (:body login-page))
+            (throw (ex-info (str "No login form at the identity provider (HTTP " (:status login-page) ")") {})))
+
+        submitted
+        (send! client "POST" action {:body (form-body {"username" username "password" password "credentialId" ""})
+                                     :headers {"Content-Type" "application/x-www-form-urlencoded"
+                                               "X-Requested-With" nil}})
+
+        callback
+        (when-let [location
+                   (get-in submitted [:headers "location"])]
+          (send! client "GET" location {}))]
+    {:client client :submitted submitted :callback callback}))
+
+(defn- password-login
   [username]
   (let [client
         (http-client)
@@ -109,7 +235,22 @@
         (send! client "POST" (str base-url "/api/auth/login") {:body (util/to-json {:username username})})]
     (when-not (= 200 status)
       (throw (ex-info (str "Login of " username " failed: " status) {})))
-    {:username username :client client}))
+    client))
+
+(defn login
+  "A person logged in: through the identity provider in oidc mode
+   (compose.keycloak.yml), else with the password-free test login."
+  [username]
+  (if (oidc-mode?)
+    (let [{:keys [client callback]}
+          (provider-login username (provider-password username))
+
+          location
+          (str (get-in callback [:headers "location"]))]
+      (when-not (string/includes? location "complete=1")
+        (throw (ex-info (str "Provider login of " username " failed: " (:status callback) " " location) {})))
+      {:username username :client client})
+    {:username username :client (password-login username)}))
 
 (defn request
   ([person method path]
@@ -168,15 +309,21 @@
           :else (do (Thread/sleep 3000) (recur)))))))
 
 (defn start-run
-  [person team-id workflow-id inputs]
-  (let [run-id
-        (UUID/randomUUID)
+  ([person team-id workflow-id inputs]
+   (start-run person team-id workflow-id inputs nil))
+  ([person team-id workflow-id inputs visibility]
+   (let [run-id
+         (UUID/randomUUID)
 
-        response
-        (command person {:cmd-id :start-run :id run-id :attrs {:team-id team-id :workflow-id workflow-id :inputs inputs}})]
-    (check (str "start " team-id "/" workflow-id) (:ok response) (:error response))
-    (when (:ok response)
-      run-id)))
+         attrs
+         (cond-> {:team-id team-id :workflow-id workflow-id :inputs inputs}
+           visibility (assoc :visibility visibility))
+
+         response
+         (command person {:cmd-id :start-run :id run-id :attrs attrs})]
+     (check (str "start " team-id "/" workflow-id) (:ok response) (:error response))
+     (when (:ok response)
+       (track-run! person run-id)))))
 
 (defn wait-for-run
   [person run-id]
@@ -227,13 +374,19 @@
 (defn platform-and-access
   [{:keys [alice bob carol]}]
   (section "Platform and access control")
-  (let [synced
-        (command alice {:cmd-id :sync-platform})]
-    (check "admin can sync the onboarding repository" (:ok synced) (:error synced))
-    (check "the sync finishes"
-           (wait-until 60000 #(let [platform (result alice {:query-id :get-platform})]
-                                (and (:synced-at platform) (nil? (:error platform)) platform)))))
-  (check "non-admin cannot sync" (= 403 (error-status (command bob {:cmd-id :sync-platform}))))
+  (let [synced-before
+        (:synced-at (result alice {:query-id :get-tenant}))
+
+        synced
+        (command alice {:cmd-id :sync-tenant})]
+    (check "tenant admins can sync their onboarding repository" (:ok synced) (:error synced))
+    (check "the requested sync finishes"
+           (wait-until 120000 #(let [tenant (result alice {:query-id :get-tenant})]
+                                 (and (:synced-at tenant)
+                                      (not= synced-before (:synced-at tenant))
+                                      (nil? (:error-message tenant)))))
+           [synced-before (select-keys (result alice {:query-id :get-tenant}) [:synced-at :error-message])]))
+  (check "non-admin cannot sync" (= 403 (error-status (command bob {:cmd-id :sync-tenant}))))
   (let [team
         (result alice {:query-id :get-team :team-id "demo"})
 
@@ -242,9 +395,9 @@
     (check "invalid workflow is rejected with a reason"
            (and (contains? invalid "github-review") (string/includes? (str invalid) "not granted"))
            invalid))
-  (check "non-member cannot see a team" (= 404 (error-status (query carol {:query-id :get-team :team-id "demo"}))))
-  (check "non-member cannot start a run"
-         (= 404 (error-status (command carol {:cmd-id :start-run :id (UUID/randomUUID)
+  (check "tenant members outside a team cannot see it, and are told why" (= 403 (error-status (query carol {:query-id :get-team :team-id "demo"}))))
+  (check "someone of the tenant outside the team cannot start its workflows, and is told why"
+         (= 403 (error-status (command carol {:cmd-id :start-run :id (UUID/randomUUID)
                                               :attrs {:team-id "demo" :workflow-id "requirements" :inputs {:brief (apply str (repeat 20 "x"))}}}))))
   (let [response
         (command alice {:cmd-id :start-run :id (UUID/randomUUID)
@@ -254,44 +407,53 @@
          (every? (set (map :id (result alice {:query-id :list-activities}))) ["session" "review" "implement" "analysis"])))
 
 (defn roles-and-administration
-  [{:keys [alice dave erin]}]
+  [{:keys [alice dave erin gina]}]
   (section "Roles and administration")
-  (let [personas
-        (into {} (map (juxt :username :roles)) (:data (request alice "GET" "/api/auth/personas")))]
-    (check "login offers personas with their roles"
-           (and (some #{"Platform admin"} (get personas "alice"))
-                (some #(string/includes? % "Payments") (get personas "dave")))
-           personas))
+  (when-not (oidc-mode?)
+    (let [personas
+          (into {} (map (juxt :username identity)) (:data (request alice "GET" "/api/auth/personas")))]
+      (check "login offers the dev users with their tenant and roles"
+             (and (= "acme" (get-in personas ["alice" :tenant]))
+                  (some #(string/includes? % "Tenant admin") (get-in personas ["alice" :roles]))
+                  (some #(string/includes? (string/lower-case %) "payments") (get-in personas ["dave" :roles]))
+                  (= "globex" (get-in personas ["gina" :tenant])))
+             personas)))
   (check "a cookie request from another origin is refused"
          (= 403 (:status (send! (:client alice) "POST" (str base-url "/api/command")
-                                {:body (util/to-json {:commands [{:cmd-id :sync-platform}]})
+                                {:body (util/to-json {:commands [{:cmd-id :sync-tenant}]})
                                  :headers {"X-Requested-With" nil "Origin" "http://evil.localhost:8080"}}))))
   (let [teams
         (into {} (map (juxt :id identity)) (result alice {:query-id :list-teams}))
 
         payments
         (get teams "payments")]
-    (check "teams can be synced from a local path"
-           (and (= :ok (:status payments)) (string/starts-with? (str (:commit payments)) "files:"))
-           payments))
-  (check "team admins see only their team" (= ["payments"] (mapv :id (:teams (result dave {:query-id :get-me})))))
+    (check "every team of the tenant is synced from its own repository"
+           (and (= :ok (:status payments)) (seq (str (:commit payments))) (every? teams ["demo" "ops"]))
+           payments)
+    (check "a tenant's teams list holds no team of another tenant" (not (contains? teams "research")) (keys teams)))
+  (check "team roles come from the claims, one per team"
+         (= {"ops" :member "payments" :admin}
+            (into {} (map (juxt :id (comp keyword :role))) (:teams (result dave {:query-id :get-me})))))
+  (check "people see only their own teams" (= #{"ops" "payments"} (set (map :id (:teams (result dave {:query-id :get-me}))))))
   (check "team members cannot use the admin API" (= 403 (error-status (query erin {:query-id :get-admin-overview}))))
   (let [overview
         (result alice {:query-id :get-admin-overview})]
-    (check "platform admins get an overview" (>= (or (:teams overview) 0) 3) overview))
+    (check "tenant admins get an overview of their tenant" (= 3 (:teams overview)) overview))
   (let [users
-        (into {} (map (juxt :username identity)) (result alice {:query-id :list-admin-users}))]
-    (check "admin user matrix shows team roles" (= :admin (get-in users ["dave" :teams :payments])) (get users "dave")))
+        (set (map :username (result alice {:query-id :list-admin-users})))]
+    (check "the people list holds only people of the tenant" (not-any? #{"gina" "hank"} users) users))
+  (check "another tenant doesn't exist for a tenant admin who names it"
+         (= 404 (error-status (command gina {:cmd-id :sync-tenant :attrs {:tenant "acme"}}))))
   (let [credentials
         (result alice {:query-id :list-admin-credentials})]
     (check "credential status never includes values"
            (and (seq credentials) (not-any? #(or (contains? % :secret) (contains? % :value) (contains? % :sealed)) credentials))))
   (let [connection
-        (:id (first (:llm-connections (result alice {:query-id :get-platform}))))
+        (:id (first (:llm-connections (result alice {:query-id :get-tenant}))))
 
         tested
         (result alice {:query-id :test-llm-connection :connection-id connection})]
-    (check "admins can test an LLM connection" (:ok tested) tested))
+    (check "tenant admins can test an LLM connection" (:ok tested) tested))
   (check "admins can list schedules" (sequential? (result alice {:query-id :list-schedules}))))
 
 (defn session-entry
@@ -351,7 +513,9 @@
   [{:keys [alice erin]}]
   (let [run-id
         (start-run alice "demo" "requirements" {:brief "This run is cancelled straight away by the e2e test."})]
-    (check "other users cannot cancel a run" (= 404 (error-status (command erin {:cmd-id :cancel-run :id run-id}))))
+    (check "other users cannot cancel a run" (#{403 404} (error-status (command erin {:cmd-id :cancel-run :id run-id}))))
+    (check "a run that is still active can't be run again"
+           (= 409 (error-status (command alice {:cmd-id :retry-run :id (track-run! alice (UUID/randomUUID)) :attrs {:source-id run-id}}))))
     (let [cancelled
           (command alice {:cmd-id :cancel-run :id run-id})
 
@@ -391,13 +555,13 @@
       (let [{:keys [entry location host-response opened]}
             (session-entry bob session)]
         (check "session entry redirects through the handoff" (= 303 (:status entry)) (:status entry))
-        (check "the handoff goes to the session host" (string/starts-with? (str location) (str "http://" session-id ".")) location)
+        (check "the handoff goes to the session host" (string/includes? (str location) (str "://" session-id ".")) location)
         (check "the session host sets its cookie and drops the handoff token"
                (and (= 302 (:status host-response)) (not (string/includes? (str (get-in host-response [:headers "location"])) "handoff")))
                (select-keys host-response [:status :headers]))
         (check "the session opens through Traefik with forward auth" (= 200 (:status opened)) (:status opened)))
       (let [stranger
-            (send! (:client (login "carol")) "GET" (str "http://" session-id ".localhost:8080/") {})]
+            (send! (:client (login "carol")) "GET" (session-host-url session-id) {})]
         (check "others are sent to log in instead of reaching the session" (contains? #{302 401 404} (:status stranger)) (:status stranger)))
       (section "Sandbox security (probes from inside the session container)")
       (let [output
@@ -490,8 +654,15 @@
 
         states
         (into {} (map (juxt :id identity)) (:credentials mine))]
-    (check "people see the credentials their teams need" (get-in states ["JIRA_TOKEN" :required]) (keys states))
-    (check "new credentials are offered at login" (some #{"JIRA_TOKEN"} (:pending mine)) (:pending mine)))
+    (check "people see the credentials their teams need" (get-in states ["JIRA_TOKEN" :personal-only]) (keys states))
+    (check "new credentials are offered at login" (some #{"JIRA_TOKEN"} (:pending mine)) (:pending mine))
+    (check "credentials only admins provide are listed read-only with their state, never offered at login"
+           (and (false? (get-in states ["NEXUS_TOKEN" :may-provide]))
+                (keyword? (get-in states ["NEXUS_TOKEN" :state]))
+                (not (some #{"NEXUS_TOKEN"} (:pending mine))))
+           [(get states "NEXUS_TOKEN") (:pending mine)]))
+  (check "people can't set their own value of a credential only admins provide"
+         (#{403 422} (error-status (outcome (request erin "PUT" "/api/credentials/NEXUS_TOKEN" {:secret "x"})))))
   (let [response
         (outcome (request bob "PUT" "/api/credentials/BITBUCKET_TOKEN" {:secret "definitely-not-a-valid-token"}))]
     (check "invalid credentials are rejected before saving"
@@ -506,80 +677,87 @@
 
           saved
           (outcome (request bob "PUT" "/api/credentials/BITBUCKET_TOKEN" {:secret token}))]
-      (check "a valid personal credential is checked and saved" (:ok saved) saved)
-      (check "credential values are never returned by the API"
-             (not (string/includes? (pr-str (result alice {:query-id :list-admin-credentials})) token)))
-      (let [run
-            (wait-for-run bob (start-run bob "demo" "bitbucket-workspace" {:title "e2e tools"}))
+      (try
+        (check "a valid personal credential is checked and saved" (:ok saved) saved)
+        (check "credential values are never returned by the API"
+               (not (string/includes? (pr-str (result alice {:query-id :list-admin-credentials})) token)))
+        (let [run
+              (wait-for-run bob (start-run bob "demo" "bitbucket-workspace" {:title "e2e tools"}))
 
-            session-id
-            (:session-id run)]
-        (when (check "a workspace with MCP tools launches" (= :completed (:status run)) (or (:error run) (:status run)))
-          (let [tools-key
-                (get-in (sandbox-config session-id) [:mcp :bitbucket :headers :X-Platform-Key])
+              session-id
+              (:session-id run)]
+          (when (check "a workspace with MCP tools launches" (= :completed (:status run)) (or (:error run) (:status run)))
+            (let [tools-key
+                  (get-in (sandbox-config session-id) [:mcp :bitbucket :headers :X-Platform-Key])
 
-                allowed
-                (tools-call session-id tools-key "whoami")
+                  allowed
+                  (tools-call session-id tools-key "whoami")
 
-                blocked
-                (tools-call session-id tools-key "delete_repository")
+                  blocked
+                  (tools-call session-id tools-key "delete_repository")
 
-                forged
-                (tools-call session-id (str session-id ".forged") "whoami")]
-            (check "the gateway calls allowed tools with the person's credential" (string/includes? allowed "display_name") allowed)
-            (check "the gateway blocks tools outside the allow-list" (string/includes? blocked "not allowed") blocked)
-            (check "the gateway rejects forged keys" (string/includes? forged "401") forged))
-          (let [events
-                (result bob {:query-id :list-audit-events :session-id session-id :after 0 :limit 1000})
+                  forged
+                  (tools-call session-id (str session-id ".forged") "whoami")]
+              (check "the gateway calls allowed tools with the person's credential" (string/includes? allowed "display_name") allowed)
+              (check "the gateway blocks tools outside the allow-list" (string/includes? blocked "not allowed") blocked)
+              (check "the gateway rejects forged keys" (string/includes? forged "401") forged))
+            (let [events
+                  (result bob {:query-id :list-audit-events :session-id session-id :after 0 :limit 1000})
 
-                sources
-                (keep #(get-in % [:payload :source]) (filter #(= "mcp" (name (:type %))) events))]
-            (check "MCP calls are audited with whose credential was used" (some #(= "user" (name %)) sources) (vec sources)))
-          (let [output
-                (in-sandbox session-id "wget -q -T 5 -O- http://mcp-bitbucket:8000/ >/dev/null 2>&1 && echo reachable || echo blocked")]
-            (check "sandboxes cannot reach MCP servers directly" (string/includes? output "blocked") output))
-          (let [output
-                (in-sandbox session-id "echo x >> /etc/opencode/opencode/skills/pr-triage/SKILL.md 2>/dev/null && echo writable || echo denied")]
-            (check "skills are mounted read-only" (string/includes? output "denied") output))
-          (let [seen
-                (result alice {:query-id :get-session :session-id session-id})]
-            (check "others cannot work in a session that uses personal credentials" (= :personal (:open-blocked seen)) (:open-blocked seen)))
-          (check "they cannot start it either" (= 409 (error-status (command alice {:cmd-id :start-session :id session-id}))))
-          (let [fork-id
-                (UUID/randomUUID)
+                  sources
+                  (keep #(get-in % [:payload :source]) (filter #(= "mcp" (name (:type %))) events))]
+              (check "MCP calls are audited with whose credential was used" (some #(= "user" (name %)) sources) (vec sources)))
+            (let [output
+                  (in-sandbox session-id "wget -q -T 5 -O- http://mcp-bitbucket:8000/ >/dev/null 2>&1 && echo reachable || echo blocked")]
+              (check "sandboxes cannot reach MCP servers directly" (string/includes? output "blocked") output))
+            (let [output
+                  (in-sandbox session-id "echo x >> /etc/opencode/opencode/skills/pr-triage/SKILL.md 2>/dev/null && echo writable || echo denied")]
+              (check "skills are mounted read-only" (string/includes? output "denied") output))
+            (let [seen
+                  (result alice {:query-id :get-session :session-id session-id})]
+              (check "others cannot work in a session that uses personal credentials" (= :personal (:open-blocked seen)) (:open-blocked seen)))
+            (check "they cannot start it either" (= 409 (error-status (command alice {:cmd-id :start-session :id session-id}))))
+            (let [fork-id
+                  (UUID/randomUUID)
 
-                forked
-                (command alice {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id}})
+                  forked
+                  (command alice {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id}})
 
-                fork
-                (result alice {:query-id :get-session :session-id fork-id})]
-            (check "they can fork it into their own private copy"
-                   (and (:ok forked) (= "alice" (:sub fork)) (= :private (:visibility fork)))
-                   (or (:error forked) fork))
-            (check "the fork starts with its own keys"
-                   (wait-until 180000 #(= :running (:status (result alice {:query-id :get-session :session-id fork-id}))))
-                   (:status (result alice {:query-id :get-session :session-id fork-id})))
-            (let [fork-config
-                  (sandbox-config fork-id)]
-              (check "the fork's sandbox keys are derived for the fork"
-                     (string/starts-with? (str (get-in fork-config [:provider :platform :options :apiKey])) (str fork-id))
-                     (get-in fork-config [:provider :platform :options :apiKey])))
-            (command alice {:cmd-id :stop-session :id fork-id}))
-          (check "non-members cannot fork it"
-                 (= 404 (error-status (command carol {:cmd-id :fork-session :id (UUID/randomUUID) :attrs {:source-id session-id}}))))
-          (check "only the owner can lock it" (= 403 (error-status (command alice {:cmd-id :lock-session :id session-id}))))
-          (let [locked
-                (command bob {:cmd-id :lock-session :id session-id})]
-            (check "the owner can lock it"
-                   (and (:ok locked) (= "bob" (:locked-by (result bob {:query-id :get-session :session-id session-id}))))
-                   locked))
-          (check "nobody can start a locked session" (= 409 (error-status (command bob {:cmd-id :start-session :id session-id}))))
-          (check "a locked session can still be forked"
-                 (:ok (command bob {:cmd-id :fork-session :id (UUID/randomUUID) :attrs {:source-id session-id}})))))
-      (command bob {:cmd-id :delete-my-credential :attrs {:credential-id "BITBUCKET_TOKEN"}}))))
+                  fork
+                  (result alice {:query-id :get-session :session-id fork-id})]
+              (track-session! alice fork-id)
+              (check "they can fork it into their own private copy"
+                     (and (:ok forked) (= "alice" (:sub fork)) (= :private (:visibility fork)))
+                     (or (:error forked) fork))
+              (check "the fork starts with its own keys"
+                     (wait-until 180000 #(= :running (:status (result alice {:query-id :get-session :session-id fork-id}))))
+                     (:status (result alice {:query-id :get-session :session-id fork-id})))
+              (let [fork-config
+                    (sandbox-config fork-id)]
+                (check "the fork's sandbox keys are derived for the fork"
+                       (string/starts-with? (str (get-in fork-config [:provider :platform :options :apiKey])) (str fork-id))
+                       (get-in fork-config [:provider :platform :options :apiKey])))
+              (command alice {:cmd-id :stop-session :id fork-id}))
+            (check "people who can't see it cannot fork it"
+                   (= 404 (error-status (command carol {:cmd-id :fork-session :id (UUID/randomUUID) :attrs {:source-id session-id}}))))
+            (check "only the owner can lock it" (= 403 (error-status (command alice {:cmd-id :lock-session :id session-id}))))
+            (let [locked
+                  (command bob {:cmd-id :lock-session :id session-id})]
+              (check "the owner can lock it"
+                     (and (:ok locked) (= "bob" (:locked-by (result bob {:query-id :get-session :session-id session-id}))))
+                     locked))
+            (check "nobody can start a locked session" (= 409 (error-status (command bob {:cmd-id :start-session :id session-id}))))
+            (let [fork-id
+                  (track-session! bob (UUID/randomUUID))]
+              (check "a locked session can still be forked"
+                     (:ok (command bob {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id}})))
+              (command bob {:cmd-id :delete-session :id fork-id}))
+            (command bob {:cmd-id :delete-session :id session-id})))
+        (finally
+          (command bob {:cmd-id :delete-my-credential :attrs {:credential-id "BITBUCKET_TOKEN"}}))))))
 
 (defn usage-and-metrics
-  [{:keys [alice bob]}]
+  [{:keys [alice bob oscar]}]
   (section "Usage and metrics")
   (let [usage
         (result alice {:query-id :get-admin-usage :days 1})
@@ -596,9 +774,10 @@
     (check "the overview counts today's runs" (seq (:runs-today overview)) (:runs-today overview))
     (check "the overview counts every session" (pos? (get-in overview [:sessions :total] 0)) (:sessions overview)))
   (let [{:keys [status body]}
-        (request alice "GET" "/metrics")]
-    (check "admins can read Prometheus metrics" (and (= 200 status) (string/includes? (str body) "opencode_llm_tokens_total")) status))
-  (check "non-admins cannot read metrics" (= 403 (:status (request bob "GET" "/metrics")))))
+        (request oscar "GET" "/metrics")]
+    (check "operators can read Prometheus metrics" (and (= 200 status) (string/includes? (str body) "opencode_llm_tokens_total")) status))
+  (check "tenant admins cannot read the platform's metrics" (= 403 (:status (request alice "GET" "/metrics"))))
+  (check "members cannot read metrics" (= 403 (:status (request bob "GET" "/metrics")))))
 
 (def probe-image
   "opencode-platform/opencode-dev:1.19.5")
@@ -727,6 +906,12 @@
            (:tools (result bob {:query-id :get-session-activity :session-id session-id})))
     (check "telemetry refuses the LLM key" (string/includes? (telemetry-call session-id llm-key report) "401"))
     (check "telemetry refuses a forged key" (string/includes? (telemetry-call session-id (str session-id ".forged") report) "401"))
+    (check "the result tools refuse a forged key"
+           (string/includes? (post-from-sandbox session-id "http://manager:8001/mcp"
+                                                [(str "X-Platform-Key: " session-id ".forged")
+                                                 "Accept: application/json, text/event-stream"]
+                                                "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}")
+                             "401"))
     (check "telemetry rejects unknown report kinds"
            (string/includes? (telemetry-call session-id key "{\"kind\":\"steal\"}") "422"))
     (check "the telemetry key is no LLM key"
@@ -809,7 +994,7 @@
     (or (parse-long (string/trim output)) 0)))
 
 (defn session-management
-  [{:keys [alice bob carol]} session-id]
+  [{:keys [alice bob carol gina]} session-id]
   (section "Session management: rename, sharing, stop, start, delete")
   (let [update!
         (fn [person attrs] (command person {:cmd-id :update-session :id session-id :attrs attrs}))
@@ -830,13 +1015,14 @@
            (let [seen (:ok (session-of alice session-id))]
              (and (= :team (:visibility seen)) (true? (:can-open seen)))))
     (check "people outside the team still can't see it" (= 404 (error-status (session-of carol session-id))))
-    (check "the owner can share it with everyone" (:ok (update! bob {:visibility :public})))
+    (check "the owner can share it with everyone in the tenant" (:ok (update! bob {:visibility :tenant})))
     (let [seen
           (session-of carol session-id)]
-      (check "shared with everyone, anyone can see it and work in it"
+      (check "shared with the tenant, anyone in it can see it and work in it"
              (and (true? (get-in seen [:ok :can-open])) (false? (get-in seen [:ok :can-manage])))
              seen))
-    (check "a public session is listed for everyone" (listed? carol session-id))
+    (check "a tenant-wide session is listed for everyone in the tenant" (listed? carol session-id))
+    (check "people of another tenant still can't see it" (= 404 (error-status (session-of gina session-id))))
     (check "people who may work in a session can't stop it" (= 403 (error-status (command carol {:cmd-id :stop-session :id session-id}))))
     (check "nor change its sharing" (= 403 (error-status (update! carol {:visibility :private}))))
     (check "nor lock it" (= 403 (error-status (command carol {:cmd-id :lock-session :id session-id}))))
@@ -867,22 +1053,29 @@
 (defn authentication-and-browser
   [{:keys [alice dave]}]
   (section "Authentication and browser hardening")
-  (check "get-me tells platform admins apart"
-         (and (true? (:platform-admin (result alice {:query-id :get-me})))
-              (false? (:platform-admin (result dave {:query-id :get-me})))))
+  (let [me
+        (result alice {:query-id :get-me})]
+    (check "get-me tells the tenant and tenant admins apart"
+           (and (= "acme" (:tenant me))
+                (true? (:tenant-admin me))
+                (false? (boolean (:tenant-admin (result dave {:query-id :get-me})))))
+           me))
+  (when-not (oidc-mode?)
+    (check "a dev user without a tenant is refused at login unless an operator"
+           (= 403 (:status (send! (http-client) "POST" (str base-url "/api/auth/login") {:body (util/to-json {:username "nobody-e2e"})}))))
+    (check "the reserved username platform can't log in"
+           (= 422 (:status (send! (http-client) "POST" (str base-url "/api/auth/login") {:body (util/to-json {:username "platform"})}))))
+    (check "invalid usernames can't log in"
+           (= 422 (:status (send! (http-client) "POST" (str base-url "/api/auth/login") {:body (util/to-json {:username "Not A Name!"})})))))
   (check "the API needs a login"
          (= 401 (:status (send! (http-client) "POST" (str base-url "/api/query")
                                 {:body (util/to-json (envelope {:query {:query-id :get-me}}))}))))
-  (check "the reserved username platform can't log in"
-         (= 422 (:status (send! (http-client) "POST" (str base-url "/api/auth/login") {:body (util/to-json {:username "platform"})}))))
-  (check "invalid usernames can't log in"
-         (= 422 (:status (send! (http-client) "POST" (str base-url "/api/auth/login") {:body (util/to-json {:username "Not A Name!"})}))))
   (let [person
         (login "erin")
 
         logged-out
         (request person "POST" "/api/auth/logout")]
-    (check "logging out ends the login" (and (= 204 (:status logged-out)) (= 401 (:status (request person "POST" "/api/query" (envelope {:query {:query-id :get-me}})))))))
+    (check "logging out ends the login" (and (#{200 204} (:status logged-out)) (= 401 (:status (request person "POST" "/api/query" (envelope {:query {:query-id :get-me}})))))))
   (let [sync-body
         (util/to-json (envelope {:commands [{:cmd-id :stop-idle-sessions}]}))
 
@@ -920,10 +1113,10 @@
                     {:cmd-id :submit-run-result :id (UUID/randomUUID) :attrs {}}
                     {:cmd-id :record-session-started :id session-id :attrs {}}
                     {:cmd-id :upsert-directory-row
-                     :attrs {:identity "user:e2e-forged" :collection :runs :row {:id session-id}}}])))
+                     :attrs {:identity "/user/e2e-forged" :collection :runs :row {:id session-id}}}])))
   (check "people can't run the platform's own queries"
          (every? #(= 403 (error-status (query alice %)))
-                 [{:query-id :get-personas}
+                 [{:query-id :get-registry}
                   {:query-id :get-stored-credential :credential-id "BITBUCKET_TOKEN" :owner "bob"}
                   {:query-id :list-session-rows}])))
 
@@ -931,8 +1124,8 @@
   [{:keys [alice bob carol]}]
   (section "Teams, harnesses and activities")
   (check "people see the teams they belong to with their role"
-         (= {"demo" :member "data" :member}
-            (into {} (keep #(when (#{"demo" "data"} (:id %)) [(:id %) (keyword (:role %))])) (result bob {:query-id :list-teams}))))
+         (= {"demo" :member "payments" :member}
+            (into {} (map #(vector (:id %) (keyword (:role %)))) (result bob {:query-id :list-teams}))))
   (let [team
         (result alice {:query-id :get-team :team-id "demo"})
 
@@ -957,8 +1150,8 @@
   (let [schemas
         (result bob {:query-id :get-schemas})]
     (check "the activity schemas are published" (and (map? schemas) (seq schemas)) (keys schemas)))
-  (check "pull requests can be listed only by team members"
-         (= 404 (error-status (query carol {:query-id :list-open-pull-requests :team-id "demo" :workflow-id "implement-change"}))))
+  (check "pull requests can be listed only by team members, others of the tenant are told why"
+         (= 403 (error-status (query carol {:query-id :list-open-pull-requests :team-id "demo" :workflow-id "implement-change"}))))
   (check "a workflow without a pull request provider has no pull requests to continue"
          (= [] (result bob {:query-id :list-open-pull-requests :team-id "demo" :workflow-id "implement-change"})))
   (check "people outside a team don't see its runs"
@@ -974,11 +1167,16 @@
 
 (defn- put-credential
   [person scope credential-id body]
-  (outcome (request person "PUT" (str (if (= :platform scope) "/api/admin/credentials/" "/api/credentials/") credential-id) body)))
+  (outcome (request person "PUT" (str (if (= :tenant scope) "/api/admin/credentials/" "/api/credentials/") credential-id) body)))
+
+(defn- tenant-value
+  [row]
+  (keyword (or (:tenant-value row) (:platform-value row))))
 
 (defn credential-management
   [{:keys [alice erin]}]
   (section "Credential management")
+  (command erin {:cmd-id :delete-my-credential :attrs {:credential-id "JIRA_TOKEN"}})
   (let [ids
         (mapv :id (:credentials (result erin {:query-id :get-my-credentials})))
 
@@ -1013,31 +1211,31 @@
   (check "people can't set credentials the platform doesn't declare"
          (= 404 (error-status (put-credential erin :user "COPILOT_TOKEN" {:secret "x"}))))
   (when-let [platform-only
-             (first (filter #(and (:declared %) (= :platform (keyword (:provided-by %))))
+             (first (filter #(and (:declared %) (= [:tenant] (mapv keyword (:provided-by %))))
                             (result alice {:query-id :list-admin-credentials})))]
-    (check "people can't set credentials only platform admins provide"
+    (check "people can't set credentials only tenant admins provide"
            (= 403 (error-status (put-credential erin :user (:id platform-only) {:secret "x" :username "x"})))))
-  (check "admins can't set a personal-only credential for everyone"
-         (= 422 (error-status (put-credential alice :platform "JIRA_TOKEN" {:secret "x" :username "y"}))))
+  (check "tenant admins can't set a personal-only credential for everyone"
+         (= 422 (error-status (put-credential alice :tenant "JIRA_TOKEN" {:secret "x" :username "y"}))))
   (let [response
-        (put-credential alice :platform "BITBUCKET_TOKEN" {:secret "definitely-not-a-valid-token"})]
-    (check "invalid platform values are rejected before saving"
+        (put-credential alice :tenant "BITBUCKET_TOKEN" {:secret "definitely-not-a-valid-token"})]
+    (check "invalid tenant values are rejected before saving"
            (and (= 422 (error-status response)) (string/includes? (error-message response) "Not saved"))
            response))
-  (check "non-admins can't clear platform values"
-         (= 403 (error-status (command erin {:cmd-id :delete-platform-credential :attrs {:credential-id "BITBUCKET_TOKEN"}}))))
+  (check "non-admins can't clear tenant values"
+         (= 403 (error-status (command erin {:cmd-id :delete-tenant-credential :attrs {:credential-id "BITBUCKET_TOKEN"}}))))
   (when (.isFile token-file)
     (let [saved
-          (put-credential alice :platform "BITBUCKET_TOKEN" {:secret (string/trim (slurp token-file))})
+          (put-credential alice :tenant "BITBUCKET_TOKEN" {:secret (string/trim (slurp token-file))})
 
           row
           (admin-credential alice "BITBUCKET_TOKEN")]
-      (check "admins set a platform value once it passes its check"
-             (and (:ok saved) (= :admin (keyword (:platform-value row))) (seq (str (:hint row))))
+      (check "tenant admins set a tenant value once it passes its check"
+             (and (:ok saved) (= :admin (tenant-value row)) (seq (str (:hint row))))
              (or (:error saved) row))
       (check "clearing it falls back to the secret file"
-             (and (:ok (command alice {:cmd-id :delete-platform-credential :attrs {:credential-id "BITBUCKET_TOKEN"}}))
-                  (= :file (keyword (:platform-value (admin-credential alice "BITBUCKET_TOKEN")))))
+             (and (:ok (command alice {:cmd-id :delete-tenant-credential :attrs {:credential-id "BITBUCKET_TOKEN"}}))
+                  (= :file (tenant-value (admin-credential alice "BITBUCKET_TOKEN"))))
              (admin-credential alice "BITBUCKET_TOKEN")))))
 
 (defn- stop-session!
@@ -1045,27 +1243,311 @@
   (when session-id
     (command person {:cmd-id :stop-session :id session-id})))
 
+(defn- running-in
+  [person team-id]
+  (filterv #(and (= team-id (:team-id %)) (= :running (keyword (:status %))))
+           (result person {:query-id :list-sessions})))
+
+(defn room-in-team!
+  "Stops the team's running sessions (scheduled workspaces and what earlier
+   passes left pile up) so new ones fit under its limit."
+  [admin team-id]
+  (doseq [session (running-in admin team-id)]
+    (stop-session! admin (:id session)))
+  (wait-until 120000 #(empty? (running-in admin team-id))))
+
+(defn- delete-session!
+  [person session-id]
+  (when session-id
+    (command person {:cmd-id :delete-session :id session-id})))
+
+(defn- team-roles
+  [person query-id]
+  (let [found
+        (if (= :get-me query-id)
+          (:teams (result person {:query-id :get-me}))
+          (result person {:query-id :list-teams}))]
+    (into {} (map (juxt :id (comp keyword :role))) found)))
+
+(defn- sees-session?
+  [person session-id]
+  (some? (:ok (query person {:query-id :get-session :session-id session-id}))))
+
+(defn- lists-session?
+  [person session-id]
+  (some #(= (str session-id) (str (:id %))) (result person {:query-id :list-sessions})))
+
+(defn- share!
+  [person session-id visibility]
+  (:ok (command person {:cmd-id :update-session :id session-id :attrs {:visibility visibility}})))
+
+(defn- by-id-refused
+  "Checks that person reads nothing of a run, its session and team by id."
+  [label person {:keys [run-id session-id team-id]}]
+  (doseq [[what q] [["run" {:query-id :get-run :run-id run-id}]
+                    ["session" {:query-id :get-session :session-id session-id}]
+                    ["audit trail" {:query-id :list-audit-events :session-id session-id :after 0 :limit 10}]
+                    ["team" {:query-id :get-team :team-id team-id}]
+                    ["team credentials" {:query-id :list-team-credentials :team-id team-id}]]]
+    (check (str label " can't read its " what " by id") (#{403 404} (error-status (query person q))))))
+
+(defn several-teams-and-sharing
+  "People in several teams (bob: demo and payments; dave: admin of payments,
+   member of ops; ivy of globex: research and admin of lab), team-scoped data
+   within a tenant, sharing private, team, tenant, forking across teams, and
+   isolation between tenants by direct id."
+  [{:keys [bob carol dave erin henry hank ivy]}]
+  (section "People in several teams, team isolation and sharing")
+  (check "someone in two teams has their role in each (admin in one, member in the other)"
+         (= {"payments" :admin "ops" :member} (team-roles dave :get-me))
+         (team-roles dave :get-me))
+  (check "their teams list holds exactly those teams with those roles"
+         (= {"payments" :admin "ops" :member} (team-roles dave :list-teams))
+         (team-roles dave :list-teams))
+  (check "a member of two teams is a member in each"
+         (= {"demo" :member "payments" :member} (team-roles bob :list-teams))
+         (team-roles bob :list-teams))
+  (check "the same holds in another tenant"
+         (= {"research" :member "lab" :admin} (team-roles ivy :list-teams))
+         (team-roles ivy :list-teams))
+  (let [demo-run
+        (wait-for-run bob (start-run bob "demo" "workspace" {:title "e2e two teams: demo"}))
+
+        payments-run
+        (wait-for-run bob (start-run bob "payments" "workspace" {:title "e2e two teams: payments"}))
+
+        demo-session
+        (get-in demo-run [:session :id])
+
+        payments-session
+        (get-in payments-run [:session :id])
+
+        sessions
+        (mapv #(result bob {:query-id :get-session :session-id %}) (remove nil? [demo-session payments-session]))]
+    (check "someone in two teams starts sessions in both"
+           (= ["demo" "payments"] (mapv :team-id sessions))
+           (mapv (juxt :team-id :status) sessions))
+    (check "and may work in both" (and (= 2 (count sessions)) (every? :can-open sessions)) (mapv :open-blocked sessions))
+    (when demo-session
+      (check "a private session is hidden from the rest of its team's tenant"
+             (not-any? #(sees-session? % demo-session) [henry erin carol]))
+      (check "a session can be shared with its team" (share! bob demo-session :team))
+      (check "shared with the team, people only in other teams of the tenant don't see it"
+             (and (not (sees-session? henry demo-session)) (not (sees-session? erin demo-session))
+                  (not (lists-session? henry demo-session)) (not (sees-session? dave demo-session))))
+      (check "a team's credentials are refused to people only in other teams"
+             (= 403 (error-status (query henry {:query-id :list-team-credentials :team-id "demo"}))))
+      (check "a team's runs are closed to people only in other teams, who are told why"
+             (and (= 403 (error-status (query henry {:query-id :get-run :run-id (:id demo-run)})))
+                  (not-any? #(= "demo" (:team-id %)) (result henry {:query-id :list-runs}))))
+      (check "a team's team page is closed to people only in other teams, who are told why"
+             (= 403 (error-status (query henry {:query-id :get-team :team-id "demo"}))))
+      (check "a session can be shared with the tenant" (share! bob demo-session :tenant))
+      (check "shared with the tenant, everyone in it sees and lists it"
+             (and (every? #(sees-session? % demo-session) [henry erin carol dave])
+                  (lists-session? henry demo-session)))
+      (let [fork-id
+            (UUID/randomUUID)
+
+            forked
+            (command henry {:cmd-id :fork-session :id (track-session! henry fork-id) :attrs {:source-id demo-session}})
+
+            fork
+            (when (:ok forked)
+              (result henry {:query-id :get-session :session-id fork-id}))]
+        (check "someone of another team forks a session shared with the tenant" (:ok forked) (:error forked))
+        (check "the fork stays in the source's team, private to whoever forked it"
+               (= ["demo" :private "henry"] [(:team-id fork) (keyword (:visibility fork)) (:sub fork)])
+               (select-keys fork [:team-id :visibility :sub]))
+        (check "the fork is not visible to the source's owner"
+               (not (sees-session? bob fork-id)))
+        (command henry {:cmd-id :delete-session :id fork-id}))
+      (by-id-refused "another tenant" ivy {:run-id (:id demo-run) :session-id demo-session :team-id "demo"})
+      (check "another tenant doesn't list a session shared with acme"
+             (not (lists-session? hank demo-session))))
+    (let [lab-run
+          (wait-for-run ivy (start-run ivy "lab" "workspace" {:title "e2e globex lab"}))
+
+          lab-session
+          (get-in lab-run [:session :id])]
+      (check "someone in two teams of another tenant starts a session in their second team" (some? lab-session)
+             (:status lab-run))
+      (when lab-session
+        (share! ivy lab-session :tenant)
+        (check "shared with globex, a globex member of another team sees it" (sees-session? hank lab-session))
+        (by-id-refused "acme" bob {:run-id (:id lab-run) :session-id lab-session :team-id "lab"})
+        (check "acme doesn't list a session shared with globex" (not (lists-session? bob lab-session)))
+        (delete-session! ivy lab-session)))
+    (delete-session! bob demo-session)
+    (delete-session! bob payments-session)))
+
+(defn- refused-at-the-limit
+  "The refusal of one more payments workspace; a start that still gets
+   through is cancelled at once and tried again."
+  [erin]
+  (wait-until 120000 #(let [run-id
+                            (UUID/randomUUID)
+
+                            response
+                            (command erin {:cmd-id :start-run :id run-id
+                                           :attrs {:team-id "payments" :workflow-id "workspace" :inputs {:title "e2e limit 3"}}})]
+                        (if (:ok response)
+                          (do (track-run! erin run-id)
+                              (command erin {:cmd-id :cancel-run :id run-id})
+                              nil)
+                          response))))
+
 (defn session-limit
-  [{:keys [erin]}]
+  [{:keys [erin alice]}]
   (section "Team session limit")
+  (room-in-team! alice "payments")
   (let [runs
         (doall (for [n [1 2]]
                  (wait-for-run erin (start-run erin "payments" "workspace" {:title (str "e2e limit " n)}))))
 
         sessions
-        (keep :session-id runs)
-
-        refused
+        (keep :session-id runs)]
+    (try
+      (let [refused
+            (when (= 2 (count sessions))
+              (refused-at-the-limit erin))]
+        (check "a team's sessions start up to its limit" (= 2 (count sessions)) (mapv :status runs))
+        (check "one more is refused with the limit" (string/includes? (error-message refused) "limit") refused)
         (when (= 2 (count sessions))
-          (wait-until 120000 #(let [response (command erin {:cmd-id :start-run :id (UUID/randomUUID)
-                                                            :attrs {:team-id "payments" :workflow-id "workspace" :inputs {:title "e2e limit 3"}}})]
-                                (if (:ok response)
-                                  (do (Thread/sleep 1000) nil)
-                                  response))))]
-    (check "a team's sessions start up to its limit" (= 2 (count sessions)) (mapv :status runs))
-    (check "one more is refused with the limit" (string/includes? (error-message refused) "limit") refused)
-    (doseq [session-id sessions]
-      (stop-session! erin session-id))))
+          (let [at-the-limit?
+                #(and (= 422 (error-status %)) (string/includes? (error-message %) "limit"))
+
+                forked
+                (command erin {:cmd-id :fork-session :id (track-session! erin (UUID/randomUUID))
+                               :attrs {:source-id (first sessions)}})
+
+                retried
+                (command erin {:cmd-id :retry-run :id (track-run! erin (UUID/randomUUID))
+                               :attrs {:source-id (:id (first runs))}})]
+            (check "at the limit a session can't be forked either" (at-the-limit? forked) forked)
+            (check "nor a finished run be run again" (at-the-limit? retried) retried))))
+      (finally
+        (doseq [session-id sessions]
+          (delete-session! erin session-id))
+        (wait-until 120000 #(empty? (running-in alice "payments")))))))
+
+(defn- remove-required!
+  [person]
+  (doseq [credential-id ["JIRA_TOKEN" "PAGERDUTY_TOKEN"]]
+    (command person {:cmd-id :delete-my-credential :attrs {:credential-id credential-id}})))
+
+(defn- add-required!
+  [{:keys [username] :as person}]
+  [(put-credential person :user "JIRA_TOKEN" {:secret (str "e2e-" username "-jira") :username (str username "@example.com")})
+   (put-credential person :user "PAGERDUTY_TOKEN" {:secret (str "e2e-" username "-pagerduty")})])
+
+(defn- refused-for-credentials?
+  [response & names]
+  (and (= 422 (error-status response))
+       (every? #(string/includes? (error-message response) %) names)))
+
+(defn- required-of-work-in-progress
+  "henry has a session and a finished run in ops; without his own Jira value
+   he can't fork or run them again, someone outside the team still forks."
+  [{:keys [alice carol dave henry]}]
+  (room-in-team! alice "ops")
+  (let [run
+        (wait-for-run henry (start-run henry "ops" "workspace" {:title "e2e required"}))
+
+        session-id
+        (:session-id run)
+
+        fork
+        (fn [person]
+          (let [fork-id (track-session! person (UUID/randomUUID))]
+            [fork-id (command person {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id}})]))]
+    (check "with their own values, work in ops starts" (and (= :completed (:status run)) session-id) (or (:error run) (:status run)))
+    (when session-id
+      (share! henry session-id :tenant)
+      (command henry {:cmd-id :delete-my-credential :attrs {:credential-id "JIRA_TOKEN"}})
+      (let [[_ forked]
+            (fork henry)
+
+            retried
+            (command henry {:cmd-id :retry-run :id (track-run! henry (UUID/randomUUID)) :attrs {:source-id (:id run)}})]
+        (check "without one, a member can't fork a session of the team" (refused-for-credentials? forked "Jira") forked)
+        (check "nor run one of its runs again" (refused-for-credentials? retried "Jira") retried))
+      (remove-required! dave)
+      (let [refused
+            (command dave {:cmd-id :start-run :id (UUID/randomUUID)
+                           :attrs {:team-id "ops" :workflow-id "workspace" :inputs {:title "e2e required"}}})]
+        (check "the same holds for a member who administers another team"
+               (refused-for-credentials? refused "Jira" "PagerDuty")
+               refused))
+      (let [[fork-id forked]
+            (fork carol)]
+        (check "someone outside the team forks its shared session without them" (:ok forked) (:error forked))
+        (delete-session! carol fork-id))
+      (add-required! henry)
+      (let [[fork-id forked]
+            (fork henry)]
+        (check "with the value back, the member forks it" (:ok forked) (:error forked))
+        (delete-session! henry fork-id))
+      (delete-session! henry session-id))))
+
+(defn required-credentials
+  "acme requires PagerDuty of everyone in ops (tenant.json) and ops requires
+   Jira of its members (its team.json): henry must add his own before work in
+   ops starts; team and tenant values don't count."
+  [{:keys [alice bob henry] :as people}]
+  (section "Required credentials")
+  (remove-required! henry)
+  (let [mine
+        (result henry {:query-id :get-my-credentials})
+
+        states
+        (into {} (map (juxt :id identity)) (:credentials mine))]
+    (check "required credentials say who requires them"
+           (and (= {:tenant true :teams []} (get-in states ["PAGERDUTY_TOKEN" :required-by]))
+                (= {:tenant false :teams ["ops"]} (get-in states ["JIRA_TOKEN" :required-by]))
+                (every? #(true? (get-in states [% :required])) ["JIRA_TOKEN" "PAGERDUTY_TOKEN"]))
+           (mapv #(select-keys (get states %) [:id :required :required-by]) ["JIRA_TOKEN" "PAGERDUTY_TOKEN"]))
+    (check "the missing ones lead what setup offers"
+           (and (= #{"JIRA_TOKEN" "PAGERDUTY_TOKEN"} (set (:missing-required mine)))
+                (= #{"JIRA_TOKEN" "PAGERDUTY_TOKEN"} (set (take 2 (:pending mine)))))
+           (select-keys mine [:missing-required :pending])))
+  (command henry {:cmd-id :mark-credentials-seen :attrs {:credentials ["JIRA_TOKEN" "PAGERDUTY_TOKEN"]}})
+  (let [seen
+        (result henry {:query-id :get-my-credentials})]
+    (check "having seen them doesn't make them optional"
+           (and (= #{"JIRA_TOKEN" "PAGERDUTY_TOKEN"} (set (take 2 (:pending seen))))
+                (= #{"JIRA_TOKEN" "PAGERDUTY_TOKEN"} (set (:missing-required seen))))
+           (select-keys seen [:missing-required :pending])))
+  (check "they are required only of the teams' people, not of a tenant admin outside ops"
+         (not-any? #{"JIRA_TOKEN" "PAGERDUTY_TOKEN"} (:missing-required (result alice {:query-id :get-my-credentials}))))
+  (let [refused
+        (command henry {:cmd-id :start-run :id (UUID/randomUUID)
+                        :attrs {:team-id "ops" :workflow-id "workspace" :inputs {:title "e2e required"}}})]
+    (check "work in ops doesn't start without them, and says which and where"
+           (and (= 422 (error-status refused))
+                (every? #(string/includes? (error-message refused) %) ["Team Operations" "Jira" "PagerDuty" "Accounts"]))
+           refused))
+  (let [required
+        (result henry {:query-id :list-required-credentials :team-id "ops"})]
+    (check "the team's settings list what it requires and where that comes from"
+           (= {"JIRA_TOKEN" {:tenant false :team true} "PAGERDUTY_TOKEN" {:tenant true :team false}}
+              (into {} (map (juxt :id :required-by)) required))
+           required))
+  (check "people outside the team don't read its requirements"
+         (= 403 (error-status (query bob {:query-id :list-required-credentials :team-id "ops"}))))
+  (let [rows
+        (into {} (map (juxt :id identity)) (result alice {:query-id :list-admin-credentials}))]
+    (check "admins see which credentials are required, by the tenant or by teams"
+           (and (true? (get-in rows ["PAGERDUTY_TOKEN" :required]))
+                (= ["ops"] (get-in rows ["JIRA_TOKEN" :required-by-teams])))
+           (mapv #(select-keys (get rows %) [:id :required :required-by-teams]) ["JIRA_TOKEN" "PAGERDUTY_TOKEN"])))
+  (let [added
+        (add-required! henry)]
+    (check "once added, nothing is missing"
+           (and (every? :ok added)
+                (empty? (:missing-required (result henry {:query-id :get-my-credentials}))))
+           added))
+  (required-of-work-in-progress people))
 
 (def budget-body
   "A call of more than the ops team's daily budget (1000 tokens): the first
@@ -1075,9 +1557,17 @@
        " Reply with ok.\"}]}"))
 
 (defn token-budget
-  [{:keys [henry]}]
+  [{:keys [alice henry]}]
   (section "Team token budget")
-  (let [run
+  (add-required! henry)
+  (room-in-team! alice "ops")
+  (let [budget
+        (:budget (result henry {:query-id :get-team :team-id "ops"}))
+
+        spent-already?
+        (>= (or (:used-today budget) 0) (or (:daily-tokens budget) Long/MAX_VALUE))
+
+        run
         (wait-for-run henry (start-run henry "ops" "workspace" {:title "e2e budget"}))
 
         session-id
@@ -1097,17 +1587,21 @@
         refused
         (when session-id
           (wait-until 60000 #(let [output (call)] (when (string/includes? output "429") output))))]
-    (check "the first call within the budget is relayed" (string/includes? (str first-call) "200 OK") first-call)
+    (if spent-already?
+      (check "a budget already used today (an earlier run on the same data) refuses the first call"
+             (string/includes? (str first-call) "429") first-call)
+      (check "the first call within the budget is relayed" (string/includes? (str first-call) "200 OK") first-call))
     (check "once the team used its daily budget, the gateway refuses calls"
            (string/includes? (str refused) "429 Too Many Requests")
            refused)
-    (stop-session! henry session-id)))
+    (delete-session! henry session-id)))
 
 (defn platform-started-sessions
   [{:keys [alice carol henry]}]
   (section "Platform-started sessions (schedule)")
   (let [run
-        (wait-until (* 8 60 1000) #(first (filter :platform-started (result henry {:query-id :list-runs :team-id "ops"}))))
+        (wait-until (* 8 60 1000) #(first (filter (fn [listed] (and (:platform-started listed) (not= :failed (:status listed))))
+                                                  (result henry {:query-id :list-runs :team-id "ops"}))))
 
         detail
         (when run
@@ -1123,15 +1617,32 @@
     (when session-id
       (let [seen
             (:ok (session-of carol session-id))]
-        (check "its session is public but only the team may work in it (team credentials)"
-               (and (= :public (keyword (:visibility seen))) (= :team-only (keyword (:open-blocked seen))))
+        (check "its session is tenant-wide but only the team may work in it (team credentials)"
+               (and (= :tenant (keyword (:visibility seen))) (= :team-only (keyword (:open-blocked seen))))
                (select-keys seen [:visibility :open-blocked])))
       (check "people outside the team can't start it"
              (= 409 (error-status (command carol {:cmd-id :start-session :id session-id}))))
-      (check "nor fork it"
-             (= 403 (error-status (command carol {:cmd-id :fork-session :id (UUID/randomUUID) :attrs {:source-id session-id}}))))
+      (let [entry
+            (request carol "GET" (:open-url (:ok (session-of henry session-id))))]
+        (check "opening it sends them to its page under the tenant instead of the session"
+               (and (= 303 (:status entry))
+                    (= (str "/acme/sessions/" session-id) (get-in entry [:headers "location"])))
+               (select-keys entry [:status :headers])))
+      (room-in-team! alice "ops")
+      (let [fork-id
+            (track-session! carol (UUID/randomUUID))
+
+            forked
+            (command carol {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id}})]
+        (check "but they can fork it into their own copy, kept in the team"
+               (and (:ok forked)
+                    (= ["carol" "ops" :private]
+                       ((juxt :sub :team-id (comp keyword :visibility)) (:ok (session-of carol fork-id)))))
+               (or (:error forked) (session-of carol fork-id)))
+        (when (:ok forked)
+          (command carol {:cmd-id :delete-session :id fork-id})))
       (check "team members may work in it" (nil? (get-in (session-of henry session-id) [:ok :open-blocked])))
-      (check "platform admins can stop it" (:ok (stop-session! alice session-id))))))
+      (check "tenant admins can stop it" (:ok (stop-session! alice session-id))))))
 
 (defn administration-actions
   [{:keys [alice bob]}]
@@ -1145,7 +1656,7 @@
                 (some #(string/includes? % "bitbucket-tools") (:harnesses bitbucket)))
            bitbucket))
   (check "admins see the scheduled workflows"
-         (some #(= "trigger-ops-scheduled-workspace" (:id %)) (result alice {:query-id :list-schedules})))
+         (some #(string/includes? (str (:id %)) "scheduled-workspace") (result alice {:query-id :list-schedules})))
   (doseq [[label q] [["MCP servers" {:query-id :list-mcp-servers}]
                      ["credentials" {:query-id :list-admin-credentials}]
                      ["schedules" {:query-id :list-schedules}]
@@ -1155,66 +1666,514 @@
     (check (str "non-admins can't read admin " label) (= 403 (error-status (query bob q)))))
   (check "nobody reads metrics without logging in" (= 401 (:status (send! (http-client) "GET" (str base-url "/metrics") {})))))
 
+(defn tenant-isolation
+  "gina and hank belong to globex; nothing of acme may reach them."
+  [{:keys [gina hank]} run]
+  (section "Tenant isolation")
+  (let [session-id
+        (get-in run [:session :id])
+
+        run-id
+        (:id run)
+
+        acme-team?
+        #(contains? #{"demo" "payments" "ops"} (:team-id %))]
+    (check "people belong to the tenant of their claims" (= "globex" (:tenant (result hank {:query-id :get-me}))))
+    (check "another tenant's teams are not listed" (= #{"lab" "research"} (set (map :id (result gina {:query-id :list-teams})))))
+    (check "another tenant's team is not found" (= 404 (error-status (query gina {:query-id :get-team :team-id "demo"}))))
+    (check "another tenant's harnesses are not listed" (not-any? acme-team? (result gina {:query-id :list-harnesses})))
+    (check "another tenant's workflows can't be started"
+           (= 404 (error-status (command hank {:cmd-id :start-run :id (UUID/randomUUID)
+                                               :attrs {:team-id "demo" :workflow-id "workspace" :inputs {:title "x"}}}))))
+    (when session-id
+      (doseq [[label q] [["session" {:query-id :get-session :session-id session-id}]
+                         ["live activity" {:query-id :get-session-activity :session-id session-id}]
+                         ["conversations" {:query-id :list-conversations :session-id session-id}]
+                         ["audit trail" {:query-id :list-audit-events :session-id session-id :after 0 :limit 10}]
+                         ["audit verification" {:query-id :verify-audit :session-id session-id}]]]
+        (check (str "another tenant's " label " is not found") (= 404 (error-status (query gina q)))))
+      (check "another tenant's sessions are not listed"
+             (not-any? #(= (str session-id) (str (:id %))) (result gina {:query-id :list-sessions})))
+      (check "another tenant's sessions can't be forked"
+             (= 404 (error-status (command gina {:cmd-id :fork-session :id (UUID/randomUUID) :attrs {:source-id session-id}}))))
+      (check "another tenant's sessions can't be changed"
+             (= 404 (error-status (command gina {:cmd-id :update-session :id session-id :attrs {:visibility :tenant}}))))
+      (check "another tenant's audit trail can't be exported"
+             (not= 200 (:status (request gina "GET" (str "/api/sessions/" session-id "/audit/export")))))
+      (check "another tenant's session host refuses them"
+             (not= 200 (:status (send! (:client gina) "GET" (session-host-url session-id) {})))))
+    (when run-id
+      (check "another tenant's run is not found" (= 404 (error-status (query gina {:query-id :get-run :run-id run-id}))))
+      (check "another tenant's runs can't be cancelled" (= 404 (error-status (command gina {:cmd-id :cancel-run :id run-id})))))
+    (check "another tenant's runs are not listed" (not-any? acme-team? (result gina {:query-id :list-runs})))
+    (let [overview
+          (result gina {:query-id :get-admin-overview})]
+      (check "a tenant admin's overview counts only their tenant" (= 2 (:teams overview)) overview))
+    (check "a tenant admin sees only their tenant's credentials"
+           (not-any? #(#{"BITBUCKET_TOKEN" "JIRA_TOKEN"} (:id %)) (result gina {:query-id :list-admin-credentials})))
+    (check "a tenant admin sees only their tenant's MCP servers"
+           (not-any? #(= "bitbucket" (:id %)) (result gina {:query-id :list-mcp-servers})))
+    (check "a tenant admin sees only their tenant's schedules"
+           (not-any? acme-team? (result gina {:query-id :list-schedules})))
+    (check "a tenant admin sees only their tenant's usage"
+           (not-any? acme-team? (result gina {:query-id :get-admin-usage :days 1})))
+    (check "a tenant admin sees only their tenant's people"
+           (not-any? #{"alice" "bob" "carol"} (map :username (result gina {:query-id :list-admin-users}))))
+    (check "a tenant admin can't set another tenant's team credentials"
+           (#{403 404} (error-status (outcome (request gina "PUT" "/api/teams/demo/credentials/BITBUCKET_TOKEN" {:secret "x"})))))
+    (check "people of another tenant don't see its personal credentials"
+           (not-any? #(= "JIRA_TOKEN" (:id %)) (:credentials (result hank {:query-id :get-my-credentials}))))))
+
+(defn projects-and-search
+  "Projects as pages and the global search, inside the caller's tenant only."
+  [{:keys [bob carol gina]} workspace-run]
+  (section "Projects and search")
+  (let [session
+        (:session workspace-run)
+
+        project
+        (result bob {:query-id :get-project :team-id "demo" :project-id "demo-service"})]
+    (check "people list the projects of their teams"
+           (some #(= ["demo" "demo-service"] [(:team-id %) (:id %)]) (result bob {:query-id :list-projects})))
+    (check "a project names its team and the workflows working on it"
+           (and (= "acme" (:tenant project))
+                (some #(= "implement-gerrit" (:id %)) (:workflows project)))
+           (map :id (:workflows project)))
+    (check "a project's runs are only runs of its workflows (e2e-ci checks that one is listed)"
+           (every? #(= "demo-service" (:project %))
+                   (result bob {:query-id :list-runs :team-id "demo" :project-id "demo-service"})))
+    (check "runs can be listed for one team"
+           (let [runs (result bob {:query-id :list-runs :team-id "demo"})]
+             (and (some #(= (str (:id workspace-run)) (str (:id %))) runs)
+                  (every? #(= "demo" (:team-id %)) runs))))
+    (check "sessions can be listed for one team"
+           (let [in-team (fn [team-id]
+                           (set (map (comp str :id) (result bob {:query-id :list-sessions :team-id team-id}))))]
+             (and (contains? (in-team "demo") (str (:id session)))
+                  (not (contains? (in-team "payments") (str (:id session))))))
+           (:id session))
+    (check "search returns at most the asked number per group"
+           (= [2 1]
+              [(count (:teams (result bob {:query-id :search :text "e" :limit 2})))
+               (count (:teams (result bob {:query-id :search :text "e" :limit 1})))]))
+    (check "people outside the team may not open its project"
+           (= 403 (error-status (query carol {:query-id :get-project :team-id "demo" :project-id "demo-service"}))))
+    (check "another tenant's project is not found"
+           (= 404 (error-status (query gina {:query-id :get-project :team-id "demo" :project-id "demo-service"}))))
+    (check "another tenant's projects are not listed"
+           (not-any? #(= "demo" (:team-id %)) (result gina {:query-id :list-projects})))
+    (check "search finds a project by its name"
+           (some #(= "demo-service" (:id %)) (:projects (result bob {:query-id :search :text "demo-serv"}))))
+    (check "search finds a team of the tenant"
+           (some #(= "payments" (:id %)) (:teams (result bob {:query-id :search :text "payments"}))))
+    (check "another tenant's search finds none of the tenant's teams and projects"
+           (let [found (result gina {:query-id :search :text "demo"})]
+             (and (empty? (:projects found)) (not-any? #(= "demo" (:id %)) (:teams found))))
+           (result gina {:query-id :search :text "demo"}))
+    (when session
+      (let [title
+            (:name session)
+
+            listed?
+            (fn [person]
+              (some #(= (str (:id session)) (str (:id %))) (:sessions (result person {:query-id :search :text title}))))]
+        (check "search finds the person's own session" (listed? bob) title)
+        (when (= :private (keyword (:visibility session)))
+          (check "search never shows someone else's private session" (not (listed? carol))))
+        (check "search never shows another tenant's session" (not (listed? gina)))))))
+
+(def e2e-tenant
+  "A tenant the e2e test registers, with an onboarding repository that doesn't exist."
+  "e2e-initech")
+
+(defn operators-and-tenants
+  [{:keys [oscar alice]}]
+  (section "Operators and tenants")
+  (let [tenants
+        (set (map :name (result oscar {:query-id :list-tenants})))]
+    (check "operators see every tenant" (every? tenants ["acme" "globex"]) tenants))
+  (check "tenant admins can't list tenants" (= 403 (error-status (query alice {:query-id :list-tenants}))))
+  (check "tenant admins can't register tenants"
+         (= 403 (error-status (command alice {:cmd-id :register-tenant
+                                              :attrs {:name "e2e-refused" :onboarding "file:///repos/missing"}}))))
+  (let [synced
+        (command oscar {:cmd-id :sync-tenant :attrs {:tenant "globex"}})]
+    (check "operators sync any tenant" (:ok synced) (:error synced)))
+  (check "tenant names are validated"
+         (= 422 (error-status (command oscar {:cmd-id :register-tenant :attrs {:name "Not A Name" :onboarding "file:///repos/x"}}))))
+  (let [reloaded
+        (request oscar "POST" "/api/admin/reload-config" {})]
+    (check "operators reload the configuration now"
+           (and (= 200 (:status reloaded))
+                (= ["reloaded" "reloaded"]
+                   (mapv #(some-> (get-in reloaded [:data % :status]) name) [:claims-parser :tenants])))
+           (:body reloaded)))
+  (check "others can't reload the configuration"
+         (= 403 (:status (request alice "POST" "/api/admin/reload-config" {}))))
+  (let [registered
+        (command oscar {:cmd-id :register-tenant :attrs {:name e2e-tenant :onboarding "file:///repos/e2e-missing-onboarding"}})]
+    (check "operators register a tenant" (or (:ok registered) (= 409 (error-status registered))) registered))
+  (check "a registered tenant is listed right away"
+         (some #(= e2e-tenant (:name %)) (result oscar {:query-id :list-tenants})))
+  (check "its sync fails on its own, with its own status"
+         (wait-until 120000 #(let [tenants (into {} (map (juxt :name identity)) (result oscar {:query-id :list-tenants}))]
+                               (and (seq (str (get-in tenants [e2e-tenant :error-message])))
+                                    (nil? (get-in tenants ["acme" :error-message]))
+                                    (nil? (get-in tenants ["globex" :error-message]))))))
+  (check "the other tenants keep working" (= 3 (count (result alice {:query-id :list-teams})))))
+
+(defn- team-credential
+  [person team-id credential-id]
+  (first (filter #(= credential-id (:id %)) (result person {:query-id :list-team-credentials :team-id team-id}))))
+
+(defn- put-team-credential
+  [person team-id credential-id body]
+  (outcome (request person "PUT" (str "/api/teams/" team-id "/credentials/" credential-id) body)))
+
+(defn team-credentials
+  [{:keys [alice bob dave]}]
+  (section "Team credentials")
+  (check "team admins see the credentials their team may provide"
+         (some? (team-credential alice "demo" "BITBUCKET_TOKEN")))
+  (let [listed
+        (result bob {:query-id :list-team-credentials :team-id "demo"})]
+    (check "team members see which team credentials are set, without hints"
+           (and (seq listed)
+                (every? #(= #{:id :name :description :provided-by :set} (set (keys %))) listed))
+           listed))
+  (check "people outside the team can't list its credentials"
+         (= 403 (error-status (query dave {:query-id :list-team-credentials :team-id "demo"}))))
+  (check "admins of another team can't set them"
+         (= 403 (error-status (put-team-credential dave "demo" "BITBUCKET_TOKEN" {:secret "x"}))))
+  (check "credentials a team may not provide are refused"
+         (#{403 422} (error-status (put-team-credential alice "demo" "JIRA_TOKEN" {:secret "x" :username "y"}))))
+  (let [response
+        (put-team-credential alice "demo" "BITBUCKET_TOKEN" {:secret "definitely-not-a-valid-token"})]
+    (check "invalid team values are rejected before saving"
+           (and (= 422 (error-status response)) (string/includes? (error-message response) "Not saved"))
+           response))
+  (when (.isFile token-file)
+    (let [token
+          (string/trim (slurp token-file))
+
+          saved
+          (put-team-credential alice "demo" "BITBUCKET_TOKEN" {:secret token})
+
+          row
+          (team-credential alice "demo" "BITBUCKET_TOKEN")]
+      (check "team admins set a team value once it passes its check"
+             (and (:ok saved) (seq (str (get-in row [:value :hint]))))
+             (or (:error saved) row))
+      (check "team values are never returned by the API"
+             (not (string/includes? (pr-str (result alice {:query-id :list-team-credentials :team-id "demo"})) token)))
+      (check "team admins can clear the team value"
+             (:ok (command alice {:cmd-id :delete-team-credential :attrs {:team-id "demo" :credential-id "BITBUCKET_TOKEN"}}))))))
+
+(defn team-sessions
+  [{:keys [alice bob carol]}]
+  (section "Team-scoped sessions")
+  (let [start
+        (fn [person workflow-id]
+          (let [run-id (UUID/randomUUID)]
+            [run-id (command person {:cmd-id :start-team-session :id run-id
+                                     :attrs {:team-id "demo" :workflow-id workflow-id :inputs {:title "e2e team session"}}})]))]
+    (check "team members can't open a session in the team's scope"
+           (= 403 (error-status (second (start bob "workspace")))))
+    (check "only interactive workflows open team sessions"
+           (#{409 422} (error-status (second (start alice "requirements")))))
+    (let [[run-id response]
+          (start alice "workspace")
+
+          run
+          (when (:ok response) (wait-for-run alice run-id))
+
+          session-id
+          (:session-id run)]
+      (check "team admins open a session in the team's scope" (= :completed (:status run)) (or (:error response) (:status run)))
+      (check "it belongs to the team, not to the admin"
+             (and (true? (:platform-started run)) (= ["platform" "demo"] ((juxt :sub :team-id) (:session run))))
+             (select-keys run [:platform-started :session]))
+      (when session-id
+        (check "team members may work in it" (nil? (get-in (session-of bob session-id) [:ok :open-blocked])))
+        (check "people outside the team don't see it (shared with the team)"
+               (= 404 (error-status (session-of carol session-id))))
+        (let [fork-id
+              (track-session! bob (UUID/randomUUID))
+
+              forked
+              (command bob {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id}})]
+          (check "members fork it to continue in their own copy"
+                 (and (:ok forked) (= ["bob" "demo"] ((juxt :sub :team-id) (:ok (session-of bob fork-id)))))
+                 (or (:error forked) (session-of bob fork-id)))
+          (when (:ok forked)
+            (command bob {:cmd-id :delete-session :id fork-id})))
+        (check "team admins can delete it" (:ok (command alice {:cmd-id :delete-session :id session-id})))))))
+
+(defn run-visibility
+  "Who sees the session of a run is chosen when it starts, and kept when it is run again."
+  [{:keys [alice bob carol]}]
+  (section "Who sees a run's session")
+  (let [start
+        (fn [visibility]
+          (wait-for-run bob (start-run bob "demo" "workspace" {:title (str "e2e shared with " (name visibility))} visibility)))
+
+        team-run
+        (start :team)
+
+        tenant-run
+        (start :tenant)
+
+        team-session
+        (:session-id team-run)
+
+        tenant-session
+        (:session-id tenant-run)
+
+        shared-with
+        #(keyword (get-in % [:session :visibility]))]
+    (try
+      (check "a run started for the team gives its session to the team, and nobody else"
+             (and (= :team (shared-with team-run))
+                  (true? (get-in (session-of alice team-session) [:ok :can-open]))
+                  (= 404 (error-status (session-of carol team-session))))
+             (shared-with team-run))
+      (check "one started for the tenant is seen by everyone in it"
+             (and (= :tenant (shared-with tenant-run)) (sees-session? carol tenant-session))
+             (shared-with tenant-run))
+      (let [retry-id
+            (track-run! bob (UUID/randomUUID))
+
+            retried
+            (command bob {:cmd-id :retry-run :id retry-id :attrs {:source-id (:id team-run)}})
+
+            again
+            (when (:ok retried)
+              (wait-for-run bob retry-id))]
+        (check "running it again keeps who sees it"
+               (= :team (shared-with again))
+               (or (:error retried) (shared-with again)))
+        (delete-session! bob (:session-id again)))
+      (let [refused
+            (command alice {:cmd-id :start-team-session :id (track-run! alice (UUID/randomUUID))
+                            :attrs {:team-id "demo" :workflow-id "workspace" :visibility :private
+                                    :inputs {:title "e2e private team session"}}})]
+        (check "a team session can't be private" (some? (:error refused)) refused))
+      (finally
+        (delete-session! bob team-session)
+        (delete-session! bob tenant-session)))))
+
+(defn- team-role
+  [me team-id]
+  (some #(when (= team-id (:id %)) (some-> (:role %) name)) (:teams me)))
+
+(defn single-sign-on
+  "Logins through Keycloak (compose.keycloak.yml): tenant, teams and roles
+   come from its token claims through the claims parser."
+  [{:keys [alice bob gina oscar]}]
+  (section "Single sign-on (OpenID Connect)")
+  (let [reloaded
+        (request oscar "POST" "/api/admin/reload-config" {})]
+    (check "the provider's endpoints and keys come from its discovery URL (compose.keycloak.yml)"
+           (= ["reloaded" "reloaded"]
+              (mapv #(some-> (get-in reloaded [:data :identity-provider % :status]) name) [:discovery :keys]))
+           (:body reloaded)))
+  (let [alice-me
+        (result alice {:query-id :get-me})
+
+        bob-me
+        (result bob {:query-id :get-me})
+
+        gina-me
+        (result gina {:query-id :get-me})]
+    (check "alice signs in as tenant admin of acme and admin of demo"
+           (and (= "acme" (:tenant alice-me)) (true? (:tenant-admin alice-me)) (= "admin" (team-role alice-me "demo")))
+           alice-me)
+    (check "bob signs in as a member of demo in acme"
+           (and (= "acme" (:tenant bob-me)) (false? (boolean (:tenant-admin bob-me))) (= "member" (team-role bob-me "demo")))
+           bob-me)
+    (check "gina signs in as tenant admin of globex"
+           (and (= "globex" (:tenant gina-me)) (true? (:tenant-admin gina-me)))
+           gina-me))
+  (check "bob sees no globex team"
+         (and (not-any? #(= "research" (:id %)) (result bob {:query-id :list-teams}))
+              (#{403 404} (error-status (query bob {:query-id :get-team :team-id "research"})))))
+  (let [{:keys [client callback]}
+        (provider-login "nobody" (provider-password "nobody"))
+
+        config
+        (parse (:body (send! client "GET" (str base-url "/api/auth/config") {})))]
+    (check "an account without a tenant is refused, and the login page learns why"
+           (and (string/starts-with? (str (get-in callback [:headers "location"])) "/login?")
+                (not (string/includes? (str (get-in callback [:headers "location"])) "complete=1"))
+                (string/includes? (str (:error config)) "belongs to no tenant"))
+           [callback config]))
+  (let [{:keys [submitted callback]}
+        (provider-login "bob" "wrong-password")]
+    (check "a wrong password stays on the provider's login page"
+           (and (= 200 (:status submitted)) (nil? callback))
+           (:status submitted)))
+  (let [client
+        (http-client)
+
+        forged
+        (send! client "GET" (str base-url "/api/auth/oidc/callback?code=forged&state=forged") {})]
+    (check "a callback the browser did not start is refused"
+           (and (= 302 (:status forged))
+                (= 401 (:status (send! client "POST" (str base-url "/api/query")
+                                       {:body (util/to-json (envelope {:query {:query-id :get-me}}))}))))
+           forged))
+  (check "the password-free test login is off"
+         (= 404 (:status (send! (http-client) "POST" (str base-url "/api/auth/login") {:body (util/to-json {:username "bob"})}))))
+  (let [person
+        (login "hank")
+
+        logged-out
+        (request person "POST" "/api/auth/logout")]
+    (check "logging out sends the browser to the provider's logout"
+           (string/includes? (str (get-in logged-out [:data :redirect])) "/protocol/openid-connect/logout")
+           logged-out)))
+
+(defn- housekeeping
+  "Says what the pass starts from and makes room under the teams' session limits."
+  [{:keys [alice gina]}]
+  (section "Before the pass")
+  (doseq [team-id ["demo" "payments" "ops"]]
+    (let [budget
+          (:budget (result alice {:query-id :get-team :team-id team-id}))]
+      (println (str "  " team-id ": " (or (:used-today budget) 0) " of " (:daily-tokens budget) " tokens used today, "
+                    (count (running-in alice team-id)) " running sessions"))
+      (when (= "demo" team-id)
+        (check "the demo team has token budget left for this pass"
+               (< (or (:used-today budget) 0) (or (:daily-tokens budget) Long/MAX_VALUE))
+               budget)))
+    (room-in-team! alice team-id))
+  (doseq [team-id ["lab" "research"]]
+    (room-in-team! gina team-id)))
+
+(defn- quietly
+  [f]
+  (try
+    (f)
+    (catch Throwable _
+      nil)))
+
+(defn clean-up!
+  "Cancels what the pass left running and deletes its sessions, whatever
+   happened before."
+  [_people]
+  (section "Cleanup")
+  (doseq [[person run-id] @started-runs]
+    (quietly
+     #(when-let [run (result person {:query-id :get-run :run-id run-id})]
+        (when-not (contains? #{:completed :failed :cancelled} (:status run))
+          (command person {:cmd-id :cancel-run :id run-id}))
+        (delete-session! person (:session-id run)))))
+  (doseq [[person session-id] @started-sessions]
+    (quietly #(delete-session! person session-id))))
+
+(defn- restore-credentials!
+  "Removes the credential values the pass set for people, the demo team and the tenant."
+  [{:keys [alice bob erin henry]}]
+  (doseq [[person cmd] [[bob {:cmd-id :delete-my-credential :attrs {:credential-id "BITBUCKET_TOKEN"}}]
+                        [erin {:cmd-id :delete-my-credential :attrs {:credential-id "JIRA_TOKEN"}}]
+                        [henry {:cmd-id :delete-my-credential :attrs {:credential-id "JIRA_TOKEN"}}]
+                        [henry {:cmd-id :delete-my-credential :attrs {:credential-id "PAGERDUTY_TOKEN"}}]
+                        [alice {:cmd-id :delete-team-credential :attrs {:team-id "demo" :credential-id "BITBUCKET_TOKEN"}}]
+                        [alice {:cmd-id :delete-tenant-credential :attrs {:credential-id "BITBUCKET_TOKEN"}}]]
+          :when person]
+    (quietly #(command person cmd))))
+
+(defn summary!
+  "Prints how the checks went; the exit code."
+  []
+  (let [failed
+        (map first (remove second @results))]
+    (print-timings!)
+    (println (str "\n" (- (count @results) (count failed)) "/" (count @results) " checks passed"))
+    (when (seq failed)
+      (println "Failed:")
+      (doseq [check-name failed]
+        (println "  -" check-name)))
+    (if (seq failed) 1 0)))
+
+(def usernames
+  ["alice" "bob" "carol" "dave" "erin" "henry" "gina" "hank" "ivy" "oscar"])
+
+(defn- pass
+  [{:keys [alice bob] :as people}]
+  (let [in
+        (fn [title f & args]
+          (guarded title #(apply f people args)))]
+    (in "Before the pass" housekeeping)
+    (in "Platform and access control" platform-and-access)
+    (in "Roles and administration" roles-and-administration)
+    (in "Authentication and browser hardening" authentication-and-browser)
+    (when (oidc-mode?)
+      (in "Single sign-on" single-sign-on))
+    (in "Teams, harnesses and activities" catalog-and-library)
+    (section "Activities")
+    (let [analysis
+          (start-run alice "demo" "requirements" {:brief "Members get 5% off orders over 100 EUR, stackable with other discounts up to 20% in total."})
+
+          implement
+          (start-run alice "demo" "implement-change"
+                     {:task "Add a keyword argument member: bool = False to total(). Members get an extra 5% off when the subtotal is over 100; the combined discount must not exceed 20%. Add unit tests and run them."})
+
+          workspace
+          (start-run bob "demo" "workspace" {:title "e2e workspace" :prompt "Run the unit tests in repo/ and tell me the result."})
+
+          review
+          (start-run alice "demo" "review-branch" {:branch "e2e-review"})
+
+          workspace-run
+          (guarded "The workspace run" #(wait-for-run bob workspace))
+
+          workspace-session
+          (get-in workspace-run [:session :id])]
+      (in "Monitoring and policy" monitoring-and-policy)
+      (in "Cancel and retry" cancel-and-retry)
+      (in "Interactive session" interactive-session workspace-run)
+      (in "Tenant isolation" tenant-isolation workspace-run)
+      (in "Projects and search" projects-and-search workspace-run)
+      (when workspace-session
+        (guarded "Sandbox routes" #(sandbox-cannot-reach-api workspace-session))
+        (in "Telemetry" telemetry workspace-session)
+        (in "Conversations and audit trail" conversations-and-audit workspace-session)
+        (in "Session management" session-management workspace-session))
+      (in "Results" result-runs [["analysis" analysis :document] ["implement" implement :implementation] ["review" review :review]]))
+    (in "Credentials, MCP gateway, fork and lock" credentials-and-tools)
+    (in "Credential management" credential-management)
+    (in "Team credentials" team-credentials)
+    (in "Team-scoped sessions" team-sessions)
+    (in "Who sees a run's session" run-visibility)
+    (in "Team session limit" session-limit)
+    (in "People in several teams" several-teams-and-sharing)
+    (in "Required credentials" required-credentials)
+    (in "Team token budget" token-budget)
+    (in "Platform-started sessions" platform-started-sessions)
+    (in "Administration actions" administration-actions)
+    (in "Usage and metrics" usage-and-metrics)
+    (in "Operators and tenants" operators-and-tenants)
+    (in "Webhooks" (requiring-resolve 'manager-svc.e2e-webhooks/webhooks))
+    (in "Gerrit and Jenkins" (requiring-resolve 'manager-svc.e2e-ci/gerrit-and-jenkins))))
+
+(defn log-in
+  "{:alice person ...} of usernames; nil with a failed check when a login fails."
+  [names]
+  (guarded "Logging in"
+           #(into {} (map (fn [username] [(keyword username) (login username)])) names)))
+
 (defn -main
   [& _args]
-  (let [people
-        (into {} (map (fn [username] [(keyword username) (login username)])) ["alice" "bob" "carol" "dave" "erin" "henry"])
-
-        _
-        (platform-and-access people)
-
-        _
-        (roles-and-administration people)
-
-        _
-        (authentication-and-browser people)
-
-        _
-        (catalog-and-library people)
-
-        _
-        (section "Activities")
-
-        analysis
-        (start-run (:alice people) "demo" "requirements" {:brief "Members get 5% off orders over 100 EUR, stackable with other discounts up to 20% in total."})
-
-        implement
-        (start-run (:alice people) "demo" "implement-change"
-                   {:task "Add a keyword argument member: bool = False to total(). Members get an extra 5% off when the subtotal is over 100; the combined discount must not exceed 20%. Add unit tests and run them."})
-
-        workspace
-        (start-run (:bob people) "demo" "workspace" {:title "e2e workspace" :prompt "Run the unit tests in repo/ and tell me the result."})
-
-        review
-        (start-run (:alice people) "demo" "review-branch" {:branch "e2e-review"})
-
-        workspace-run
-        (wait-for-run (:bob people) workspace)
-
-        workspace-session
-        (get-in workspace-run [:session :id])]
-    (monitoring-and-policy people)
-    (cancel-and-retry people)
-    (interactive-session people workspace-run)
-    (when workspace-session
-      (sandbox-cannot-reach-api workspace-session)
-      (telemetry people workspace-session)
-      (conversations-and-audit people workspace-session)
-      (session-management people workspace-session))
-    (result-runs people [["analysis" analysis :document] ["implement" implement :implementation] ["review" review :review]])
-    (credentials-and-tools people)
-    (credential-management people)
-    (session-limit people)
-    (token-budget people)
-    (platform-started-sessions people)
-    (administration-actions people)
-    (usage-and-metrics people)
-    (let [failed
-          (map first (remove second @results))]
-      (println (str "\n" (- (count @results) (count failed)) "/" (count @results) " checks passed"))
-      (when (seq failed)
-        (println "Failed:")
-        (doseq [check-name failed]
-          (println "  -" check-name)))
-      (shutdown-agents)
-      (System/exit (if (seq failed) 1 0)))))
+  (when-let [people
+             (log-in usernames)]
+    (try
+      (guarded "The pass" #(pass people))
+      (finally
+        (guarded "Deleting webhooks" #((requiring-resolve 'manager-svc.e2e-webhooks/delete-saved!) (:alice people)))
+        (guarded "Cleanup" #(clean-up! people))
+        (guarded "Restoring credentials" #(restore-credentials! people)))))
+  (let [exit-code
+        (summary!)]
+    (shutdown-agents)
+    (System/exit exit-code)))

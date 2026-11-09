@@ -1,0 +1,30 @@
+{
+  "description": "No internet. Only the platform LLM gateway is reachable.",
+  "image": "opencode-platform/opencode-dev:1.19.5",
+  "llm": {
+    "connection": "copilot",
+    "models": [
+      "claude-sonnet-5.5",
+      "gemini-3.5-flash"
+    ]
+  },
+  "network": "none",
+  "permissions": {
+    "bash": "allow",
+    "edit": "allow"
+  },
+  "resources": {
+    "cpus": 1,
+    "memory_mb": 2048
+  },
+  "idle_minutes": 15,
+  "policy": {
+    "deny_commands": [
+      "\\bgit\\s+push\\b",
+      "\\bcurl\\b.*\\|\\s*(ba)?sh\\b"
+    ],
+    "deny_paths": [
+      "(^|/)\\.env$"
+    ]
+  }
+}

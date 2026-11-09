@@ -1,0 +1,1 @@
+["^ ","~$a-daemon-that-does-not-answer-times-out",["^ ","~:row",8,"~:col",1,"~:fixed-arities",["~#set",[0]],"~:name","^0","~:ns","~$manager-svc.sessions.unix-http-test","~:top-ns","^7"],"~:filename","/home/pofuk/alpha/opencode-manager/service/test/manager_svc/sessions/unix_http_test.clj"]

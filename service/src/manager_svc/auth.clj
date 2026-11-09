@@ -9,21 +9,28 @@
                forward-auth of that session host accepts it
 
    In jwt mode people bring a token of the identity provider (bearer or the
-   provider's cookie); its issuer and audience are checked and its subject
-   must be a valid username. The username \"platform\" is the platform
-   itself and is never a person."
+   provider's cookie); its issuer and audience are checked and its claims go
+   through the claims parser (manager-svc.claims). In oidc mode people log
+   in through the provider (manager-svc.oidc) and get the login cookie, as
+   in login mode. The username
+   \"platform\" is the platform itself and is never a person.
+
+   A person's identity, and so every token the manager issues for them,
+   carries what the parser found at login: {:sub :email :name :tenant
+   :teams {team-id :admin|:member} :tenant-admin :operator}."
   (:require [clojure.string :as string]
             [clojure.tools.logging :as log]
             [edd.core :as edd]
+            [jsonista.core :as json]
+            [manager-svc.claims :as claims]
             [manager-svc.files :as files]
-            [manager-svc.hash :as hash])
+            [manager-svc.hash :as hash]
+            [manager-svc.idp :as idp]
+            [manager-svc.names :as names])
   (:import [com.auth0.jwt JWT]
            [com.auth0.jwt.algorithms Algorithm]
            [com.auth0.jwt.exceptions JWTVerificationException]
-           [com.auth0.jwk JwkProviderBuilder]
-           [java.net URL]
            [java.security SecureRandom]
-           [java.security.interfaces RSAPublicKey]
            [java.time Instant]
            [java.util Base64 Date UUID]))
 
@@ -34,36 +41,37 @@
 (def session-audience "opencode-manager-session")
 (def handoff-ttl-seconds 60)
 (def session-ttl-seconds 3600)
-(def username-pattern #"^[a-z0-9][a-z0-9._-]{0,63}$")
 
 (def platform-user
-  "The platform's own username: owner of what platform runs start."
-  "platform")
+  names/platform-user)
 
-(defn platform-user?
-  [username]
-  (= platform-user username))
+(def platform-user?
+  names/platform-user?)
 
 (defn person-name?
   "A username a person may have."
   [username]
   (boolean (and (string? username)
-                (re-matches username-pattern username)
+                (re-matches names/username-pattern username)
                 (not (platform-user? username)))))
 
 (defn- secure?
   [settings]
   (= "https" (:public-scheme settings)))
 
-(defn login-cookie
-  "Name of the manager host's login cookie; __Host- on https, so session
+(defn host-cookie
+  "Name of a cookie of the manager host; __Host- on https, so session
    subdomains can't set or shadow it."
+  [settings base-name]
+  (if (secure? settings) (str "__Host-" base-name) base-name))
+
+(defn login-cookie
   [settings]
-  (if (secure? settings) "__Host-oc_auth" "oc_auth"))
+  (host-cookie settings "oc_auth"))
 
 (defn session-cookie
   [settings]
-  (if (secure? settings) "__Host-oc_session" "oc_session"))
+  (host-cookie settings "oc_session"))
 
 (defn set-cookie
   "A Set-Cookie value for a host-only cookie."
@@ -121,32 +129,73 @@
     (when (some #(hash/equal? (derived-key settings % session-id) key) purposes)
       session-id)))
 
+(defn- teams-of
+  [encoded]
+  (try
+    (into (sorted-map)
+          (map (fn [[team-id role]] [team-id (keyword role)]))
+          (json/read-value (str encoded)))
+    (catch Exception _
+      {})))
+
 (defn identity-of
-  [settings {:keys [sub email name]}]
+  "The identity in the claims of a token the manager issued."
+  [settings {:keys [sub email name tenant teams tenant_admin operator]}]
   {:sub sub
    :email (or email (str sub "@" (:email-domain settings)))
-   :name (or name sub)})
+   :name (or name sub)
+   :tenant (not-empty tenant)
+   :teams (if (map? teams) teams (teams-of teams))
+   :tenant-admin (= "true" (str tenant_admin))
+   :operator (= "true" (str operator))})
+
+(defn- identity-claims
+  [{:keys [tenant teams tenant-admin operator]}]
+  (cond-> {:teams (json/write-value-as-string (into {} (map (fn [[k v]] [k (clojure.core/name v)])) teams))}
+    tenant (assoc :tenant tenant)
+    tenant-admin (assoc :tenant_admin "true")
+    operator (assoc :operator "true")))
+
+(defn sign
+  "A token of the manager for audience holding claims; values become
+   strings, nil values are left out."
+  [settings audience ttl-seconds claims]
+  (let [builder
+        (-> (JWT/create)
+            (.withAudience (into-array String [audience]))
+            (.withExpiresAt (Date/from (.plusSeconds (Instant/now) (long ttl-seconds)))))
+
+        with-claims
+        (reduce-kv (fn [b k v] (if (some? v) (.withClaim b (clojure.core/name k) (str v)) b))
+                   builder
+                   claims)]
+    (.sign with-claims (Algorithm/HMAC256 ^String (token-key settings)))))
 
 (defn issue
   ([settings identity audience ttl-seconds]
    (issue settings identity audience ttl-seconds {}))
-  ([settings {:keys [sub email name]} audience ttl-seconds claims]
-   (let [builder
-         (-> (JWT/create)
-             (.withSubject sub)
-             (.withClaim "email" ^String email)
-             (.withClaim "name" ^String name)
-             (.withAudience (into-array String [audience]))
-             (.withExpiresAt (Date/from (.plusSeconds (Instant/now) (long ttl-seconds)))))
+  ([settings {:keys [sub email name] :as identity} audience ttl-seconds claims]
+   (sign settings audience ttl-seconds (merge {:sub sub :email email :name name}
+                                              (identity-claims identity)
+                                              claims))))
 
-         with-claims
-         (reduce-kv (fn [b k v] (.withClaim b (clojure.core/name k) (str v))) builder claims)]
-     (.sign with-claims (Algorithm/HMAC256 ^String (token-key settings))))))
+(defn- clojure-value
+  [value]
+  (cond
+    (instance? java.util.Map value) (into {} (map (fn [[k v]] [(keyword k) (clojure-value v)])) value)
+    (instance? java.util.List value) (mapv clojure-value value)
+    :else value))
 
-(defn- claims->map
+(defn- claim-value
+  [claim]
+  (or (.asString claim)
+      (clojure-value (.as claim Object))))
+
+(defn claims->map
+  "The claims of a decoded token, keyword keys, with :expires-at."
   [decoded]
   (assoc (into {}
-               (map (fn [[k claim]] [(keyword k) (.asString claim)]))
+               (map (fn [[k claim]] [(keyword k) (claim-value claim)]))
                (.getClaims decoded))
          :expires-at (some-> (.getExpiresAtAsInstant decoded) (.getEpochSecond))))
 
@@ -199,8 +248,10 @@
       (identity-of settings claims))))
 
 (defn session-token
-  [settings identity session-id]
-  (issue settings identity session-audience session-ttl-seconds {:sid session-id}))
+  "The session host's token of identity for session-id; the gateway stops
+   honouring it at the epoch second `until`, when the login it came from ends."
+  [settings identity session-id until]
+  (issue settings identity session-audience session-ttl-seconds {:sid (str session-id) :until until}))
 
 (defn read-session-token
   "Claims of a session host's token when it was issued for session-id."
@@ -211,54 +262,67 @@
       claims)))
 
 (defn login-identity
+  "{:identity} of a test login (login mode) for username, its claims taken
+   from the dev users file and parsed like a token's; {:refused message}
+   when the parser refuses them, nil for an invalid username."
   [settings username]
   (let [sub
         (string/lower-case (string/trim (str username)))]
     (when (person-name? sub)
-      {:sub sub
-       :email (str sub "@" (:email-domain settings))
-       :name (string/trim username)})))
+      (claims/parse settings (claims/dev-claims settings sub)))))
 
-(def ^:private jwk-providers
-  (memoize (fn [url] (.build (JwkProviderBuilder. (URL. url))))))
+(defn- jwks?
+  [{:keys [jwt-jwks-url jwt-jwks-file jwt-discovery-url]}]
+  (some (complement string/blank?) [jwt-jwks-url jwt-jwks-file jwt-discovery-url]))
 
 (defn- external-algorithm
-  [{:keys [jwt-jwks-url jwt-secret]} decoded]
+  [{:keys [jwt-secret] :as settings} decoded]
   (cond
-    (not (string/blank? jwt-jwks-url))
-    (let [jwk
-          (.get (jwk-providers jwt-jwks-url) (.getKeyId decoded))]
-      (Algorithm/RSA256 ^RSAPublicKey (.getPublicKey jwk) nil))
+    (jwks? settings)
+    (idp/verification-algorithm (idp/provider settings :jwt) decoded)
 
     (not (string/blank? jwt-secret))
     (Algorithm/HMAC256 ^String jwt-secret)
 
     :else
-    (throw (ex-info "JWT auth requires MANAGER_JWT_JWKS_URL or MANAGER_JWT_SECRET" {}))))
+    (throw (ex-info "JWT auth requires MANAGER_JWT_JWKS_URL, MANAGER_JWT_JWKS_FILE, MANAGER_JWT_DISCOVERY_URL or MANAGER_JWT_SECRET" {}))))
 
 (defn read-external
-  "Claims of an identity provider token with the configured issuer and
-   audience whose subject is a valid username, else nil."
-  [{:keys [jwt-audience jwt-issuer] :as settings} token]
+  "Claims of an identity provider token with the configured (or
+   discovered) issuer and audience, else nil."
+  [{:keys [jwt-audience] :as settings} token]
   (when (and (not (string/blank? token))
-             (not (string/blank? jwt-audience))
-             (not (string/blank? jwt-issuer)))
+             (not (string/blank? jwt-audience)))
     (try
-      (let [decoded
+      (let [issuer
+            (or (idp/issuer (idp/provider settings :jwt))
+                (throw (ex-info "no issuer configured" {})))
+
+            decoded
             (JWT/decode token)
 
             verifier
             (-> (JWT/require (external-algorithm settings decoded))
-                (.withIssuer (into-array String [jwt-issuer]))
+                (.withIssuer (into-array String [issuer]))
                 (.withAudience (into-array String [jwt-audience]))
                 (.build))
 
             claims
             (claims->map (.verify verifier ^String token))]
-        (when (person-name? (:sub claims))
-          (assoc claims :name (or (:name claims) (:preferred_username claims)))))
-      (catch Exception _
+        (assoc claims :name (or (:name claims) (:preferred_username claims))))
+      (catch Exception e
+        (log/debug "Identity provider token refused:" (ex-message e))
         nil))))
+
+(defn reload-keys!
+  "Loads the identity provider's discovery document and keys again now
+   (jwt and oidc modes): {:discovery outcome :keys outcome}, nil in other
+   modes or with a shared secret."
+  [{:keys [auth-mode] :as settings}]
+  (case auth-mode
+    "jwt" (when (jwks? settings) (idp/reload-now! (idp/provider settings :jwt)))
+    "oidc" (idp/reload-now! (idp/provider settings :oidc))
+    nil))
 
 (defn parse-cookies
   "Cookies of a Cookie header. A name sent more than once is left out, so a
@@ -301,15 +365,23 @@
       (read-external settings external) external
       :else nil)))
 
+(defn authenticate
+  "{:identity} behind a person's token, {:refused message} when the claims
+   parser refuses an identity provider token, nil for no valid token."
+  [settings token]
+  (if-let [claims
+           (read-token settings token login-audience)]
+    (when (person-name? (:sub claims))
+      {:identity (identity-of settings claims)})
+    (when-let [external
+               (when (jwt-mode? settings)
+                 (read-external settings token))]
+      (claims/parse settings external))))
+
 (defn person
   "The identity behind a person's token, or nil."
   [settings token]
-  (when-let [claims
-             (or (read-token settings token login-audience)
-                 (when (jwt-mode? settings)
-                   (read-external settings token)))]
-    (when (person-name? (:sub claims))
-      (identity-of settings claims))))
+  (:identity (authenticate settings token)))
 
 (defn resolve-identity
   "Identity of a request from its cookies and Authorization header."
@@ -332,14 +404,18 @@
      :role :non-interactive
      :roles [:non-interactive]
      :realm :main}
-    (when-let [{:keys [sub email name]}
-               (person settings token)]
-      {:id sub
-       :email email
-       :name name
-       :role :user
-       :roles [:user]
-       :realm :main})))
+    (let [{:keys [identity refused]}
+          (authenticate settings token)]
+      (cond
+        refused
+        (throw (ex-info refused {:status 403 :message refused}))
+
+        identity
+        (merge (select-keys identity [:email :name :tenant :teams :tenant-admin :operator])
+               {:id (:sub identity)
+                :role :user
+                :roles [:user]
+                :realm :main})))))
 
 (defn resolve-user
   [settings]
@@ -362,12 +438,21 @@
   (= :non-interactive (get-in ctx [:meta :user :role])))
 
 (defn check-settings!
-  "Refuses settings that would make authentication unsafe."
-  [{:keys [auth-mode jwt-issuer jwt-audience jwt-jwks-url jwt-secret]}]
+  "Refuses settings that would make authentication unsafe, and a claims
+   parser that does not load. oidc mode's settings are checked by
+   manager-svc.oidc/check-settings!."
+  [{:keys [auth-mode jwt-issuer jwt-discovery-url jwt-audience jwt-secret] :as settings}]
+  (claims/check-settings! settings)
   (case auth-mode
     "login" (log/warn "MANAGER_AUTH_MODE=login: anyone can log in as anyone without a password. Use it for local development only.")
-    "jwt" (when (or (string/blank? jwt-issuer)
-                    (string/blank? jwt-audience)
-                    (and (string/blank? jwt-jwks-url) (string/blank? jwt-secret)))
-            (throw (ex-info "MANAGER_AUTH_MODE=jwt requires MANAGER_JWT_ISSUER, MANAGER_JWT_AUDIENCE and MANAGER_JWT_JWKS_URL or MANAGER_JWT_SECRET" {})))
+    "oidc" nil
+    "jwt" (do
+            (when (or (and (string/blank? jwt-issuer) (string/blank? jwt-discovery-url))
+                      (string/blank? jwt-audience)
+                      (and (not (jwks? settings)) (string/blank? jwt-secret)))
+              (throw (ex-info (str "MANAGER_AUTH_MODE=jwt requires MANAGER_JWT_AUDIENCE, MANAGER_JWT_ISSUER or "
+                                   "MANAGER_JWT_DISCOVERY_URL, and MANAGER_JWT_JWKS_URL, MANAGER_JWT_JWKS_FILE, "
+                                   "MANAGER_JWT_DISCOVERY_URL or MANAGER_JWT_SECRET")
+                              {})))
+            (idp/check-algorithm! settings :jwt))
     (throw (ex-info (str "Unknown MANAGER_AUTH_MODE " auth-mode) {}))))

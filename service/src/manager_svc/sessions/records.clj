@@ -16,16 +16,25 @@
     (:session (client/query (:settings system) {:query-id :get-session-record :session-id id}))))
 
 (defn rows
-  "Directory rows of every session, or of a team's."
+  "Directory rows of every session, of a tenant's or of a team's."
   ([system]
    (client/query (:settings system) {:query-id :list-session-rows}))
-  ([system team-id]
-   (client/query (:settings system) {:query-id :list-session-rows :team-id team-id})))
+  ([system tenant]
+   (client/query (:settings system) {:query-id :list-session-rows :tenant tenant}))
+  ([system tenant team-id]
+   (client/query (:settings system) {:query-id :list-session-rows :tenant tenant :team-id team-id})))
 
 (defn command!
   [system cmd-id session-id & [attrs]]
   (client/command (:settings system) (cond-> {:cmd-id cmd-id :id session-id}
                                        attrs (assoc :attrs attrs))))
+
+(defn record!
+  "A command whose effects nobody waits for: the lifecycle worker sends its
+   outcomes with it while it holds the sessions lock."
+  [system cmd-id session-id & [attrs]]
+  (client/command-no-settle (:settings system) (cond-> {:cmd-id cmd-id :id session-id}
+                                                 attrs (assoc :attrs attrs))))
 
 (defn kick-lifecycle!
   []

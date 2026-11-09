@@ -15,7 +15,9 @@
   [[:workflows [(component-els/workflow-start (:team h/fixture) (:workflow h/fixture))]]
    [:runs #{component-els/runs-table component-els/runs-empty}]
    [:setup [(team-els/agent-card "analyst") (team-els/harness-card "sandboxed")]]
-   [:people [team-els/members team-els/budget]]])
+   [:sessions #{component-els/sessions-table component-els/sessions-empty}]
+   [:usage [component-els/usage-stats]]
+   [:settings [team-els/configuration team-els/limits team-els/budget team-els/projects]]])
 
 (deftest library-it
   (with-ui [_page]

@@ -1,5 +1,5 @@
 (ns manager-svc.observability.metrics
-  "Prometheus /metrics for platform admins."
+  "Prometheus /metrics for platform operators, over every tenant."
   (:require [clojure.string :as string]
             [edd.core :as edd]
             [manager-svc.auth :as auth]
@@ -7,12 +7,11 @@
             [manager-svc.errors :as errors]
             [manager-svc.observability.telemetry :as telemetry]
             [manager-svc.observability.usage :as usage]
-            [manager-svc.platform.api :as platform]
             [manager-svc.sessions.api :as sessions]))
 
 (defn metrics-query
   [ctx _query]
-  {:usage (vec (usage/group-rows (usage/rows-since ctx nil) [:team-id :model]))
+  {:usage (vec (usage/group-rows (usage/rows-since ctx nil) [:tenant :team-id :model]))
    :tools (telemetry/metrics-rows ctx)})
 
 (defn- label-value
@@ -44,10 +43,10 @@
         (filter #(= :tool.blocked (keyword (:kind %))) tools)
 
         per-model
-        (fn [row] (labels :team (:team-id row) :model (:model row)))
+        (fn [row] (labels :tenant (:tenant row) :team (:team-id row) :model (:model row)))
 
         per-tool
-        (fn [row] (labels :team (:team-id row) :tool (:tool row)))]
+        (fn [row] (labels :tenant (:tenant row) :team (:team-id row) :tool (:tool row)))]
     (str
      (string/join
       "\n"
@@ -55,7 +54,7 @@
        (family "opencode_llm_tokens_total" "counter" "Tokens processed through the LLM gateway."
                (for [row usage
                      [kind k] [["prompt" :prompt-tokens] ["completion" :completion-tokens]]]
-                 [(labels :team (:team-id row) :model (:model row) :type kind) (k row)]))
+                 [(labels :tenant (:tenant row) :team (:team-id row) :model (:model row) :type kind) (k row)]))
        (family "opencode_llm_requests_total" "counter" "LLM gateway requests."
                (for [row usage] [(per-model row) (:calls row)]))
        (family "opencode_llm_errors_total" "counter" "LLM gateway requests that failed."
@@ -77,7 +76,7 @@
         (auth/resolve-identity settings cookies (get headers "authorization"))]
     (cond
       (nil? identity) (errors/fail! 401 "Not authenticated")
-      (not (platform/platform-admin? system (:sub identity))) (errors/forbidden! "Platform administrators only")
+      (not (:operator identity)) (errors/forbidden! "Platform operators only")
       :else {:status 200
              :headers {"Content-Type" "text/plain; version=0.0.4"}
              :body (render (client/query settings {:query-id :get-observability-metrics})

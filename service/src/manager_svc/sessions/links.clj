@@ -38,9 +38,14 @@
   [settings session]
   (manager-url settings (entry-path session)))
 
+(defn page-path
+  "The session's page in the UI, under its tenant."
+  [{:keys [id tenant]}]
+  (str "/" (URLEncoder/encode (str tenant) StandardCharsets/UTF_8) "/sessions/" id))
+
 (defn manager-page
-  [settings {:keys [id]}]
-  (manager-url settings (str "/sessions/" id)))
+  [settings session]
+  (manager-url settings (page-path session)))
 
 (defn open-path
   ([session]

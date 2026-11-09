@@ -8,6 +8,7 @@
    the last activity of a session is the later of the two."
   (:require [clojure.tools.logging :as log]
             [manager-svc.opencode :as opencode]
+            [manager-svc.platform.api :as platform]
             [manager-svc.sessions.backend :as backend]
             [manager-svc.sessions.links :as links]
             [manager-svc.sessions.storage :as storage]
@@ -181,6 +182,35 @@
                :when (= :running (get statuses id))]
            id))))
 
+(defn limit-error
+  "Why the team may not run another session beside its running ones, or nil."
+  [system tenant team-id running]
+  (let [limit
+        (get-in (platform/team system tenant team-id) [:budget :max-running-sessions])]
+    (when (and limit (>= running limit))
+      (str "Team " team-id " already has " running
+           " running sessions (limit " limit "). Stop one and retry."))))
+
+(defn- team-idle-minutes
+  [system {:keys [tenant team-id]}]
+  (when (and tenant team-id)
+    (try
+      (get-in (platform/team system tenant team-id) [:budget :idle-minutes])
+      (catch Exception e
+        (log/warn "Could not read the idle limit of team" tenant team-id (ex-message e))
+        nil))))
+
+(defn idle-minutes
+  "How long a session may stay idle: its harness's limit, or its team's
+   (team.json budget.idle_minutes) when that is smaller."
+  [system session sandbox]
+  (let [harness
+        (or (:idle-minutes sandbox) 15)
+
+        team
+        (team-idle-minutes system session)]
+    (if team (min harness team) harness)))
+
 (defn done?
   "Idle past its grace period and no conversation busy."
   [system {:keys [id] :as session}]
@@ -192,7 +222,7 @@
 
         grace
         (if sandbox
-          (* 60 (or (:idle-minutes sandbox) 15))
+          (* 60 (idle-minutes system session sandbox))
           (:idle-grace-seconds settings))
 
         idle

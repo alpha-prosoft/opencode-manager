@@ -6,10 +6,10 @@
             [manager-svc.sessions.live :as live]))
 
 (defn session-view
-  "The session as who (a username or an access/viewer) sees it."
+  "The session as who (a caller map or an edge identity) sees it."
   [system statuses session who]
   (let [viewer
-        (if (map? who) who (access/viewer system who))
+        (access/viewer who)
 
         blocked
         (access/open-blocked system session viewer)]
@@ -24,4 +24,5 @@
             :can-manage (access/can-manage? system session viewer)
             :can-open (nil? blocked)
             :open-blocked blocked
-            :personal (access/personal? system session)})))
+            :personal (access/personal? system session)
+            :team-session (access/platform-owned? session)})))

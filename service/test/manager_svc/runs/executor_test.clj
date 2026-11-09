@@ -29,10 +29,10 @@
 
 (defn- fake-scm
   [calls]
-  (fn [provider-name token]
+  (fn [{:keys [provider]} {:keys [secret]}]
     {:git-username "x-access-token"
      :git-host "github.com"
-     :token token
+     :token secret
      :open-pull-requests (fn [_] [])
      :pull-request (fn [repository number]
                      {:id number :title "Add sys" :author "dave" :source-branch "feature"
@@ -41,7 +41,7 @@
                       :clone-url (str "https://github.com/" repository ".git")})
      :diff (fn [_ _] diff)
      :comment (fn [repository number content path line]
-                (swap! calls conj [:comment provider-name repository number path line (first (string/split-lines content))])
+                (swap! calls conj [:comment (name provider) repository number path line (first (string/split-lines content))])
                 (count @calls))
      :create-pull-request (fn [repository source destination title _description draft]
                             (swap! calls conj [:create-pr repository source destination title draft])
@@ -113,8 +113,12 @@
                  (= [:awaiting-result session-id "conv-1" "model-a"]
                     ((juxt :status :session-id :conversation :model) run)))
                 (is
-                 (= ["Review PRs · PR #4" :team "alpha" run-id "alice"]
-                    ((juxt :name :visibility :team-id :run-id :sub) session)))
+                 (= ["Review PRs · PR #4" :team "acme" "alpha" run-id "alice"]
+                    ((juxt :name :visibility :tenant :team-id :run-id :sub) session)))
+                (testing "the session carries the project of the run"
+                  (is
+                   (= ["app" "app"]
+                      [(:project run) (:project session)])))
                 (is
                  (= {:url "http://manager:8001/mcp/"
                      :headers {:X-Platform-Key (auth/derived-key (:settings system) "mcp" session-id)}}
@@ -245,8 +249,8 @@
             (f/env {:runs/scm (fake-scm calls) :runs/ci ci-tool})]
         (with-fakes* (merge (fake-opencode calls statuses)
                             {#'git/diff (fn [_] diff)
-                             #'git/commit-and-push! (fn [{:keys [branch message author]}]
-                                                      (swap! calls conj [:push branch (first (string/split-lines message)) author])
+                             #'git/commit-and-push! (fn [{:keys [ref message author]}]
+                                                      (swap! calls conj [:push ref (first (string/split-lines message)) author])
                                                       "c0ffee1234567890")
                              #'ci/poll-seconds -1})
           (fn []
@@ -264,7 +268,7 @@
                (= :completed
                   (:status run)))
               (is
-               (= [[:push (str "agent/" run-id) "Add health endpoint"
+               (= [[:push (str "refs/heads/agent/" run-id) "Add health endpoint"
                     ["alice (via Agent Platform)" "alice@users.local"]]]
                   (filter #(= :push (first %)) @calls)))
               (is
@@ -277,6 +281,10 @@
                (= {:pull-request {:id 12 :url "https://github.com/acme/app/pull/12" :draft false}
                    :build {:state "failed" :number 5 :follow-up-run follow-up-id}}
                   (select-keys (manager-svc.runs.model/outcome (:result run)) [:pull-request :build])))
+              (is
+               (= :github
+                  (manager-svc.runs.model/scm-provider run))
+               "the run knows where it delivered its pull request")
               (is
                (= ["get_build" {:job "app/PR-12" :number "lastBuild"}]
                   (first @tool-calls)))
@@ -522,3 +530,38 @@
         (is
          (= 2
             (count @submitted)))))))
+
+(deftest sessions-are-shared-as-the-workflow-and-the-team-admin-say
+  (let [interactive
+        {:interactive true}
+
+        automated
+        {:interactive false}]
+    (is
+     (= {:person-team :private :person-tenant :tenant :automated-team :team :automated-tenant :tenant
+         :team-session :team :team-session-for-the-tenant :tenant}
+        {:person-team (executor/visibility {:visibility "team"} interactive {:created-by "alice"})
+         :person-tenant (executor/visibility {:visibility "tenant"} interactive {:created-by "alice"})
+         :automated-team (executor/visibility {:visibility "team"} automated {:platform-started true})
+         :automated-tenant (executor/visibility {:visibility "tenant"} automated {:platform-started true})
+         :team-session (executor/visibility {:visibility "team"} interactive
+                                            {:platform-started true :session-visibility :team})
+         :team-session-for-the-tenant (executor/visibility {:visibility "team"} interactive
+                                                           {:platform-started true :session-visibility "tenant"})}))
+    (testing "a person's choice for their run wins over the workflow"
+      (is
+       (= {:private-on-a-team-workflow :private :tenant-on-a-team-workflow :tenant :team-on-a-tenant-workflow :team}
+          {:private-on-a-team-workflow (executor/visibility {:visibility "team"} automated
+                                                            {:created-by "alice" :session-visibility :private})
+           :tenant-on-a-team-workflow (executor/visibility {:visibility "team"} interactive
+                                                           {:created-by "alice" :session-visibility :tenant})
+           :team-on-a-tenant-workflow (executor/visibility {:visibility "tenant"} interactive
+                                                           {:created-by "alice" :session-visibility "team"})})))))
+
+(deftest sessions-are-named-after-what-they-work-on
+  (is
+   (= ["Review · PR #4" "Review · Change 7" "Fix login" "Review"]
+      [(executor/session-title {:name "Review"} {:inputs {:pull-request 4} :trigger {:scm {:provider "github"}}})
+       (executor/session-title {:name "Review"} {:inputs {:pull-request 7} :trigger {:scm {:provider "gerrit"}}})
+       (executor/session-title {:name "Review"} {:inputs {:title "Fix login"}})
+       (executor/session-title {:name "Review"} {:inputs {}})])))

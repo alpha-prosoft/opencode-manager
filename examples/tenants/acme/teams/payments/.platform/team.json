@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "budget": {
+    "daily_tokens": 2000000,
+    "max_running_sessions": 2
+  },
+  "llm_connections": [
+    {
+      "id": "copilot",
+      "models": [
+        "claude-sonnet-5.5",
+        "gemini-3.5-flash"
+      ]
+    }
+  ],
+  "mcp_servers": [
+    "jira"
+  ]
+}

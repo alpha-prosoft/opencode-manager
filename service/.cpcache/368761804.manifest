@@ -1,9 +1,0 @@
-/home/pofuk/alpha/edd-core/modules/edd-core-security/deps.edn
-/home/pofuk/alpha/edd-core/modules/edd-core-view-store-postgres/deps.edn
-/home/pofuk/alpha/edd-core/modules/edd-core-undertow/deps.edn
-/home/pofuk/alpha/edd-core/modules/edd-core-opensearch/deps.edn
-/home/pofuk/alpha/edd-core/deps.edn
-/home/pofuk/alpha/edd-core/modules/edd-core-io/deps.edn
-/home/pofuk/alpha/edd-core/modules/edd-core-json/deps.edn
-/home/pofuk/alpha/edd-core/deps.edn
-/home/pofuk/alpha/edd-core/modules/edd-router/deps.edn

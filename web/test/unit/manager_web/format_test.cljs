@@ -80,3 +80,35 @@
   (is
    (= "Started by hand"
       (format/workflow-trigger {}))))
+
+(deftest gerrit-changes-are-named-changes
+  (is
+   (= "Change 12"
+      (format/change-name :gerrit 12)))
+  (is
+   (= "PR #12"
+      (format/change-name "github" 12)))
+  (is
+   (= "Change 7 in demo-service"
+      (format/trigger-label {:type "pull_request" :scm {:provider "gerrit" :repository "demo-service"}
+                             :pull-request {:id 7}})))
+  (is
+   (= "PR #7 in acme/app"
+      (format/trigger-label {:type "pull_request" :scm {:provider "bitbucket" :repository "acme/app"}
+                             :pull-request {:id 7}}))))
+
+(deftest runs-are-named-by-their-title
+  (is
+   (= ["Fix the login" "Implement"]
+      (mapv format/run-title [{:inputs {:title "Fix the login"} :workflow-name "Implement"}
+                              {:inputs {:title " "} :workflow-name "Implement"}]))))
+
+(deftest who-started-a-run
+  (is
+   (= ["Team session · started by bob" "Started by the platform (schedule)" "Started by the platform (webhook)"]
+      (mapv format/trigger-label [{:type "team_session" :by "bob"} {:type "schedule"} {:type "webhook"}]))))
+
+(deftest possessives
+  (is
+   (= ["Operations'" "acme's"]
+      (mapv format/possessive ["Operations" "acme"]))))

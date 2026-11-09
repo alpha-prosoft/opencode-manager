@@ -76,23 +76,34 @@ spec:
               value: {{ .Values.sessionImage | quote }}
             - name: MANAGER_REAP_INTERVAL_SECONDS
               value: {{ .Values.reaper.intervalSeconds | quote }}
-            {{- with .Values.onboarding }}
-            {{- if .url }}
-            - name: MANAGER_ONBOARDING_URL
-              value: {{ .url | quote }}
-            - name: MANAGER_ONBOARDING_BRANCH
-              value: {{ .branch | quote }}
-            - name: MANAGER_ONBOARDING_FILE
-              value: {{ .file | quote }}
-            - name: MANAGER_ONBOARDING_USERNAME
-              value: {{ .username | quote }}
+            {{- if .Values.tenantsFile.configMap }}
+            - name: MANAGER_TENANTS_FILE
+              value: /config/tenants/{{ .Values.tenantsFile.key }}
+            {{- else }}
+            - name: MANAGER_TENANTS
+              value: {{ .Values.tenants | toJson | quote }}
+            {{- end }}
+            - name: MANAGER_OPERATORS
+              value: {{ join "," .Values.operators | quote }}
             - name: MANAGER_SYNC_INTERVAL_MINUTES
-              value: {{ .syncIntervalMinutes | quote }}
-            {{- with .credentials }}
-            - name: MANAGER_ONBOARDING_CREDENTIALS
-              value: {{ . | quote }}
+              value: {{ .Values.syncIntervalMinutes | quote }}
+            {{- with .Values.httpGitHosts }}
+            - name: MANAGER_HTTP_GIT_HOSTS
+              value: {{ join "," . | quote }}
             {{- end }}
+            {{- with .Values.trustedProxies }}
+            - name: MANAGER_TRUSTED_PROXIES
+              value: {{ join "," . | quote }}
             {{- end }}
+            - name: MANAGER_CLAIMS_PARSER
+              value: {{ .Values.claims.parser | quote }}
+            {{- if .Values.claims.parserFile.configMap }}
+            - name: MANAGER_CLAIMS_PARSER_FILE
+              value: /config/claims/{{ .Values.claims.parserFile.key }}
+            {{- end }}
+            {{- if and (eq .Values.auth.mode "login") .Values.claims.devUsers.configMap }}
+            - name: MANAGER_DEV_USERS_FILE
+              value: /config/dev-users/{{ .Values.claims.devUsers.key }}
             {{- end }}
             - name: MANAGER_MANAGER_SERVICE_URL
               value: http://{{ include "opencode-manager.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:8000
@@ -105,17 +116,70 @@ spec:
             - name: MANAGER_AUTH_TTL_HOURS
               value: {{ .Values.auth.ttlHours | quote }}
             {{- if eq .Values.auth.mode "jwt" }}
+            {{- if not (or .Values.auth.jwtIssuer .Values.auth.jwtDiscoveryUrl) }}
+            {{- fail "auth.jwtIssuer or auth.jwtDiscoveryUrl is required when auth.mode is jwt" }}
+            {{- end }}
+            {{- with .Values.auth.jwtIssuer }}
             - name: MANAGER_JWT_ISSUER
-              value: {{ required "auth.jwtIssuer is required when auth.mode is jwt" .Values.auth.jwtIssuer | quote }}
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.auth.jwtDiscoveryUrl }}
+            - name: MANAGER_JWT_DISCOVERY_URL
+              value: {{ . | quote }}
+            {{- end }}
             - name: MANAGER_JWT_AUDIENCE
               value: {{ required "auth.jwtAudience is required when auth.mode is jwt" .Values.auth.jwtAudience | quote }}
             - name: MANAGER_JWT_COOKIE
               value: {{ .Values.auth.jwtCookie | quote }}
             {{- end }}
+            {{- if eq .Values.auth.mode "oidc" }}
+            {{- if not (or .Values.auth.oidc.issuer .Values.auth.oidc.discoveryUrl) }}
+            {{- fail "auth.oidc.issuer or auth.oidc.discoveryUrl is required when auth.mode is oidc" }}
+            {{- end }}
+            {{- with .Values.auth.oidc.issuer }}
+            - name: MANAGER_OIDC_ISSUER
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.auth.oidc.discoveryUrl }}
+            - name: MANAGER_OIDC_DISCOVERY_URL
+              value: {{ . | quote }}
+            {{- end }}
+            - name: MANAGER_OIDC_CLIENT_ID
+              value: {{ required "auth.oidc.clientId is required when auth.mode is oidc" .Values.auth.oidc.clientId | quote }}
+            {{- if .Values.auth.oidc.clientSecret.existingSecret }}
+            - name: MANAGER_OIDC_CLIENT_SECRET_FILE
+              value: /config/oidc/{{ .Values.auth.oidc.clientSecret.key }}
+            {{- end }}
+            - name: MANAGER_OIDC_SCOPES
+              value: {{ .Values.auth.oidc.scopes | quote }}
+            {{- with .Values.auth.oidc.redirectUrl }}
+            - name: MANAGER_OIDC_REDIRECT_URL
+              value: {{ . | quote }}
+            {{- end }}
+            - name: MANAGER_OIDC_CLAIMS_SOURCE
+              value: {{ .Values.auth.oidc.claimsSource | quote }}
+            {{- end }}
             {{- with .Values.auth.jwtJwksUrl }}
             - name: MANAGER_JWT_JWKS_URL
               value: {{ . | quote }}
             {{- end }}
+            {{- if or (eq .Values.auth.mode "jwt") (eq .Values.auth.mode "oidc") }}
+            {{- $keys := ternary "MANAGER_OIDC_JWKS" "MANAGER_JWT_JWKS" (eq .Values.auth.mode "oidc") }}
+            {{- with .Values.auth.jwks.file }}
+            - name: {{ $keys }}_FILE
+              value: {{ . | quote }}
+            {{- end }}
+            - name: {{ $keys }}_REFRESH_SECONDS
+              value: {{ .Values.auth.jwks.refreshSeconds | quote }}
+            - name: {{ $keys }}_REFRESH_RETRY_SECONDS
+              value: {{ .Values.auth.jwks.refreshRetrySeconds | quote }}
+            {{- with .Values.auth.jwks.defaultAlgorithm }}
+            - name: {{ $keys }}_DEFAULT_ALGORITHM
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
+            - name: MANAGER_CONFIG_RELOAD_SECONDS
+              value: {{ .Values.configReloadSeconds | quote }}
             {{- if .Values.credentialsKey.existingSecret }}
             - name: MANAGER_CREDENTIALS_KEY
               valueFrom:
@@ -142,6 +206,26 @@ spec:
             - name: platform-secrets
               mountPath: /config/secrets
               readOnly: true
+            {{- if .Values.tenantsFile.configMap }}
+            - name: tenants
+              mountPath: /config/tenants
+              readOnly: true
+            {{- end }}
+            {{- if .Values.claims.parserFile.configMap }}
+            - name: claims-parser
+              mountPath: /config/claims
+              readOnly: true
+            {{- end }}
+            {{- if and (eq .Values.auth.mode "login") .Values.claims.devUsers.configMap }}
+            - name: dev-users
+              mountPath: /config/dev-users
+              readOnly: true
+            {{- end }}
+            {{- if and (eq .Values.auth.mode "oidc") .Values.auth.oidc.clientSecret.existingSecret }}
+            - name: oidc-client-secret
+              mountPath: /config/oidc
+              readOnly: true
+            {{- end }}
             {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -152,6 +236,39 @@ spec:
       volumes:
         {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if .Values.tenantsFile.configMap }}
+        - name: tenants
+          configMap:
+            name: {{ .Values.tenantsFile.configMap }}
+            items:
+              - key: {{ .Values.tenantsFile.key }}
+                path: {{ .Values.tenantsFile.key }}
+        {{- end }}
+        {{- if .Values.claims.parserFile.configMap }}
+        - name: claims-parser
+          configMap:
+            name: {{ .Values.claims.parserFile.configMap }}
+            items:
+              - key: {{ .Values.claims.parserFile.key }}
+                path: {{ .Values.claims.parserFile.key }}
+        {{- end }}
+        {{- if and (eq .Values.auth.mode "login") .Values.claims.devUsers.configMap }}
+        - name: dev-users
+          configMap:
+            name: {{ .Values.claims.devUsers.configMap }}
+            items:
+              - key: {{ .Values.claims.devUsers.key }}
+                path: {{ .Values.claims.devUsers.key }}
+        {{- end }}
+        {{- if and (eq .Values.auth.mode "oidc") .Values.auth.oidc.clientSecret.existingSecret }}
+        - name: oidc-client-secret
+          secret:
+            secretName: {{ .Values.auth.oidc.clientSecret.existingSecret }}
+            defaultMode: 0400
+            items:
+              - key: {{ .Values.auth.oidc.clientSecret.key }}
+                path: {{ .Values.auth.oidc.clientSecret.key }}
         {{- end }}
         - name: platform-secrets
           secret:

@@ -1,0 +1,111 @@
+# Local Gerrit and Jenkins for the platform's pull request (Gerrit change) review and build following flows.
+#
+#   scripts/seed-local-repos.sh
+#   docker compose -f compose.yml -f compose.ci.yml up -d --build
+#
+# Everything is set up on start, idempotently: gerrit-init sets the admin's HTTP password, creates the platform's
+# account and the demo-service project from examples/demo-service; Jenkins is configured as code with a verify job
+# for demo-service and a poller that builds every new patch set. Browsers reach both through Traefik at
+# http://gerrit.localhost:8080 (development login: "Sign in" picks an account) and http://jenkins.localhost:8080
+# (admin / ${JENKINS_ADMIN_PASSWORD}). The manager and the MCP servers reach them as gerrit:8080 and jenkins:8080
+# on opencode-net. The passwords below are local development defaults; override them in the environment.
+services:
+  gerrit:
+    image: gerritcodereview/gerrit:3.12.3
+    environment:
+      CANONICAL_WEB_URL: ${GERRIT_WEB_URL:-http://gerrit.localhost:8080/}
+    volumes:
+      - gerrit-etc:/var/gerrit/etc
+      - gerrit-git:/var/gerrit/git
+      - gerrit-db:/var/gerrit/db
+      - gerrit-index:/var/gerrit/index
+      - gerrit-cache:/var/gerrit/cache
+      - gerrit-data:/var/gerrit/data
+    networks: [opencode-net]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/config/server/version"]
+      interval: 5s
+      retries: 60
+      start_period: 30s
+    restart: unless-stopped
+
+  gerrit-init:
+    image: opencode-platform/ci-gerrit-init:dev
+    build:
+      context: ./deploy/gerrit
+    environment:
+      GERRIT_URL: http://gerrit:8080
+      GERRIT_ADMIN_PASSWORD: ${GERRIT_ADMIN_PASSWORD:-gerrit-admin-secret}
+      GERRIT_PLATFORM_USER: platform
+      GERRIT_PLATFORM_PASSWORD: ${GERRIT_PLATFORM_PASSWORD:-gerrit-platform-secret}
+      GERRIT_PROJECT: demo-service
+      GERRIT_SEED_DIR: /seed/demo-service
+    volumes:
+      - ./examples/demo-service:/seed/demo-service:ro
+    networks: [opencode-net]
+    depends_on:
+      gerrit:
+        condition: service_healthy
+    restart: "no"
+
+  jenkins:
+    image: opencode-platform/ci-jenkins:dev
+    build:
+      context: ./deploy/jenkins
+    environment:
+      JENKINS_ADMIN_PASSWORD: ${JENKINS_ADMIN_PASSWORD:-jenkins-admin-secret}
+      JENKINS_PLATFORM_USER: platform
+      JENKINS_PLATFORM_PASSWORD: ${JENKINS_PLATFORM_PASSWORD:-jenkins-platform-secret}
+      JENKINS_PLATFORM_TOKEN: ${JENKINS_PLATFORM_TOKEN:-1100000000000000000000000000000001}
+      JENKINS_PUBLIC_URL: ${JENKINS_WEB_URL:-http://jenkins.localhost:8080/}
+      GERRIT_URL: http://gerrit:8080
+      GERRIT_POLL_PROJECTS: demo-service=demo-service-verify
+    volumes:
+      - jenkins-home:/var/jenkins_home
+    networks: [opencode-net]
+    depends_on:
+      gerrit:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/login"]
+      interval: 5s
+      retries: 60
+      start_period: 30s
+    restart: unless-stopped
+
+  ci-routes:
+    image: opencode-platform/ci-gerrit-init:dev
+    command: ["cp", "/routes/ci.yml", "/traefik/dynamic/ci.yml"]
+    user: "0"
+    volumes:
+      - ./deploy/traefik/ci.yml:/routes/ci.yml:ro
+      - traefik-dynamic:/traefik/dynamic
+    network_mode: none
+    depends_on:
+      gerrit-init:
+        condition: service_completed_successfully
+    restart: "no"
+
+  mcp-jenkins:
+    environment:
+      JENKINS_URL: http://jenkins:8080
+
+  manager:
+    environment:
+      # The local Gerrit speaks plain http on the compose network.
+      MANAGER_HTTP_GIT_HOSTS: gerrit
+      # The tenant's values of the GERRIT_TOKEN and JENKINS_TOKEN credentials (examples/tenants/acme), as the
+      # operator's secrets; tenant admins, teams and people can still set their own.
+      PLATFORM_SECRET_GERRIT_TOKEN: ${GERRIT_PLATFORM_PASSWORD:-gerrit-platform-secret}
+      PLATFORM_SECRET_GERRIT_TOKEN_USERNAME: platform
+      PLATFORM_SECRET_JENKINS_TOKEN: ${JENKINS_PLATFORM_TOKEN:-1100000000000000000000000000000001}
+      PLATFORM_SECRET_JENKINS_TOKEN_USERNAME: platform
+
+volumes:
+  gerrit-etc:
+  gerrit-git:
+  gerrit-db:
+  gerrit-index:
+  gerrit-cache:
+  gerrit-data:
+  jenkins-home:

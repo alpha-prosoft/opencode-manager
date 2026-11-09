@@ -13,7 +13,7 @@
 (rf/reg-event-db
  ::init
  (fn [db _]
-   (assoc db ::intro-hidden? (intro-dismissed?))))
+   (assoc (data/enter db) ::intro-hidden? (intro-dismissed?))))
 
 (rf/reg-fx
  ::remember-intro-dismissed

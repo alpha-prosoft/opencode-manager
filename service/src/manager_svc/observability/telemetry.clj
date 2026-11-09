@@ -30,6 +30,14 @@
 (def limits
   {"tool" 100 "call_id" 200 "conversation" 200 "event" 100})
 
+(def max-tools
+  "Tools counted by name per team in the all-time rollup; further ones are
+   counted together as other-tool."
+  500)
+
+(def other-tool
+  "other")
+
 (defn aggregate-id
   [session-id]
   (uuid/named (str "telemetry:" session-id)))
@@ -37,17 +45,32 @@
 (def total-id
   (uuid/named "telemetry-total"))
 
-(defn- truncate
+(defn- clip
+  [^String text]
+  (if (> (count text) max-detail-chars)
+    (subs text 0 max-detail-chars)
+    text))
+
+(defn- detail-value
+  "A detail as it is kept: text cut short, numbers and booleans as they
+   are, anything nested as its JSON text, cut short too."
   [value]
-  (if (and (string? value) (> (count value) max-detail-chars))
-    (subs value 0 max-detail-chars)
-    value))
+  (cond
+    (string? value) (clip value)
+    (or (number? value) (boolean? value)) value
+    :else (clip (json/canonical value))))
 
 (defn parse-report
   "Validated report attrs from the plugin's JSON body (string keys)."
   [body]
   (let [kind
         (get body "kind")
+
+        not-text
+        (some (fn [field]
+                (let [value (get body field)]
+                  (when-not (or (nil? value) (string? value)) field)))
+              (keys limits))
 
         too-long
         (some (fn [[field limit]]
@@ -60,6 +83,7 @@
     (cond
       (not (map? body)) (errors/invalid! "Invalid telemetry event")
       (not (contains? kinds kind)) (errors/invalid! "Unknown telemetry kind")
+      not-text (errors/invalid! (str not-text " must be text"))
       too-long (errors/invalid! (str too-long " is too long"))
       (and duration (or (not (integer? duration)) (neg? duration))) (errors/invalid! "Invalid duration_ms")
       :else {:kind (keyword kind)
@@ -70,7 +94,7 @@
              :detail (into {}
                            (keep (fn [[field k]]
                                    (when-some [value (get body field)]
-                                     [k (truncate value)])))
+                                     [k (detail-value value)])))
                            {"args" :args
                             "title" :title
                             "output_bytes" :output-bytes
@@ -99,6 +123,7 @@
         base
         (assoc aggregate
                :session-id (:session-id attrs)
+               :tenant (:tenant attrs)
                :team-id (:team-id attrs)
                :last-seen ts
                :blocked (or (:blocked aggregate) 0)
@@ -108,10 +133,26 @@
       :tool.blocked (update base :blocked inc)
       base)))
 
+(defn- counted-tool
+  "The tool a report counts under: its own while the team has room for
+   another name, else other-tool."
+  [rows {:keys [tenant team-id tool]}]
+  (let [team-tools
+        (into #{}
+              (comp (filter #(and (= tenant (:tenant %)) (= team-id (:team-id %))))
+                    (map :tool))
+              rows)]
+    (if (or (contains? team-tools tool) (< (count team-tools) max-tools))
+      tool
+      other-tool)))
+
 (defn apply-rolled-up
   [aggregate {:keys [attrs]}]
-  (let [target
-        {:team-id (or (:team-id attrs) "") :tool (or (:tool attrs) "") :kind (keyword (:kind attrs))}
+  (let [reported
+        {:tenant (:tenant attrs) :team-id (or (:team-id attrs) "") :tool (or (:tool attrs) "") :kind (keyword (:kind attrs))}
+
+        target
+        (assoc reported :tool (counted-tool (:rows aggregate) reported))
 
         add
         #(-> %
@@ -120,7 +161,8 @@
 
         same-target?
         (fn [row]
-          (and (= (:team-id target) (:team-id row))
+          (and (= (:tenant target) (:tenant row))
+               (= (:team-id target) (:team-id row))
                (= (:tool target) (:tool row))
                (= (:kind target) (:kind row))))]
     (assoc aggregate
@@ -136,10 +178,10 @@
   [_ctx {:keys [id attrs]}]
   {:event-id :telemetry-rolled-up
    :id id
-   :attrs (select-keys attrs [:team-id :tool :kind :duration-ms])})
+   :attrs (select-keys attrs [:tenant :team-id :tool :kind :duration-ms])})
 
 (defn commands
-  "The commands recording one report: {:session-id :team-id :ts ...parse-report}."
+  "The commands recording one report: {:session-id :tenant :team-id :ts ...parse-report}."
   [report]
   (cond-> [{:cmd-id :record-telemetry :id (aggregate-id (:session-id report)) :attrs report}]
     (#{:tool.end :tool.blocked} (:kind report))
@@ -219,7 +261,7 @@
     (activity aggregate (recent-events ctx session-id (or (:version aggregate) 0)))))
 
 (defn metrics-rows
-  "[{:team-id :tool :kind :n :total-ms}] over all sessions, as TelemetryStore.metrics."
+  "[{:tenant :team-id :tool :kind :n :total-ms}] over all sessions, as TelemetryStore.metrics."
   [ctx]
   (vec (:rows (common/get-by-id ctx {:id total-id}))))
 

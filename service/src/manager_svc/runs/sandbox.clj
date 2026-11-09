@@ -7,6 +7,7 @@
             [clojure.string :as string]
             [manager-svc.auth :as auth]
             [manager-svc.http :as http]
+            [manager-svc.platform.api :as platform]
             [manager-svc.sessions.api :as sessions]))
 
 (def provider-id "platform")
@@ -112,10 +113,19 @@
         (string/replace "__KEY__" (http/write-json (session-key settings "telemetry" session-id)))
         (string/replace "__POLICY__" (http/write-json policy)))))
 
+(defn idle-minutes
+  "The harness's idle timeout, capped by the team's (team.json budget)."
+  [harness team]
+  (let [limit
+        (get-in team [:budget :idle-minutes])]
+    (if (and limit (:idle-minutes harness))
+      (min limit (:idle-minutes harness))
+      (or (:idle-minutes harness) limit))))
+
 (defn sandbox
   "What sessions.api/create-session! takes as :sandbox; password is the
    session's secret key (OPENCODE_SERVER_PASSWORD)."
-  [settings {:keys [session-id harness team-id run-id skills password] :as opts}]
+  [settings {:keys [session-id harness tenant team-id team run-id skills password] :as opts}]
   (let [config
         (opencode-config settings opts)]
     {:image (or (:image harness) (:session-image settings))
@@ -125,9 +135,10 @@
      :pids (get-in harness [:resources :pids])
      :llm-connection (get-in harness [:llm :connection])
      :llm-models (vec (get-in harness [:llm :models]))
+     :tenant tenant
      :team-id team-id
      :run-id run-id
-     :idle-minutes (:idle-minutes harness)
+     :idle-minutes (idle-minutes harness team)
      :mcp-servers (mapv name (:mcp harness))
      :env (assoc lockdown-env "OPENCODE_SERVER_PASSWORD" (str password))
      :files (merge {"opencode/opencode.json" (http/write-json config)
@@ -135,3 +146,17 @@
                     "opencode/plugins/platform-monitor.js" (monitor-plugin settings session-id harness)}
                    (into {} (for [[path content] skills]
                               [(str "opencode/skills/" path) content])))}))
+
+(defn session-sandbox
+  "The sandbox of a session running a team's workflow with its agent and
+   harness, the session's own key and the harness's skills. opts:
+   {:session-id :tenant :team-id :workflow :agent :harness :team :prompt
+    :interactive :result-tool :run-id}."
+  [system {:keys [session-id tenant team-id workflow harness] :as opts}]
+  (sandbox (:settings system)
+           (merge (select-keys opts [:session-id :tenant :team-id :agent :harness :team :prompt
+                                     :interactive :result-tool :run-id])
+                  {:agent-id (:agent workflow)
+                   :password (sessions/secret-key system session-id)
+                   :skills (when (seq (:skills harness))
+                             (platform/read-skills system tenant team-id (:skills harness)))})))

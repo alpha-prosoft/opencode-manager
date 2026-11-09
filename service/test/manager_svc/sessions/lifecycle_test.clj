@@ -3,6 +3,8 @@
             [clojure.test :refer [deftest is testing]]
             [edd.test.fixture.dal :as mock]
             [manager-svc.auth :as auth]
+            [manager-svc.client :as client]
+            [manager-svc.effects :as effects]
             [manager-svc.observability.api :as observability]
             [manager-svc.opencode :as opencode]
             [manager-svc.runs.api :as runs]
@@ -26,7 +28,7 @@
           (fixtures/ctx system)
 
           bob
-          (support/as-user ctx "bob")]
+          (fixtures/as ctx "bob")]
       (fixtures/with-domains ctx
         (fixtures/create-session! system ctx {:id session-id :owner "bob" :start true})
         (lifecycle/reconcile! system)
@@ -96,13 +98,13 @@
           ctx
           (fixtures/ctx system)]
       (fixtures/with-domains ctx
-        (fixtures/create-session! system ctx {:id session-id :owner "bob" :visibility :public})
+        (fixtures/create-session! system ctx {:id session-id :owner "bob" :visibility :tenant})
         (spit (io/file (storage/workspace settings session-id) "notes.txt") "hello")
         (io/make-parents (io/file (storage/session-dir settings session-id) storage/opencode-data "opencode.db"))
         (spit (io/file (storage/session-dir settings session-id) storage/opencode-data "opencode.db") "db")
         (spit (io/file (storage/session-dir settings session-id) storage/opencode-data "log") "skip")
-        (fixtures/command! (support/as-user ctx "carol") {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id}})
-        (fixtures/command! (support/as-user ctx "carol") {:cmd-id :start-session :id fork-id})
+        (fixtures/command! (fixtures/as ctx "carol") {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id}})
+        (fixtures/command! (fixtures/as ctx "carol") {:cmd-id :start-session :id fork-id})
         (let [audited
               (atom [])
 
@@ -150,9 +152,9 @@
           ctx
           (fixtures/ctx system)]
       (fixtures/with-domains ctx
-        (fixtures/create-session! system ctx {:id session-id :owner "bob" :visibility :public})
-        (fixtures/command! (support/as-user ctx "carol") {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id}})
-        (fixtures/command! (support/as-user ctx "bob") {:cmd-id :delete-session :id session-id})
+        (fixtures/create-session! system ctx {:id session-id :owner "bob" :visibility :tenant})
+        (fixtures/command! (fixtures/as ctx "carol") {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id}})
+        (fixtures/command! (fixtures/as ctx "bob") {:cmd-id :delete-session :id session-id})
         (fixtures/command! (support/as-platform ctx) {:cmd-id :record-session-deleted :id session-id})
         (lifecycle/reconcile! system)
         (is
@@ -168,7 +170,7 @@
           (fixtures/ctx system)
 
           bob
-          (support/as-user ctx "bob")]
+          (fixtures/as ctx "bob")]
       (fixtures/with-domains ctx
         (fixtures/create-session! system ctx {:id session-id :owner "bob" :start true})
         (testing "a stop asked for while the start runs stays pending"
@@ -187,6 +189,40 @@
         (is
          (= [:stop session-id]
             (last (fixtures/calls system))))))))
+
+(deftest effects-are-never-waited-for-under-the-lock
+  (mock/with-mock-dal
+    (let [system
+          (fixtures/system)
+
+          ctx
+          (fixtures/ctx system)
+
+          locked?
+          (fn []
+            (Thread/holdsLock (:sessions/lock system)))
+
+          settled
+          (atom [])]
+      (fixtures/with-domains ctx
+        (fixtures/create-session! system ctx {:id session-id :owner "bob" :visibility :tenant :start true})
+        (fixtures/command! (fixtures/as ctx "carol") {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id}})
+        (let [command
+              client/command]
+          (with-redefs [runs/fork-sandbox (fn [_ _ _] {:mcp-servers []})
+                        observability/append-audit! (fn [& _] nil)
+                        effects/settle! (fn [] (swap! settled conj (locked?)))
+                        client/command (fn [& args]
+                                         (swap! settled conj (locked?))
+                                         (apply command args))]
+            (lifecycle/reconcile! system)))
+        (testing "the pass started the session and the fork it prepared"
+          (is
+           (= #{session-id fork-id}
+              (set (keep (fn [[action id]] (when (= :start action) id)) (fixtures/calls system))))))
+        (is
+         (= [false]
+            @settled))))))
 
 (deftest images-are-pulled-outside-the-lock
   (mock/with-mock-dal
@@ -321,6 +357,7 @@
               (api/create-session! system {:identity {:sub "bob" :email "bob@users.local"}
                                            :name "Review PR"
                                            :visibility :team
+                                           :tenant "acme"
                                            :team-id "alpha"
                                            :activity "review"
                                            :labels {:workflow "review"}
@@ -351,7 +388,7 @@
                (nil?
                 (api/session-by-key system (auth/derived-key (:settings system) purpose id) #{"session"})))))
           (testing "keys of stopped or locked sessions are refused"
-            (fixtures/command! (support/as-user ctx "bob") {:cmd-id :stop-session :id id})
+            (fixtures/command! (fixtures/as ctx "bob") {:cmd-id :stop-session :id id})
             (fixtures/command! (support/as-platform ctx) {:cmd-id :record-session-stopped :id id})
             (is
              (nil?
@@ -360,10 +397,10 @@
             (fixtures/set-status! system id :running)
             (is
              (= 1
-                (api/running-count system "alpha")))
+                (api/running-count system "acme" "alpha")))
             (is
              (= 0
-                (api/running-count system "beta"))))
+                (api/running-count system "acme" "beta"))))
           (is
            (= (api/secret-key system id)
               (get (backend/environment (:settings system) id fixtures/sandbox) "OPENCODE_SERVER_PASSWORD")))
@@ -378,7 +415,7 @@
               (api/entry-url system created)))
           (testing "describe-session is the Session the UI reads, without keys"
             (let [described
-                  (api/describe-session system (api/get-session system id) "bob")]
+                  (api/describe-session system (api/get-session system id) (fixtures/person "bob"))]
               (is
                (= {:id id :is-owner true :can-manage true :can-open true :open-blocked nil}
                   (select-keys described [:id :is-owner :can-manage :can-open :open-blocked])))

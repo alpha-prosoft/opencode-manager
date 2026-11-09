@@ -8,7 +8,8 @@
             [manager-svc.observability.core]
             [manager-svc.platform.core]
             [manager-svc.runs.core]
-            [manager-svc.sessions.core]))
+            [manager-svc.sessions.core]
+            [manager-svc.webhooks.core]))
 
 (defn- entry
   [ns-sym]
@@ -27,7 +28,8 @@
                'manager-svc.sessions.core
                'manager-svc.runs.core
                'manager-svc.credentials.core
-               'manager-svc.observability.core]))
+               'manager-svc.observability.core
+               'manager-svc.webhooks.core]))
 
 (defn register
   [ctx]

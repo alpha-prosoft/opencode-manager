@@ -1,0 +1,10 @@
+{
+  "name": "Review Gerrit changes",
+  "description": "Reviews every new change of the demo-service project in Gerrit and posts the review there: a summary, inline comments and a Code-Review vote.",
+  "activity": "review",
+  "agent": "reviewer",
+  "harness": "read-only",
+  "project": "demo-service",
+  "trigger": { "type": "pull_request", "poll_minutes": 1 },
+  "options": { "guidelines_file": "context/review-guidelines.md", "post_mode": "auto", "max_comments": 10 }
+}

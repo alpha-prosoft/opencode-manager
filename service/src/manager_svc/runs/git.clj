@@ -37,20 +37,28 @@
   (permanent #(git/checkout (assoc options :depth (or depth 1)))))
 
 (defn commit-and-push!
-  "Commits the working tree and pushes it to branch; returns the commit id."
-  [{:keys [target url branch username token message author]}]
+  "Commits the working tree (amending HEAD with amend) and pushes it to ref
+   (refs/heads/<branch>, Gerrit's refs/for/<branch>); returns the commit id.
+   A trailer (Change-Id: ...) ends the message."
+  [{:keys [target url ref username token message trailer amend author]}]
   (git! ["add" "--all"] nil :dir target)
   (when (string/blank? (git! ["status" "--porcelain"] nil :dir target))
     (throw (git-error "the agent made no changes, so there is nothing to push")))
   (let [[author-name email]
-        author]
-    (git! ["commit" "--quiet" "--no-verify" "-m" message] nil
+        author
+
+        full-message
+        (cond-> message
+          trailer (str "\n\n" trailer))]
+    (git! (cond-> ["commit" "--quiet" "--no-verify" "-m" full-message]
+            amend (conj "--amend"))
+          nil
           :dir target
           :env {"GIT_AUTHOR_NAME" author-name "GIT_AUTHOR_EMAIL" email
                 "GIT_COMMITTER_NAME" author-name "GIT_COMMITTER_EMAIL" email}))
   (with-credentials url username token
     (fn [auth env]
-      (git! (into auth ["push" "--quiet" url (str "HEAD:refs/heads/" branch)]) token :dir target :env env)))
+      (git! (into auth ["push" "--quiet" url (str "HEAD:" ref)]) token :dir target :env env)))
   (git! ["rev-parse" "HEAD"] nil :dir target))
 
 (defn diff

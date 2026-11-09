@@ -1,6 +1,7 @@
 (ns manager-svc.platform.spec
-  "Schemas of the onboarding repository (platform.json) and of team
-   definitions (.platform/{agents,harnesses,workflows}/<id>.json). Files use
+  "Schemas of a tenant's onboarding repository (tenant.json), of a team's
+   configuration (.platform/team.json) and of team definitions
+   (.platform/{agents,harnesses,workflows}/<id>.json). Files use
    snake_case keys and string enums; decoded values use kebab-case keys and
    keyword enums. Keys of free-form maps (pricing, permissions, secret_hosts)
    are kept as written."
@@ -9,7 +10,9 @@
             [malli.core :as m]
             [malli.error :as me]
             [malli.transform :as mt]
-            [manager-svc.git :as git])
+            [manager-svc.git :as git]
+            [manager-svc.names :as names]
+            [manager-svc.rows :as rows])
   (:import [java.net URI]
            [java.util.regex Pattern PatternSyntaxException]))
 
@@ -34,13 +37,28 @@
   (into [:enum {:decode/platform enum-value}] values))
 
 (def identifier
-  [:re {:error/message "should be lowercase letters, digits and dashes"} #"^[a-z0-9][a-z0-9-]{0,62}$"])
+  [:re {:error/message "should be lowercase letters, digits and dashes"} names/identifier-pattern])
+
+(def tenant-page-names
+  "Path segments naming a tenant's pages in the UI (/acme/runs): a team
+   at /acme/<team> can't take one of them."
+  #{"runs" "sessions" "teams" "projects" "harnesses" "activities" "accounts" "admin" "webhooks"})
+
+(def reserved-tenant-names
+  "Top-level paths of the UI (/login, /platform), of its earlier versions
+   (/runs, /tenants) and of the edge (/hooks, /healthz, /metrics): a tenant
+   at /<tenant> can't take one of them."
+  #{"login" "setup" "platform" "api" "runs" "sessions" "teams" "harnesses" "activities" "accounts" "admin"
+    "tenants" "hooks" "healthz" "metrics"})
+
+(def reserved-team-ids
+  (into tenant-page-names #{"login" "setup" "platform" "api"}))
 
 (def secret-name
-  [:re {:error/message "should be an uppercase secret name (A-Z, 0-9, _)"} #"^[A-Z][A-Z0-9_]{0,63}$"])
+  [:re {:error/message "should be an uppercase secret name (A-Z, 0-9, _)"} names/secret-name-pattern])
 
 (def username
-  [:re {:error/message "should be a lowercase username"} #"^[a-z0-9][a-z0-9._-]{0,63}$"])
+  [:re {:error/message "should be a lowercase username"} names/username-pattern])
 
 (def team-scope
   [:or [:= "*"] [:vector identifier]])
@@ -57,11 +75,84 @@
   [& entries]
   (into [:map {:closed true}] entries))
 
+(def scm-providers
+  "The SCM providers pull requests (Gerrit: changes) come from. A hosted
+   provider has a fixed API host and clone URL; a self-hosted one is reached
+   at the source's url."
+  {:bitbucket {:api-host "api.bitbucket.org" :clone-url "https://bitbucket.org/%s.git"}
+   :github {:api-host "api.github.com" :clone-url "https://github.com/%s.git"}
+   :gerrit {:self-hosted true}})
+
+(def scm-provider
+  (apply enum (keys scm-providers)))
+
+(def repository-name
+  [:re {:error/message "should be <workspace>/<repository> (Gerrit: the project name)"}
+   #"^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$"])
+
+(def http-url
+  [:re {:error/message "should be an http(s):// URL"} #"^https?://[^\s/]+(/\S*)?$"])
+
+(def branch-name
+  [:re #"^[A-Za-z0-9._/-]{1,200}$"])
+
+(defn self-hosted?
+  [provider]
+  (boolean (get-in scm-providers [(kebab provider) :self-hosted])))
+
+(defn- scm-location-error
+  [{:keys [provider repository url]}]
+  (cond
+    (and (self-hosted? provider) (nil? url))
+    (str (name provider) " is self-hosted: set url")
+
+    (and provider (not (self-hosted? provider)) url)
+    (str (name provider) " is hosted: leave out url")
+
+    (and provider (not (self-hosted? provider)) repository (not (string/includes? repository "/")))
+    "repository should be <workspace>/<repository>"))
+
+(defn scm-source
+  "Where pull requests live: {:provider :repository :url? :web-url?
+   :credentials}. :credentials-optional leaves the credential out of the
+   required keys (team.json projects)."
+  [& flags]
+  (let [credentials
+        (if (some #{:credentials-optional} flags)
+          (optional :credentials secret-name)
+          [:credentials secret-name])]
+    [:and
+     (closed
+      [:provider scm-provider]
+      [:repository repository-name]
+      (optional :url http-url)
+      (optional :web-url http-url)
+      credentials)
+     [:fn {:error/fn (fn [{:keys [value]} _] (scm-location-error value))}
+      #(nil? (scm-location-error %))]]))
+
+(defn scm-api-host
+  "The host an SCM source's API calls go to."
+  [{:keys [provider url]}]
+  (if (self-hosted? provider)
+    (some-> url URI. .getHost)
+    (get-in scm-providers [(kebab provider) :api-host])))
+
+(defn scm-clone-url
+  "The git URL of an SCM source's repository; Gerrit's authenticated URL
+   (/a/) when the source has a credential."
+  [{:keys [provider repository url credentials]}]
+  (if (self-hosted? provider)
+    (str (string/replace url #"/+$" "") (when credentials "/a") "/" repository)
+    (format (get-in scm-providers [(kebab provider) :clone-url]) repository)))
+
 (defn git-url?
+  "https, ssh and file URLs; http only for the hosts the operator allows
+   (MANAGER_HTTP_GIT_HOSTS), which manager-svc.git/check-url enforces."
   [url]
   (boolean
    (and (string? url)
-        (or (some #(string/starts-with? url %) ["https://" "file://" "ssh://"])
+        (or (some #(string/starts-with? url %) ["https://" "http://" "file://" "ssh://"])
             (re-matches git/scp-like url)))))
 
 (def git-source
@@ -122,6 +213,16 @@
    (optional :url [:re #"^https?://"])
    (optional :mcp-tool string?)))
 
+(def scopes
+  "Who may provide a credential's value, in the order values are resolved
+   (most specific first)."
+  [:user :team :tenant])
+
+(def provided-by
+  [:and
+   [:vector {:min 1} (enum :tenant :team :user)]
+   [:fn {:error/message "should not repeat a scope"} #(apply distinct? %)]])
+
 (def credential-spec
   (closed
    [:id secret-name]
@@ -129,9 +230,10 @@
    (defaulted :description "" string?)
    (defaulted :kind :token (enum :token :basic :ssh-key))
    (defaulted :hosts [] [:vector string?])
-   (defaulted :provided-by :platform (enum :platform :platform-or-user :user))
+   (defaulted :provided-by [:tenant] provided-by)
    (defaulted :teams "*" team-scope)
    (defaulted :help "" string?)
+   (defaulted :required false :boolean)
    (optional :test credential-test)))
 
 (def mcp-auth
@@ -153,7 +255,8 @@
 (def team-budget
   (closed
    (optional :daily-tokens [:int {:min 1000}])
-   (optional :max-running-sessions [:int {:min 1 :max 1000}])))
+   (optional :max-running-sessions [:int {:min 1 :max 1000}])
+   (optional :idle-minutes [:int {:min 1 :max 1440}])))
 
 (def team-notifications
   (closed
@@ -166,26 +269,52 @@
    [:name string?]
    (defaulted :description "" string?)
    [:repository team-source]
-   (defaulted :members [] [:vector username])
-   (defaulted :admins [] [:vector username])
    (defaulted :secrets [] [:vector secret-name])
-   (defaulted :budget {} team-budget)
    (defaulted :notifications {} team-notifications)))
 
 (def secret-key
   [:and :keyword [:fn {:error/message "should be an uppercase secret name"}
-                  #(re-matches #"^[A-Z][A-Z0-9_]{0,63}$" (name %))]])
+                  #(re-matches names/secret-name-pattern (name %))]])
 
-(def platform-spec
+(def tenant-spec
   (closed
    (defaulted :version 1 [:= 1])
-   (defaulted :admins [] [:vector username])
    (defaulted :allowed-images [default-image] [:vector string?])
    (defaulted :llm-connections [] [:vector llm-connection])
    (defaulted :secret-hosts {} [:map-of secret-key [:vector string?]])
    (defaulted :credentials [] [:vector credential-spec])
    (defaulted :mcp-servers [] [:vector mcp-server])
    (defaulted :teams [] [:vector team-entry])))
+
+(def team-llm-connection
+  (closed
+   [:id identifier]
+   (optional :models [:vector {:min 1} string?])))
+
+(def ci-project
+  (closed
+   [:mcp-server identifier]
+   (defaulted :jobs [] [:vector [:string {:min 1}]])
+   (optional :job [:string {:min 1}])))
+
+(def project
+  (closed
+   [:id identifier]
+   (optional :name string?)
+   (optional :branch branch-name)
+   [:scm (scm-source :credentials-optional)]
+   (optional :ci ci-project)))
+
+(def team-config
+  "A team's own configuration (.platform/team.json). Leaving out
+   llm_connections or mcp_servers means every one the tenant grants the team."
+  (closed
+   (defaulted :version 1 [:= 1])
+   (defaulted :budget {} team-budget)
+   (optional :llm-connections [:vector team-llm-connection])
+   (optional :mcp-servers [:vector identifier])
+   (defaulted :projects [] [:vector project])
+   (defaulted :required-credentials [] [:vector secret-name])))
 
 (def agent-spec
   (closed
@@ -243,9 +372,11 @@
                (defaulted :inputs {} free-map))]
    [:pull-request (closed
                    [:type (enum :pull-request)]
-                   [:provider (enum :bitbucket :github)]
-                   [:repository [:re #"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"]]
-                   [:credentials secret-name]
+                   (optional :provider scm-provider)
+                   (optional :repository repository-name)
+                   (optional :url http-url)
+                   (optional :web-url http-url)
+                   (optional :credentials secret-name)
                    (defaulted :target-branches [] [:vector string?])
                    (defaulted :poll-minutes 15 [:int {:min 1 :max 1440}])
                    (defaulted :backfill false boolean?))]])
@@ -257,9 +388,10 @@
    [:activity identifier]
    [:agent identifier]
    [:harness identifier]
+   (optional :project identifier)
    (defaulted :trigger {:type :manual} trigger)
    (defaulted :options {} free-map)
-   (defaulted :visibility :team (enum :team :public))))
+   (defaulted :visibility :team (enum :team :tenant))))
 
 (def definition-kinds
   {:agents agent-spec
@@ -324,24 +456,30 @@
 
 (defn credential
   [platform credential-id]
-  (some #(when (= credential-id (:id %)) %) (:credentials platform)))
+  (rows/by-id (:credentials platform) credential-id))
 
 (defn mcp-server-of
   [platform server-id]
-  (some #(when (= server-id (:id %)) %) (:mcp-servers platform)))
+  (rows/by-id (:mcp-servers platform) server-id))
 
 (defn llm-connection-of
   [platform connection-id]
-  (some #(when (= connection-id (:id %)) %) (:llm-connections platform)))
+  (rows/by-id (:llm-connections platform) connection-id))
 
 (defn credential-hosts
   [platform credential-id]
   (vec (distinct (concat (:hosts (credential platform credential-id))
                          (get-in platform [:secret-hosts (keyword credential-id)])))))
 
+(defn provides?
+  "True when scope (:tenant, :team or :user) may provide credential's value."
+  [credential scope]
+  (boolean (some #{scope} (:provided-by credential))))
+
 (defn personal?
+  "True for a credential people may provide themselves."
   [credential]
-  (not= :platform (:provided-by credential)))
+  (provides? credential :user))
 
 (defn- url-host
   [url]
@@ -350,7 +488,7 @@
     (catch Exception _
       nil)))
 
-(defn- platform-errors
+(defn- tenant-errors
   [platform]
   (let [duplicate-errors
         (for [[label ids] [["team" (map :id (:teams platform))]
@@ -360,6 +498,12 @@
               :let [repeated (duplicates ids)]
               :when (seq repeated)]
           (str "duplicate " label " ids: " (vec repeated)))
+
+        reserved-errors
+        (for [team-id (map :id (:teams platform))
+              :when (contains? reserved-team-ids team-id)]
+          (str "team id " team-id " names a page of the UI (/<tenant>/" team-id "); choose another id. Reserved: "
+               (string/join ", " (sort reserved-team-ids))))
 
         server-errors
         (for [server (:mcp-servers platform)
@@ -377,15 +521,20 @@
 
         personal-errors
         (for [declared (:credentials platform)
-              :when (and (personal? declared) (contains? llm-secrets (:id declared)))]
-          (str "credential " (:id declared) " is used by an LLM connection and must be provided_by platform"))
+              :when (and (not= [:tenant] (:provided-by declared)) (contains? llm-secrets (:id declared)))]
+          (str "credential " (:id declared) " is used by an LLM connection and must be provided_by [\"tenant\"]"))
+
+        required-errors
+        (for [declared (:credentials platform)
+              :when (and (:required declared) (not (personal? declared)))]
+          (str "credential " (:id declared) " is required of people but they can't provide it: add \"user\" to its provided_by"))
 
         test-errors
         (for [[index declared] (map-indexed vector (:credentials platform))
               :let [test (:test declared)]
               :when (and test (= (boolean (:url test)) (boolean (:mcp-tool test))))]
           (str "credentials." index ".test: set exactly one of url or mcp_tool"))]
-    (vec (concat test-errors duplicate-errors server-errors personal-errors))))
+    (vec (concat test-errors duplicate-errors reserved-errors server-errors personal-errors required-errors))))
 
 (defn- prompt-errors
   [agent]
@@ -395,7 +544,7 @@
 (defn- model-errors
   [schema value]
   (cond
-    (= schema platform-spec) (platform-errors value)
+    (= schema tenant-spec) (tenant-errors value)
     (= schema agent-spec) (prompt-errors value)
     :else []))
 
@@ -413,10 +562,113 @@
     {:value (when (empty? all-errors) value)
      :errors all-errors}))
 
-(defn parse-platform
-  "platform.json text or data → {:value spec :errors [...]}."
+(defn parse-tenant
+  "tenant.json text or data → {:value spec :errors [...]}."
   [raw]
-  (validate platform-spec (if (string? raw) (read-json raw) raw)))
+  (validate tenant-spec (if (string? raw) (read-json raw) raw)))
 
-(def empty-platform
-  (:value (parse-platform {})))
+(def empty-tenant
+  (:value (parse-tenant {})))
+
+(defn- connection-errors
+  [tenant team-id {:keys [id models]}]
+  (let [connection
+        (llm-connection-of tenant id)]
+    (cond
+      (nil? connection)
+      [(str "llm_connections: connection " id " is not configured for the tenant")]
+
+      (not (in-scope? (:teams connection) team-id))
+      [(str "llm_connections: the tenant does not grant connection " id " to team " team-id)]
+
+      :else
+      (for [model models
+            :when (not (some #{model} (:models connection)))]
+        (str "llm_connections: connection " id " does not offer model " model)))))
+
+(defn- server-errors
+  [tenant team-id label server-id]
+  (let [server
+        (mcp-server-of tenant server-id)]
+    (cond
+      (nil? server)
+      [(str label ": MCP server " server-id " is not configured for the tenant")]
+
+      (not (in-scope? (:teams server) team-id))
+      [(str label ": the tenant does not grant MCP server " server-id " to team " team-id)])))
+
+(defn- required-credential-errors
+  [tenant team-id credential-id]
+  (let [declared
+        (credential tenant credential-id)]
+    (cond
+      (nil? declared)
+      [(str "required_credentials: credential " credential-id " is not declared by the tenant")]
+
+      (not (personal? declared))
+      [(str "required_credentials: people can't provide credential " credential-id
+            " (its provided_by has no \"user\"), so it can't be required of them")]
+
+      (not (in-scope? (:teams declared) team-id))
+      [(str "required_credentials: the tenant does not grant credential " credential-id " to team " team-id)])))
+
+(defn- team-config-errors
+  [tenant team-id config]
+  (vec (concat
+        (mapcat #(connection-errors tenant team-id %) (:llm-connections config))
+        (mapcat #(required-credential-errors tenant team-id %) (:required-credentials config))
+        (mapcat #(server-errors tenant team-id "mcp_servers" %) (:mcp-servers config))
+        (for [{:keys [id ci]} (:projects config)
+              :when ci
+              error (server-errors tenant team-id (str "projects." id ".ci") (:mcp-server ci))]
+          error)
+        (for [[label ids] [["llm connection" (map :id (:llm-connections config))]
+                           ["MCP server" (:mcp-servers config)]
+                           ["project" (map :id (:projects config))]
+                           ["required credential" (:required-credentials config)]]
+              :let [repeated (duplicates ids)]
+              :when (seq repeated)]
+          (str "duplicate " label " ids: " (vec repeated))))))
+
+(defn parse-team-config
+  "team.json text or data (nil when the team has none) → {:value config
+   :errors [...]}, checked against what the tenant declares and grants
+   team-id."
+  [tenant team-id raw]
+  (let [{:keys [value errors]}
+        (validate team-config (cond
+                                (nil? raw) {}
+                                (string? raw) (read-json raw)
+                                :else raw))
+
+        cross-errors
+        (when value (team-config-errors tenant team-id value))]
+    (if (seq cross-errors)
+      {:value nil :errors cross-errors}
+      {:value value :errors errors})))
+
+(defn team-llm-connections
+  "[{:id :models}] the team may use: what its team.json lists (models
+   default to all the connection offers), else every connection the tenant
+   grants it."
+  [tenant team-id config]
+  (let [granted
+        (filter #(in-scope? (:teams %) team-id) (:llm-connections tenant))]
+    (if-let [chosen
+             (:llm-connections config)]
+      (vec (for [{:keys [id models]} chosen
+                 :let [connection (rows/by-id granted id)]
+                 :when connection]
+             {:id id :models (vec (or models (:models connection)))}))
+      (mapv #(select-keys % [:id :models]) granted))))
+
+(defn team-mcp-servers
+  "Ids of the MCP servers the team uses: its team.json's, else every one
+   the tenant grants it."
+  [tenant team-id config]
+  (let [granted
+        (set (map :id (filter #(in-scope? (:teams %) team-id) (:mcp-servers tenant))))]
+    (if-let [chosen
+             (:mcp-servers config)]
+      (filterv granted chosen)
+      (vec (sort granted)))))

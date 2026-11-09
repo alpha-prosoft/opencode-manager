@@ -1,19 +1,27 @@
 (ns manager-web.components.chips
   "Status, verdict, visibility, activity, role and network chips. Colors come
    from theme/status-colors."
-  (:require ["@mui/icons-material/Build" :default BuildIcon]
+  (:require ["@mui/icons-material/AdminPanelSettingsOutlined" :default AdminIcon]
+            ["@mui/icons-material/Build" :default BuildIcon]
             ["@mui/icons-material/Circle" :default CircleIcon]
             ["@mui/icons-material/Description" :default DescriptionIcon]
             ["@mui/icons-material/Groups" :default GroupsIcon]
+            ["@mui/icons-material/GroupsOutlined" :default GroupsOutlinedIcon]
             ["@mui/icons-material/Lock" :default LockIcon]
             ["@mui/icons-material/Public" :default PublicIcon]
             ["@mui/icons-material/RateReview" :default RateReviewIcon]
             ["@mui/icons-material/Terminal" :default TerminalIcon]
             ["@mui/icons-material/Widgets" :default WidgetsIcon]
             ["@mui/material/Chip" :default Chip]
+            [manager-web.components.layout :as layout]
+            [manager-web.el :as el]
             [manager-web.format :as format]
+            [manager-web.roles :as roles]
+            [manager-web.session :as session]
             [manager-web.theme :as theme]
-            [reagent.core :as r]))
+            [re-frame.core :as rf]
+            [reagent.core :as r]
+            [web.primitives.components :refer [RawStack]]))
 
 (def ^:private status-labels
   {:session {:running "Running"
@@ -79,16 +87,46 @@
   (or (get activities (format/kw activity))
       {:label (some-> activity name) :icon WidgetsIcon}))
 
-(def ^:private visibility
-  {:private {:icon LockIcon :label "Private"}
-   :team {:icon GroupsIcon :label "Team"}
-   :public {:icon PublicIcon :label "Everyone"}})
+(def ^:private visibility-icons
+  {:private LockIcon
+   :team GroupsIcon
+   :tenant PublicIcon})
+
+(defn visibility-icon
+  [value]
+  (get visibility-icons (format/kw value) LockIcon))
 
 (defn visibility-chip
   [value]
-  (let [{:keys [icon label]}
-        (get visibility (format/kw value) {:icon LockIcon :label (some-> value name)})]
-    [:> Chip {:icon (r/as-element [:> icon]) :label label}]))
+  (let [tenant
+        (:tenant @(rf/subscribe [::session/me]))]
+    [:> Chip {:icon (r/as-element [:> (visibility-icon value)]) :label (roles/visibility-label value tenant)}]))
+
+(defn session-visibility-chip
+  "Who sees the session, from the viewer's side (\"Private to dave\")."
+  [session & [el-id]]
+  (let [me
+        @(rf/subscribe [::session/me])]
+    [:> Chip {:icon (r/as-element [:> (visibility-icon (:visibility session))])
+              :label (roles/session-visibility-label me session)
+              :data-testid el-id
+              :data-visibility (some-> (format/kw (:visibility session)) name)}]))
+
+(defn admin-access-chip
+  "Says when the viewer sees a session only as an admin."
+  [session & [el-id]]
+  (when-let [label
+             (roles/admin-access @(rf/subscribe [::session/me]) session)]
+    [:> Chip {:color "secondary" :icon (r/as-element [:> AdminIcon]) :label label :data-testid el-id}]))
+
+(defn team-chip
+  "The team something belongs to, by name."
+  [team-id & [el-id]]
+  (when team-id
+    [:> Chip {:icon (r/as-element [:> GroupsOutlinedIcon])
+              :label (roles/team-name @(rf/subscribe [::session/me]) team-id)
+              :data-testid el-id
+              :data-team team-id}]))
 
 (defn activity-chip
   [activity]
@@ -96,16 +134,43 @@
         (activity-meta activity)]
     [:> Chip {:icon (r/as-element [:> icon]) :label label}]))
 
+(def ^:private role-chip-labels
+  {:admin ["Team admin" "primary"]
+   :member ["Member" "default"]
+   :tenant-admin ["Tenant admin, not a member" "secondary"]})
+
 (defn role-chip
-  "A team role; admin-label names the admin role."
-  ([role]
-   (role-chip role "Team admin"))
-  ([role admin-label]
-   (when role
-     (let [admin?
-           (= :admin (format/kw role))]
-       [:> Chip {:label (if admin? admin-label "Member")
-                 :color (if admin? "primary" "default")}]))))
+  "The person's role in a team and where it comes from: their own (admin,
+   member) or the tenant's (a tenant admin who isn't a member)."
+  [team-id & [el-id]]
+  (when-let [role
+             (roles/role-in-team @(rf/subscribe [::session/me]) team-id)]
+    (let [[label color]
+          (role-chip-labels role)]
+      [:> Chip {:label label :color color :data-testid el-id :data-role (name role)}])))
+
+(defn team-heading
+  "The heading of a group of things of one team: its name, linking to the
+   team, and the viewer's role in it."
+  [team-id team-name {:keys [link-el-id role-el-id]}]
+  [RawStack {:direction "row" :spacing 1 :sx (:team-heading theme/sx)}
+   [layout/link {:page :team :params {:team-id team-id} :variant "subtitle2" :color "text.secondary"
+                 :el-id link-el-id}
+    team-name]
+   [role-chip team-id (when role-el-id (el/id role-el-id))]])
+
+(def ^:private sync-chips
+  {:failed ["error" "Sync failed"]
+   :synced ["success" "Synced"]
+   :never ["default" "Not synced yet"]})
+
+(defn sync-chip
+  "How the last sync of a tenant's repositories went (:failed, :synced or
+   :never)."
+  [state el-id]
+  (let [[color label]
+        (sync-chips state)]
+    [:> Chip {:color color :label label :data-testid (el/id el-id) :data-state (name state)}]))
 
 (defn network-chip
   [network]

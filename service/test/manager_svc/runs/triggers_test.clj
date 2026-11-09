@@ -10,12 +10,12 @@
 
 (deftest desired-schedules-come-from-triggered-workflows
   (is
-   (= {"trigger-alpha-review-prs" {:kind "pull_request" :team "alpha" :workflow "review-prs" :minutes 15}
-       "trigger-alpha-nightly" {:kind "schedule" :team "alpha" :workflow "nightly" :minutes 60}}
+   (= {"trigger-acme-alpha-review-prs" {:kind "pull_request" :tenant "acme" :team "alpha" :workflow "review-prs" :minutes 15}
+       "trigger-acme-alpha-nightly" {:kind "schedule" :tenant "acme" :team "alpha" :workflow "nightly" :minutes 60}}
       (triggers/desired-schedules
-       {"alpha" [{:id "review-prs" :trigger {:type "pull_request" :poll-minutes 15}}
-                 {:id "nightly" :trigger {:type "schedule" :every-minutes 60}}
-                 {:id "manual" :trigger {:type "manual"}}]}))))
+       {["acme" "alpha"] [{:id "review-prs" :trigger {:type "pull_request" :poll-minutes 15}}
+                          {:id "nightly" :trigger {:type "schedule" :every-minutes 60}}
+                          {:id "manual" :trigger {:type "manual"}}]}))))
 
 (deftest schedules-are-due-one-interval-after-the-last-run
   (let [poll
@@ -71,19 +71,19 @@
             (atom [])
 
             {:keys [system]}
-            (f/env {:runs/scm (fn [_ token]
-                                (swap! tokens conj token)
+            (f/env {:runs/scm (fn [_ {:keys [secret]}]
+                                (swap! tokens conj secret)
                                 {:open-pull-requests (fn [_] @open)})})
 
             poll!
-            #(triggers/new-pull-requests system "alpha" "review-prs")]
+            #(triggers/new-pull-requests system "acme" "alpha" "review-prs")]
         (testing "the pull requests open at first sight are the baseline"
           (is
            (= []
               (poll!)))
           (is
            (= ["1" "__baseline__"]
-              ((get-in system [:test/edd :query]) {:query-id :get-trigger-items :team-id "alpha" :workflow-id "review-prs"}))))
+              ((get-in system [:test/edd :query]) {:query-id :get-trigger-items :tenant "acme" :team-id "alpha" :workflow-id "review-prs"}))))
         (testing "new pull requests start a run once"
           (reset! open [(pr 1 "main") (pr 2 "main")])
           (let [[started] (poll!)]
@@ -103,7 +103,7 @@
                (= 2
                   (get-in run [:trigger :pull-request :id]))))))
         (is
-         (= "secret-gh-token"
+         (= "token-gh-token"
             (first @tokens)))))))
 
 (deftest backfill-runs-the-pull-requests-already-open
@@ -117,7 +117,7 @@
                                  :credentials "gh-token" :backfill true :target-branches ["main"]})]
           (is
            (= 1
-              (count (triggers/new-pull-requests system "alpha" "review-prs"))))
+              (count (triggers/new-pull-requests system "acme" "alpha" "review-prs"))))
           (is
            (= [{:pull-request 1}]
               (map :inputs (runs-of system)))))))))
@@ -129,22 +129,25 @@
             (f/env {:runs/scm (fn [_ _] {:open-pull-requests (fn [_] [(pr 1 "main")])})})]
         (testing "first sight registers both schedules and polls pull requests"
           (is
-           (= {"trigger-alpha-review-prs" [] "trigger-alpha-analyse" []}
+           (= {"trigger-acme-alpha-review-prs" [] "trigger-acme-alpha-analyse" []}
               (triggers/run-due! system #{"pull_request" "schedule"}))))
         (testing "the schedules are listed in their team's directory"
           (is
-           (= #{"trigger-alpha-review-prs" "trigger-alpha-analyse"}
-              (set (map :schedule-key (directory/rows ctx "team:alpha" :schedules))))))
+           (= #{"trigger-acme-alpha-review-prs" "trigger-acme-alpha-analyse"}
+              (set (map :schedule-key (directory/rows ctx (directory/team "acme" "alpha") :schedules))))))
         (testing "nothing is due right after"
           (is
-           (= {"trigger-alpha-review-prs" [] "trigger-alpha-analyse" []}
+           (= {"trigger-acme-alpha-review-prs" [] "trigger-acme-alpha-analyse" []}
               (triggers/run-due! system #{"pull_request" "schedule"}))))
         (testing "admins see the schedules"
           (let [schedules
                 (f/query ctx "root" {:query-id :list-schedules})]
             (is
-             (= ["trigger-alpha-analyse" "trigger-alpha-review-prs"]
+             (= ["trigger-acme-alpha-analyse" "trigger-acme-alpha-review-prs"]
                 (map :id schedules)))
+            (is
+             (= [[:schedule "alpha" "analyse"] [:pull-request "alpha" "review-prs"]]
+                (map (juxt :kind :team :workflow) schedules)))
             (is
              (every? :next-run schedules))
             (is
@@ -153,13 +156,13 @@
         (testing "a due scheduled run starts the workflow with the trigger's inputs"
           (with-redefs [triggers/due? (fn [_ schedule _] (= "schedule" (:kind schedule)))]
             (let [fired (triggers/run-due! system #{"schedule"})
-                  [run-id] (get fired "trigger-alpha-analyse")
+                  [run-id] (get fired "trigger-acme-alpha-analyse")
                   run (:run ((get-in system [:test/edd :query]) {:query-id :get-run-source :run-id run-id}))]
               (is
                (= ["analysis" {:brief "Weekly architecture review"} {:type "schedule"} "platform:schedule"]
                   ((juxt :activity :inputs :trigger :created-by) run))))))))))
 
-(deftest schedules-registered-without-a-team-get-listed
+(deftest schedules-registered-without-a-tenant-get-listed
   (mock/with-mock-dal
     (f/with-fakes [_]
       (let [{:keys [ctx system]}
@@ -167,17 +170,17 @@
 
             platform!
             (get-in system [:test/edd :command])]
-        (platform! {:cmd-id :register-schedule :attrs {:schedule-key "trigger-alpha-analyse"}})
+        (platform! {:cmd-id :register-schedule :attrs {:schedule-key "trigger-acme-alpha-analyse"}})
         (let [registered-at
-              (:registered-at (mock/get-by-id ctx {:id (triggers/schedule-id "trigger-alpha-analyse")}))]
+              (:registered-at (mock/get-by-id ctx {:id (triggers/schedule-id "trigger-acme-alpha-analyse")}))]
           (is
            (= []
-              (directory/rows ctx "team:alpha" :schedules)))
+              (directory/rows ctx (directory/team "acme" "alpha") :schedules)))
           (triggers/run-due! system #{"schedule"})
           (is
-           (= [{:schedule-key "trigger-alpha-analyse" :team-id "alpha" :registered-at registered-at}]
-              (map #(select-keys % [:schedule-key :team-id :registered-at])
-                   (directory/rows ctx "team:alpha" :schedules)))))))))
+           (= [{:schedule-key "trigger-acme-alpha-analyse" :tenant "acme" :team-id "alpha" :registered-at registered-at}]
+              (map #(select-keys % [:schedule-key :tenant :team-id :registered-at])
+                   (directory/rows ctx (directory/team "acme" "alpha") :schedules)))))))))
 
 (deftest new-pull-requests-are-marked-seen-in-one-command
   (mock/with-mock-dal
@@ -197,13 +200,13 @@
                       manager-svc.runs.fixtures/workflows (assoc-in f/workflows ["review-prs" :trigger :backfill] true)]
           (is
            (= 2
-              (count (triggers/new-pull-requests system "alpha" "review-prs"))))
+              (count (triggers/new-pull-requests system "acme" "alpha" "review-prs"))))
           (is
            (= 1
               @marks))
           (is
            (= ["1" "2" "__baseline__"]
-              ((get-in system [:test/edd :query]) {:query-id :get-trigger-items :team-id "alpha" :workflow-id "review-prs"}))))))))
+              ((get-in system [:test/edd :query]) {:query-id :get-trigger-items :tenant "acme" :team-id "alpha" :workflow-id "review-prs"}))))))))
 
 (deftest seen-pull-requests-are-forgotten-after-ninety-days
   (mock/with-mock-dal
@@ -214,11 +217,68 @@
             mark!
             (fn [items]
               ((get-in system [:test/edd :command]) {:cmd-id :mark-trigger-items-seen
-                                                     :attrs {:team-id "alpha" :workflow-id "review-prs" :items items}}))]
+                                                     :attrs {:tenant "acme" :team-id "alpha" :workflow-id "review-prs" :items items}}))]
         (with-redefs [time/now (constantly "2026-01-01T00:00:00Z")]
           (mark! [{:item "__baseline__"} {:item "1"}]))
         (with-redefs [time/now (constantly "2026-04-15T00:00:00Z")]
           (mark! [{:item "2"}]))
         (is
          (= ["2" "__baseline__"]
-            ((get-in system [:test/edd :query]) {:query-id :get-trigger-items :team-id "alpha" :workflow-id "review-prs"})))))))
+            ((get-in system [:test/edd :query]) {:query-id :get-trigger-items :tenant "acme" :team-id "alpha" :workflow-id "review-prs"})))))))
+
+(deftest gerrit-changes-start-one-review-each
+  (mock/with-mock-dal
+    (f/with-fakes [_]
+      (let [open
+            (atom [])
+
+            sources
+            (atom [])
+
+            change
+            (fn [number patch-set]
+              {:id number :title (str "Change " number) :author "dave"
+               :source-branch (str "refs/changes/0" number "/" number "/" patch-set)
+               :source-commit (str "c" number "-" patch-set) :destination-branch "main"
+               :url (str "http://gerrit.localhost:8080/c/demo-service/+/" number)
+               :clone-url "http://gerrit:8080/a/demo-service"})
+
+            {:keys [system]}
+            (f/env {:runs/scm (fn [source credential]
+                                (swap! sources conj [source credential])
+                                {:open-pull-requests (fn [_] @open)})})
+
+            poll!
+            #(triggers/new-pull-requests system "acme" "alpha" "review-prs")]
+        (with-redefs [manager-svc.runs.fixtures/workflows
+                      (assoc-in f/workflows ["review-prs" :trigger]
+                                {:type "pull_request" :provider "gerrit" :repository "demo-service"
+                                 :url "http://gerrit:8080" :web-url "http://gerrit.localhost:8080"
+                                 :credentials "GERRIT_TOKEN" :poll-minutes 1})]
+          (is
+           (= []
+              (poll!)))
+          (reset! open [(change 1 1)])
+          (let [[started] (poll!)]
+            (testing "a new change starts a review that knows where the change lives"
+              (is
+               (uuid? started))
+              (let [[run] (runs-of system)]
+                (is
+                 (= {:provider "gerrit" :repository "demo-service" :url "http://gerrit:8080"
+                     :web-url "http://gerrit.localhost:8080" :credentials "GERRIT_TOKEN"}
+                    (get-in run [:trigger :scm])))
+                (is
+                 (= {:pull-request 1}
+                    (:inputs run)))))
+            (testing "a new patch set of the same change does not start another review"
+              (reset! open [(change 1 2)])
+              (is
+               (= []
+                  (poll!)))
+              (is
+               (= 1
+                  (count (runs-of system)))))))
+        (is
+         (= {:secret "token-GERRIT_TOKEN"}
+            (second (last @sources))))))))

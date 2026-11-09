@@ -1,0 +1,79 @@
+site_name: Agent Platform
+site_description: Run your teams' coding agents in sandboxes, with your identity provider, your credentials and a full audit trail.
+site_url: https://alpha-prosoft.github.io/opencode-manager/
+repo_url: https://github.com/alpha-prosoft/opencode-manager
+repo_name: alpha-prosoft/opencode-manager
+edit_uri: edit/main/docs/
+strict: true
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - content.code.copy
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/weather-night
+        name: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/weather-sunny
+        name: Light mode
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+exclude_docs: |
+  requirements.txt
+  test-coverage.md
+
+plugins:
+  - search
+  - glightbox
+
+nav:
+  - Home: index.md
+  - From zero to a working platform:
+      - The path: story/index.md
+      - 1. Install the platform: story/install.md
+      - 2. Connect your identity provider: story/identity.md
+      - 3. Onboard a tenant: story/tenant.md
+      - 4. Set up a team: story/team.md
+      - 5. First day in a team: story/first-day.md
+      - 6. Automate the work: story/automate.md
+      - 7. Govern and operate: story/operate.md
+  - Guides:
+      - For team members: guide/member.md
+      - For team admins: guide/team-admin.md
+      - For tenant admins: guide/tenant-admin.md
+      - For platform operators: guide/operator.md
+  - Reference:
+      - Roles and visibility: reference/roles.md
+      - Server settings: reference/settings.md
+      - tenant.json: reference/tenant-json.md
+      - team.json: reference/team-json.md
+      - Workflows, agents and harnesses: reference/definitions.md
+      - Credentials: reference/credentials.md
+      - Webhooks: reference/webhooks.md
+      - Security model: reference/security.md
+      - Troubleshooting: reference/troubleshooting.md

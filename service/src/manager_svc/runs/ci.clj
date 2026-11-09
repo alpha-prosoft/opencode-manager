@@ -1,7 +1,11 @@
 (ns manager-svc.runs.ci
-  "Following the build of a pull request a run opened, through the get_build
-   and get_build_log tools of the CI system's MCP server (Jenkins). Tests put
-   (fn [system run ci tool arguments]) under :runs/ci in the system map."
+  "Following the build of a pull request a run opened, through the
+   get_build, get_builds and get_build_log tools of the CI system's MCP
+   server (Jenkins). A job with {pr} in its name is a job per pull request
+   whose last build is followed; any other job is shared (a Gerrit verify
+   job) and the build whose description names the pushed commit is
+   followed. Tests put (fn [system run ci tool arguments]) under :runs/ci in
+   the system map."
   (:require [clojure.string :as string]
             [manager-svc.credentials.api :as credentials]
             [manager-svc.platform.api :as platform]
@@ -25,7 +29,7 @@
 (defn- mcp-tool
   [system run {:keys [mcp-server]} tool arguments]
   (let [server
-        (or (some-> (platform/mcp-server system mcp-server) definitions/kebab)
+        (or (some-> (platform/mcp-server system (:tenant run) mcp-server) definitions/kebab)
             (throw (tool-failed (str "MCP server " mcp-server " is not configured"))))
 
         credential-id
@@ -33,7 +37,7 @@
 
         resolved
         (when credential-id
-          (or (:value (credentials/resolve-credential system credential-id (model/person run)))
+          (or (:value (credentials/resolve-credential system (model/credential-scope run) credential-id))
               (throw (tool-failed (str "credential " credential-id " is not set up")))))]
     (credentials/call-mcp-tool server resolved tool arguments tool-timeout-seconds)))
 
@@ -53,15 +57,33 @@
   [ci pull-request]
   (string/replace (:job ci) "{pr}" (str (:id pull-request))))
 
+(defn per-pull-request?
+  [ci]
+  (string/includes? (str (:job ci)) "{pr}"))
+
+(def builds-searched
+  20)
+
+(defn build-of-commit
+  "The newest build whose description names commit (its first 12
+   characters are enough), or nil."
+  [builds commit]
+  (let [short
+        (subs (str commit) 0 (min 12 (count (str commit))))]
+    (when-not (string/blank? short)
+      (some #(when (string/includes? (str (:description %)) short) %) builds))))
+
 (defn- epoch-millis
   [iso]
   (.toEpochMilli (time/parse iso)))
 
 (defn build-state
-  "{:state :build :detail} from a get_build answer for the pushed change."
+  "{:state :build :detail} from a get_build answer for the pushed change;
+   with pushed-at, builds that started more than a minute before the push
+   are not it."
   [build pushed-at]
   (let [pushed
-        (epoch-millis pushed-at)]
+        (if pushed-at (epoch-millis pushed-at) 0)]
     (if (or (not (map? build))
             (< (or (:started build) 0) (- pushed 60000)))
       {:state "waiting" :detail "No build of the pushed change yet"}
@@ -72,6 +94,13 @@
        :build build
        :detail nil})))
 
+(defn- shared-job-state
+  [system run ci job commit]
+  (if-let [found
+           (build-of-commit (tool system run ci "get_builds" {:job job :limit builds-searched}) commit)]
+    (build-state (tool system run ci "get_build" {:job job :number (str (:number found))}) nil)
+    {:state "waiting" :detail "No build of the pushed change yet"}))
+
 (defn poll
   "Checks the build; returns the changes to the run's result.ci."
   [system run ci]
@@ -81,8 +110,10 @@
         job
         (get-in run [:result :ci :job])]
     (try
-      (build-state (tool system run ci "get_build" {:job job :number "lastBuild"})
-                   (:pushed-at pull-request))
+      (if (per-pull-request? ci)
+        (build-state (tool system run ci "get_build" {:job job :number "lastBuild"})
+                     (:pushed-at pull-request))
+        (shared-job-state system run ci job (:commit pull-request)))
       (catch clojure.lang.ExceptionInfo e
         (if (tool-failed? e)
           {:state "waiting"
@@ -150,7 +181,8 @@
 
         title
         (str "Build failure: PR #" (:id pull-request) ", build #" (:number build))]
-    {:team-id (:team-id run)
+    {:tenant (:tenant run)
+     :team-id (:team-id run)
      :workflow-id (:on-failure ci)
      :inputs (if (= "analysis" (:activity follow-up-workflow))
                {:brief context}

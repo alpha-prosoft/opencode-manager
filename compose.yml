@@ -76,7 +76,14 @@ services:
       MANAGER_SANDBOX_BIND_HOST: manager-sandbox
       MANAGER_SANDBOX_PORT: 8001
       MANAGER_SANDBOX_SERVICE_URL: http://manager:8001
-      MANAGER_ONBOARDING_URL: ${ONBOARDING_URL:-file:///repos/onboarding}
+      # Whose X-Forwarded-For names a webhook caller's address: only Traefik's
+      # (by name, since its address on opencode-net is assigned at start).
+      MANAGER_TRUSTED_PROXIES: ${MANAGER_TRUSTED_PROXIES:-traefik-public}
+      # Tenants (operator-owned): name and onboarding repository of each.
+      MANAGER_TENANTS: ${TENANTS:-[{"name":"acme","onboarding":"file:///repos/acme-onboarding"},{"name":"globex","onboarding":"file:///repos/globex-onboarding"}]}
+      MANAGER_OPERATORS: ${MANAGER_OPERATORS:-oscar}
+      # Login mode only: the claims each test username logs in with.
+      MANAGER_DEV_USERS_FILE: /config/dev-users.json
       MANAGER_REAP_INTERVAL_SECONDS: ${MANAGER_REAP_INTERVAL_SECONDS:-300}
     env_file:
       - path: ./local/manager.env
@@ -84,6 +91,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./local/secrets:/config/secrets:ro
+      - ./examples/dev-users.json:/config/dev-users.json:ro
       - ./local/repos:/repos:ro
       - traefik-dynamic:/traefik/dynamic
       - manager-data:/data

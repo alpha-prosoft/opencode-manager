@@ -15,17 +15,22 @@
             [web.primitives.components :refer [RawAlert RawStack RawTypography]]))
 
 (defn posting-text
-  [{:keys [plan posted branch]}]
-  (let [comments
-        (format/plural (or (:comments plan) 0) "comment")]
-    (if branch
-      (str "Review of branch " (:name branch) " against " (:base branch) ": nothing is posted. "
-           comments " planned.")
-      (case (format/kw (:mode plan))
-        :auto (str posted " of " comments " posted to the pull request ("
-                   (:inline plan) " on lines, " (:folded plan) " in the summary).")
-        :dry-run (str "Dry run: nothing was posted. " comments " would be posted to the pull request.")
-        "Posting is off for this workflow: the review is only shown here."))))
+  ([result]
+   (posting-text result nil))
+  ([{:keys [plan posted branch]} scm-provider]
+   (let [comments
+         (format/plural (or (:comments plan) 0) "comment")
+
+         target
+         (if (format/gerrit? scm-provider) "the change" "the pull request")]
+     (if branch
+       (str "Review of branch " (:name branch) " against " (:base branch) ": nothing is posted. "
+            comments " planned.")
+       (case (format/kw (:mode plan))
+         :auto (str posted " of " comments " posted to " target " ("
+                    (:inline plan) " on lines, " (:folded plan) " in the summary).")
+         :dry-run (str "Dry run: nothing was posted. " comments " would be posted to " target ".")
+         "Posting is off for this workflow: the review is only shown here.")))))
 
 (defn- finding-view
   [{:keys [severity title path line body suggestion]}]
@@ -42,13 +47,13 @@
        [layout/code-block {} suggestion])]))
 
 (defn review-result
-  [{:keys [review] :as result}]
+  [{:keys [review] :as result} & [scm-provider]]
   (let [verdict
         (:verdict review)]
     [RawStack {:spacing 2}
      [RawAlert {:severity (chips/status-color :verdict verdict "info") :el-id els/review-verdict}
       [:<> [:strong (chips/status-label :verdict verdict)] (str " — " (:summary review))]]
-     [RawTypography {:variant "body2" :color "text.secondary"} (posting-text result)]
+     [RawTypography {:variant "body2" :color "text.secondary"} (posting-text result scm-provider)]
      (when (empty? (:findings review))
        [RawTypography {:color "text.secondary"} "No findings."])
      (for [[index finding] (map-indexed vector (:findings review))]

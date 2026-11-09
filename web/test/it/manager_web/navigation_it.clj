@@ -10,6 +10,7 @@
             [manager-web.sessions.elements :as sessions-els]
             [manager-web.shell.elements :as shell-els]
             [manager-web.teams.elements :as teams-els]
+            [manager-web.tenants.elements :as tenants-els]
             [testing.pw :refer [with-ui step]]))
 
 (def pages
@@ -38,10 +39,26 @@
 
 (deftest admin-navigation-it
   (with-ui [_page]
-    (step "Platform admins also get the Admin page"
+    (step "Tenant admins also get the Admin page"
           (fn []
-            (h/login (:platform-admin h/fixture))
+            (h/login (:tenant-admin h/fixture))
             (h/click (shell-els/nav-item :admin))
             (is
              (true?
-              (.isVisible (h/wait-visible admin-els/page))))))))
+              (.isVisible (h/wait-visible admin-els/page))))))
+
+    (step "Operators get the Tenants page with every tenant"
+          (fn []
+            (h/logout)
+            (h/login (:operator h/fixture))
+            (h/click (shell-els/nav-item :tenants))
+            (h/wait-visible tenants-els/page)
+            (is
+             (= "Platform operator"
+                (h/text shell-els/user-role)))
+            (is
+             (true?
+              (.isVisible (h/wait-visible (tenants-els/row (:tenant h/fixture))))))
+            (is
+             (true?
+              (h/visible? (tenants-els/row (:other-tenant h/fixture)))))))))

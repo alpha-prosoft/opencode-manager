@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "budget": {
+    "daily_tokens": 1000,
+    "max_running_sessions": 3
+  },
+  "llm_connections": [
+    {
+      "id": "copilot"
+    }
+  ],
+  "mcp_servers": [],
+  "required_credentials": [
+    "JIRA_TOKEN"
+  ]
+}

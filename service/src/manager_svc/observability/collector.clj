@@ -4,7 +4,8 @@
    followers of sessions that stopped. A follower subscribes to /event,
    snapshots existing conversations, and appends every classified event
    whose key its trail does not hold yet; the keys already recorded are read
-   from the trail when it starts, and after any failure."
+   from the trail once, when the follower starts, and kept over reconnects
+   (a key joins them only after its batch is recorded)."
   (:require [clojure.string :as string]
             [clojure.tools.logging :as log]
             [manager-svc.client :as client]
@@ -120,20 +121,22 @@
     (catch InterruptedException _
       (swap! follower assoc :stopped true))))
 
-(defn- follow!
+(defn follow!
   [system session-id follower]
-  (while (not (:stopped @follower))
-    (try
-      (let [seen
-            (atom (recorded-keys (:settings system) session-id))]
-        (follow-once! system session-id seen follower))
-      (catch InterruptedException _
-        (swap! follower assoc :stopped true))
-      (catch Exception e
-        (when-not (:stopped @follower)
-          (log/debug "Audit stream interrupted" session-id (ex-message e)))))
-    (when-not (:stopped @follower)
-      (pause! follower))))
+  (let [seen
+        (atom nil)]
+    (while (not (:stopped @follower))
+      (try
+        (when (nil? @seen)
+          (reset! seen (recorded-keys (:settings system) session-id)))
+        (follow-once! system session-id seen follower)
+        (catch InterruptedException _
+          (swap! follower assoc :stopped true))
+        (catch Exception e
+          (when-not (:stopped @follower)
+            (log/debug "Audit stream interrupted" session-id (ex-message e)))))
+      (when-not (:stopped @follower)
+        (pause! follower)))))
 
 (defn- stop-follower!
   [follower]

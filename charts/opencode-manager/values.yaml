@@ -12,28 +12,89 @@ publicScheme: https
 publicPort: null
 
 # jwt: identity from an external IdP token (bearer or the IdP's cookie). The token's issuer and
-# audience must match jwtIssuer and jwtAudience (both required) and its subject must be a valid
-# username. login (username-only form, no password) is for local development only.
+# audience must match jwtIssuer (or the issuer of jwtDiscoveryUrl's document) and jwtAudience, and its
+# subject must be a valid username. oidc: browser login through an OpenID Connect provider (authorization code flow with
+# PKCE); the manager issues its own login cookie. login (username-only form, no password) is for
+# local development only.
 auth:
   mode: jwt
   ttlHours: 12
   jwtJwksUrl: ""
+  # A full .well-known/openid-configuration URL: issuer and JWKS come from it (jwtIssuer, if set, must match).
+  jwtDiscoveryUrl: ""
   jwtIssuer: ""
   jwtAudience: ""
   jwtCookie: access_token
   jwtSecret:
     existingSecret: ""
     key: jwt-secret
+  # Signing keys of the provider (jwt and oidc modes), reloaded without a restart: every refreshSeconds,
+  # at once when a token names an unknown key id (at most every refreshRetrySeconds); a failed reload
+  # keeps the last good keys. file: a local JWKS instead of the provider's URL (e.g. written by a sidecar
+  # into a volume from extraVolumes), read again when it changes. defaultAlgorithm: the algorithm of keys
+  # published without "alg" (RS256 if empty; RS256/384/512, ES256/384/512).
+  jwks:
+    file: ""
+    refreshSeconds: 3600
+    refreshRetrySeconds: 10
+    defaultAlgorithm: ""
+  oidc:
+    # The provider's issuer; its endpoints come from <issuer>/.well-known/openid-configuration,
+    # or from discoveryUrl (a full .well-known/openid-configuration URL), which may replace the issuer.
+    issuer: ""
+    discoveryUrl: ""
+    clientId: ""
+    # Secret holding the client secret (a confidential client); mounted as a file, never an env var.
+    clientSecret:
+      existingSecret: ""
+      key: client-secret
+    scopes: openid profile email
+    # Default <publicScheme>://<domain>/api/auth/oidc/callback.
+    redirectUrl: ""
+    # Where the claims come from: id_token, access_token, userinfo; comma separated, later ones win.
+    claimsSource: id_token
 
-# Onboarding repository: platform.json lists teams and their repositories (see the README).
-onboarding:
-  url: ""
-  branch: main
-  file: platform.json
-  # Name of a platform secret (a key of platformSecrets.existingSecret) holding a token for https URLs.
-  credentials: ""
-  username: x-token-auth
-  syncIntervalMinutes: 10
+# Tenants (operator-owned): each has an onboarding repository whose tenant.json lists its LLM connections,
+# credentials, MCP servers and teams (see the README). onboarding is a URL or path, or a source object:
+#   - name: acme
+#     onboarding: https://git.example.com/acme/onboarding.git
+#   - name: globex
+#     onboarding: {type: git, url: "https://git.example.com/globex/onboarding.git", branch: main, credentials: GLOBEX_GIT_TOKEN}
+tenants: []
+# Instead of tenants: a ConfigMap whose key holds the list as JSON (.json) or EDN (.edn), mounted as
+# MANAGER_TENANTS_FILE and read again when it changes (new tenants sync at once). Operators may also
+# register tenants at runtime.
+tenantsFile:
+  configMap: ""
+  key: tenants.json
+# Usernames with the operator role (register tenants, see every tenant), besides the parser's :operator claim.
+operators: []
+syncIntervalMinutes: 10
+# How often the tenants file and the claims parser file are checked for changes.
+configReloadSeconds: 10
+# Git hosts reached over plain http (e.g. an in-cluster Gerrit), host or host:port.
+httpGitHosts: []
+# Proxies whose X-Forwarded-For names the caller of a webhook (its allowed addresses and delivery log):
+# addresses, CIDRs or host names. Traefik's pods have no fixed address, so the default trusts every
+# private address, which is sound while networkPolicies.ingressFrom lets only Traefik reach the public
+# listener. Narrow it to the cluster's pod CIDR, and set it to [] when nothing proxies the manager.
+trustedProxies:
+  - 10.0.0.0/8
+  - 172.16.0.0/12
+  - 192.168.0.0/16
+
+# Turns the identity provider's token claims into tenant, teams and roles. parser is a fully qualified
+# function. parserFile mounts a .clj file from a ConfigMap, loaded at startup and again when it changes,
+# that may define it.
+claims:
+  parser: manager-svc.claims/default-parser
+  parserFile:
+    configMap: ""
+    key: parser.clj
+  # auth.mode login only: a ConfigMap key with a JSON or EDN file of username -> claims for test logins.
+  devUsers:
+    configMap: ""
+    key: dev-users.json
 
 # Kubernetes Secret whose keys are platform secret names (e.g. COPILOT_TOKEN, BITBUCKET_TOKEN).
 # Mounted read-only into the manager; never into session pods.
@@ -48,7 +109,7 @@ credentialsKey:
   existingSecret: ""
   key: key
 
-# Default image for sessions; onboarding's allowed_images may permit others.
+# Default image for sessions; a tenant's allowed_images may permit others.
 sessionImage: ghcr.io/anomalyco/opencode:1.19.5
 
 reaper:

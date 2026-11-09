@@ -25,15 +25,28 @@
         "provider": {
           "enum": [
             "bitbucket",
-            "github"
+            "github",
+            "gerrit"
           ],
           "title": "Provider",
           "type": "string"
         },
         "repository": {
-          "description": "workspace/repo or owner/repo",
-          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+          "description": "workspace/repository (Bitbucket, GitHub) or the project name (Gerrit)",
+          "pattern": "^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$",
           "title": "Repository",
+          "type": "string"
+        },
+        "url": {
+          "description": "Base URL of a self-hosted provider (Gerrit), e.g. http://gerrit:8080",
+          "pattern": "^https?://",
+          "title": "Url",
+          "type": "string"
+        },
+        "web_url": {
+          "description": "Where browsers reach the provider, for links to changes (default: url)",
+          "pattern": "^https?://",
+          "title": "Web Url",
           "type": "string"
         },
         "credentials": {
@@ -65,13 +78,11 @@
         }
       },
       "required": [
-        "type",
-        "provider",
-        "repository",
-        "credentials"
+        "type"
       ],
       "title": "PullRequestTrigger",
-      "type": "object"
+      "type": "object",
+      "description": "Polls for new pull requests (Gerrit: changes). provider, repository and credentials come from the workflow's project unless set here."
     },
     "ScheduleTrigger": {
       "additionalProperties": false,
@@ -105,6 +116,9 @@
   "additionalProperties": false,
   "description": ".platform/workflows/<id>.json \u2014 a trigger wired to an activity.",
   "properties": {
+    "$schema": {
+      "type": "string"
+    },
     "name": {
       "title": "Name",
       "type": "string"
@@ -128,6 +142,12 @@
     "harness": {
       "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
       "title": "Harness",
+      "type": "string"
+    },
+    "project": {
+      "description": "A project of the team's team.json: its SCM source, repository and CI job fill in the trigger and options the workflow leaves out",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+      "title": "Project",
       "type": "string"
     },
     "trigger": {
@@ -165,10 +185,11 @@
       "default": "team",
       "enum": [
         "team",
-        "public"
+        "tenant"
       ],
       "title": "Visibility",
-      "type": "string"
+      "type": "string",
+      "description": "team: members of the team see its runs and sessions; tenant: everyone in the tenant"
     }
   },
   "required": [

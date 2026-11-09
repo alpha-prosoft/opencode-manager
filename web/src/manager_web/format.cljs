@@ -9,6 +9,34 @@
   (when (some? value)
     (keyword (string/lower-case (string/replace (name value) "_" "-")))))
 
+(defn scopes
+  "The scopes a credential's :provided-by allows, as a set of :tenant :team :user."
+  [provided-by]
+  (set (keep kw (if (sequential? provided-by) provided-by [provided-by]))))
+
+(def scope-labels
+  {:tenant "Tenant admins"
+   :team "Team admins"
+   :user "Each person"})
+
+(defn provided-by-label
+  [provided-by]
+  (let [allowed
+        (scopes provided-by)]
+    (string/join ", " (keep #(when (contains? allowed %) (scope-labels %)) [:tenant :team :user]))))
+
+(defn shared-source?
+  "True for a value that comes from the tenant or the team rather than the person."
+  [source]
+  (contains? #{:tenant :team :platform} (kw source)))
+
+(defn possessive
+  "\"Operations'\", \"acme's\"."
+  [name]
+  (let [name
+        (str name)]
+    (if (string/ends-with? name "s") (str name "'") (str name "'s"))))
+
 (defn words
   [field]
   (string/replace (name field) #"[-_]" " "))
@@ -86,6 +114,17 @@
   [n singular]
   (str n " " singular (when-not (= 1 n) "s")))
 
+(defn gerrit?
+  [scm-provider]
+  (= :gerrit (kw scm-provider)))
+
+(defn change-name
+  "What a pull request is called: \"Change 12\" on Gerrit, \"PR #12\" elsewhere."
+  [scm-provider id]
+  (if (gerrit? scm-provider)
+    (str "Change " id)
+    (str "PR #" id)))
+
 (defn trigger-label
   [trigger]
   (let [type
@@ -94,10 +133,22 @@
       (:retry-of trigger) (str "Re-run by " (:by trigger))
       (= :ci-failure type) (str "After build #" (:build trigger) " failed")
       (= :manual type) (str "Started by " (:by trigger))
-      (= :pull-request type) (str "Pull request #" (get-in trigger [:pull-request :id])
+      (= :team-session type) (str "Team session · started by " (:by trigger))
+      (= :pull-request type) (str (change-name (get-in trigger [:scm :provider]) (get-in trigger [:pull-request :id]))
                                   " in " (get-in trigger [:scm :repository]))
-      (= :schedule type) "Schedule"
-      :else (some-> (:type trigger) name))))
+      (= :schedule type) "Started by the platform (schedule)"
+      (and (= :webhook type) (:webhook-name trigger)) (str "Started by the platform (webhook " (:webhook-name trigger) ")")
+      (nil? type) "Started by the platform"
+      :else (str "Started by the platform (" (words (:type trigger)) ")"))))
+
+(defn run-title
+  "A run as a list names it: the title it was given, else its workflow."
+  [{:keys [inputs workflow-name workflow-id]}]
+  (let [title
+        (:title inputs)]
+    (if (string/blank? title)
+      (or workflow-name workflow-id)
+      title)))
 
 (defn workflow-trigger
   [spec]

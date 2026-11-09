@@ -1,9 +1,11 @@
 (ns manager-web.components.markdown-test
   (:require ["jsdom" :refer [JSDOM]]
+            ["react-dom/server" :as server]
             [clojure.set :as set]
             [clojure.string :as string]
             [clojure.test :refer [deftest is testing]]
-            [manager-web.components.markdown :as markdown]))
+            [manager-web.components.markdown :as markdown]
+            [reagent.core :as r]))
 
 (def ^:private purifier
   (markdown/purifier (.-window (JSDOM. ""))))
@@ -99,3 +101,14 @@
     (is
      (= "noopener noreferrer"
         (.getAttribute link "rel")))))
+
+(deftest the-component-shows-the-document
+  (let [sanitized
+        markdown/html]
+    (with-redefs [markdown/html (fn
+                                  ([text] (sanitized purifier text))
+                                  ([jsdom-purifier text] (sanitized jsdom-purifier text)))]
+      (is
+       (true?
+        (string/includes? (server/renderToString (r/as-element [markdown/markdown "## Requirements"]))
+                          "<h2>Requirements</h2>"))))))

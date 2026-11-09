@@ -1,8 +1,11 @@
 (ns manager-svc.sessions.core-test
   (:require [clojure.test :refer [deftest is testing]]
+            [edd.core :as edd]
             [edd.test.fixture.dal :as mock]
             [manager-svc.directory :as directory]
+            [manager-svc.platform.api :as platform]
             [manager-svc.sessions.aggregate :as aggregate]
+            [manager-svc.sessions.api :as sessions]
             [manager-svc.sessions.fixtures :as fixtures]
             [manager-svc.sessions.lifecycle :as lifecycle]
             [manager-svc.sessions.live :as live]
@@ -11,6 +14,7 @@
 
 (def session-id #uuid "11111111-1111-1111-1111-111111111111")
 (def fork-id #uuid "22222222-2222-2222-2222-222222222222")
+(def other-session-id #uuid "33333333-3333-3333-3333-333333333333")
 
 (defn- failure
   "Status of the domain error a command or query fails with."
@@ -23,6 +27,15 @@
       (or (:status (ex-data e))
           (some-> (ex-cause e) ex-data :status)
           (ex-message e)))))
+
+(defn- refusal
+  "{:status :message} a call fails with, or nil."
+  [f]
+  (try
+    (f)
+    nil
+    (catch clojure.lang.ExceptionInfo e
+      (select-keys (ex-data e) [:status :message]))))
 
 (defn- record
   [ctx]
@@ -38,7 +51,7 @@
       (fixtures/with-domains ctx
         (fixtures/create-session! system ctx {:id session-id :owner "bob" :visibility :team})
         (let [[listed]
-              (mock/query (support/as-user ctx "bob") {:query-id :list-sessions})]
+              (mock/query (fixtures/as ctx "bob") {:query-id :list-sessions})]
           (is
            (= {:id session-id
                :sub "bob"
@@ -52,21 +65,27 @@
                :can-open true
                :open-blocked nil
                :personal false
+               :team-session false
                :locked-at nil}
               (select-keys listed [:id :sub :name :visibility :status :url :open-url :is-owner
-                                   :can-manage :can-open :open-blocked :personal :locked-at]))))
+                                   :can-manage :can-open :open-blocked :personal :team-session :locked-at]))))
         (testing "team members see it but cannot manage it; others don't see it"
           (is
            (= [{:is-owner false :can-manage false :can-open true}]
               (mapv #(select-keys % [:is-owner :can-manage :can-open])
-                    (mock/query (support/as-user ctx "carol") {:query-id :list-sessions}))))
+                    (mock/query (fixtures/as ctx "carol") {:query-id :list-sessions}))))
           (is
            (= []
-              (mock/query (support/as-user ctx "mallory") {:query-id :list-sessions}))))
+              (mock/query (fixtures/as ctx "mallory") {:query-id :list-sessions}))))
+        (testing "a session the platform owns is a team session"
+          (fixtures/create-session! system ctx {:id other-session-id :owner "platform" :visibility :team})
+          (is
+           (= {session-id false other-session-id true}
+              (into {} (map (juxt :id :team-session)) (mock/query (fixtures/as ctx "bob") {:query-id :list-sessions})))))
         (testing "the secret key never reaches the UI"
           (is
            (not-any? #{:secret-key :env}
-                     (keys (mock/query (support/as-user ctx "bob") {:query-id :get-session :session-id session-id})))))))))
+                     (keys (mock/query (fixtures/as ctx "bob") {:query-id :get-session :session-id session-id})))))))))
 
 (deftest session-detail
   (mock/with-mock-dal
@@ -79,18 +98,18 @@
         (fixtures/create-session! system ctx {:id session-id :owner "bob"})
         (fixtures/set-status! system session-id :running)
         (let [detail
-              (mock/query (support/as-user ctx "bob") {:query-id :get-session :session-id session-id})]
+              (mock/query (fixtures/as ctx "bob") {:query-id :get-session :session-id session-id})]
           (is
            (= {:status :running :audit-events 7 :calls 3 :prompt-tokens 0}
               (merge (select-keys detail [:status :audit-events])
                      (select-keys (:usage detail) [:calls :prompt-tokens])))))
         (is
          (= 404
-            (failure #(mock/query (support/as-user ctx "carol") {:query-id :get-session :session-id session-id}))))
+            (failure #(mock/query (fixtures/as ctx "carol") {:query-id :get-session :session-id session-id}))))
         (is
          (= [{:id "ses_abcdefgh12" :open-path "/L3Nlc3Npb24vd29ya3NwYWNl/session/ses_abcdefgh12"}]
             (mapv #(select-keys % [:id :open-path])
-                  (mock/query (support/as-user ctx "bob") {:query-id :list-conversations :session-id session-id}))))))))
+                  (mock/query (fixtures/as ctx "bob") {:query-id :list-conversations :session-id session-id}))))))))
 
 (deftest updating
   (mock/with-mock-dal
@@ -101,18 +120,18 @@
           (fixtures/ctx system)]
       (fixtures/with-domains ctx
         (fixtures/create-session! system ctx {:id session-id :owner "bob" :visibility :team})
-        (fixtures/command! (support/as-user ctx "alice")
-                           {:cmd-id :update-session :id session-id :attrs {:name "Renamed" :visibility :public}})
+        (fixtures/command! (fixtures/as ctx "alice")
+                           {:cmd-id :update-session :id session-id :attrs {:name "Renamed" :visibility :tenant}})
         (is
-         (= {:name "Renamed" :visibility :public}
+         (= {:name "Renamed" :visibility :tenant}
             (select-keys (record ctx) [:name :visibility])))
         (is
          (= 403
-            (failure #(fixtures/command! (support/as-user ctx "carol")
+            (failure #(fixtures/command! (fixtures/as ctx "carol")
                                          {:cmd-id :update-session :id session-id :attrs {:name "Mine"}}))))
         (is
          (= 422
-            (failure #(fixtures/command! (support/as-user ctx "bob")
+            (failure #(fixtures/command! (fixtures/as ctx "bob")
                                          {:cmd-id :update-session :id session-id :attrs {:name ""}}))))))))
 
 (deftest lifecycle-requests
@@ -124,9 +143,9 @@
           (fixtures/ctx system)
 
           bob
-          (support/as-user ctx "bob")]
+          (fixtures/as ctx "bob")]
       (fixtures/with-domains ctx
-        (fixtures/create-session! system ctx {:id session-id :owner "bob" :visibility :public})
+        (fixtures/create-session! system ctx {:id session-id :owner "bob" :visibility :tenant})
         (fixtures/command! bob {:cmd-id :start-session :id session-id})
         (is
          (= :start
@@ -138,10 +157,10 @@
         (testing "people who may not manage it cannot stop or delete it"
           (is
            (= 403
-              (failure #(fixtures/command! (support/as-user ctx "carol") {:cmd-id :stop-session :id session-id}))))
+              (failure #(fixtures/command! (fixtures/as ctx "carol") {:cmd-id :stop-session :id session-id}))))
           (is
            (= 403
-              (failure #(fixtures/command! (support/as-user ctx "carol") {:cmd-id :delete-session :id session-id})))))
+              (failure #(fixtures/command! (fixtures/as ctx "carol") {:cmd-id :delete-session :id session-id})))))
         (fixtures/command! bob {:cmd-id :stop-session :id session-id})
         (is
          (= :stop
@@ -150,6 +169,81 @@
         (is
          (= :delete
             (:pending (record ctx))))))))
+
+(deftest a-session-being-deleted-is-not-started-again
+  (mock/with-mock-dal
+    (let [system
+          (fixtures/system)
+
+          ctx
+          (fixtures/ctx system)
+
+          start
+          (fn [as]
+            (refusal #(fixtures/command! as {:cmd-id :start-session :id session-id})))]
+      (fixtures/with-domains ctx
+        (fixtures/create-session! system ctx {:id session-id :owner "bob" :visibility :team})
+        (fixtures/command! (fixtures/as ctx "bob") {:cmd-id :delete-session :id session-id})
+        (is
+         (= [{:status 409 :message "This session is being deleted"}
+             {:status 409 :message "This session is being deleted"}
+             {:status 409 :message "This session is being deleted"}]
+            [(start (fixtures/as ctx "bob"))
+             (start (fixtures/as ctx "carol"))
+             (start (support/as-platform ctx))]))
+        (is
+         (= :delete
+            (:pending (record ctx))))
+        (testing "so the worker's outcome still deletes it"
+          (lifecycle/reconcile! system)
+          (is
+           (nil? (record ctx))))))))
+
+(deftest a-team-runs-no-more-sessions-than-its-budget-allows
+  (mock/with-mock-dal
+    (let [system
+          (fixtures/system)
+
+          ctx
+          (fixtures/ctx system)
+
+          limit-reached
+          {:status 422 :message "Team alpha already has 1 running sessions (limit 1). Stop one and retry."}
+
+          start
+          (fn [as id]
+            (refusal #(fixtures/command! as {:cmd-id :start-session :id id})))
+
+          fork
+          (fn [username]
+            (refusal #(fixtures/command! (fixtures/as ctx username)
+                                         {:cmd-id :fork-session :id (random-uuid) :attrs {:source-id session-id}})))]
+      (fixtures/with-domains ctx
+        (binding [fixtures/*team* {:id "alpha" :budget {:max-running-sessions 1}}]
+          (fixtures/create-session! system ctx {:id session-id :owner "bob" :visibility :tenant})
+          (fixtures/create-session! system ctx {:id other-session-id :owner "bob" :visibility :tenant})
+          (fixtures/set-status! system session-id :running)
+          (testing "a person starts no stopped session beside the running one"
+            (is
+             (= limit-reached
+                (start (fixtures/as ctx "bob") other-session-id)))
+            (is
+             (nil? (:pending (:session (mock/query (support/as-platform ctx)
+                                                   {:query-id :get-session-record :session-id other-session-id}))))))
+          (testing "nor forks one, whether of the team or not"
+            (is
+             (= [limit-reached limit-reached]
+                [(fork "carol") (fork "mallory")])))
+          (testing "the running session itself does not count against its own start"
+            (is
+             (nil? (start (fixtures/as ctx "bob") session-id))))
+          (testing "the platform's starts are checked where it prepares the session"
+            (is
+             (nil? (start (support/as-platform ctx) other-session-id))))
+          (testing "once the running one stopped there is room again"
+            (fixtures/set-status! system session-id :stopped)
+            (is
+             (nil? (fork "carol")))))))))
 
 (deftest blocked-starts
   (mock/with-mock-dal
@@ -163,11 +257,11 @@
         (testing "a team admin sees a private session but may not work in it"
           (is
            (= 409
-              (failure #(fixtures/command! (support/as-user ctx "alice") {:cmd-id :start-session :id session-id})))))
+              (failure #(fixtures/command! (fixtures/as ctx "alice") {:cmd-id :start-session :id session-id})))))
         (testing "someone who can't see it gets not found"
           (is
            (= 404
-              (failure #(fixtures/command! (support/as-user ctx "mallory") {:cmd-id :start-session :id session-id})))))))))
+              (failure #(fixtures/command! (fixtures/as ctx "mallory") {:cmd-id :start-session :id session-id})))))))))
 
 (deftest locking-sessions
   (mock/with-mock-dal
@@ -178,12 +272,12 @@
           (fixtures/ctx system)
 
           bob
-          (support/as-user ctx "bob")]
+          (fixtures/as ctx "bob")]
       (fixtures/with-domains ctx
-        (fixtures/create-session! system ctx {:id session-id :owner "bob" :visibility :public})
+        (fixtures/create-session! system ctx {:id session-id :owner "bob" :visibility :tenant})
         (is
          (= 403
-            (failure #(fixtures/command! (support/as-user ctx "alice") {:cmd-id :lock-session :id session-id}))))
+            (failure #(fixtures/command! (fixtures/as ctx "alice") {:cmd-id :lock-session :id session-id}))))
         (fixtures/command! bob {:cmd-id :lock-session :id session-id})
         (is
          (= {:locked-by "bob" :pending :stop}
@@ -206,27 +300,82 @@
           ctx
           (fixtures/ctx system)]
       (fixtures/with-domains ctx
-        (fixtures/create-session! system ctx {:id session-id :owner "bob" :visibility :public
+        (fixtures/create-session! system ctx {:id session-id :owner "bob" :visibility :tenant :project "app"
                                               :labels {:workflow "fix" :conversation "ses_abcdefgh12" :activity "fix"}})
-        (fixtures/command! (support/as-user ctx "carol")
+        (fixtures/command! (fixtures/as ctx "carol")
                            {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id}})
         (is
          (= {:sub "carol"
              :name "Fix the bug (fork)"
              :visibility :private
+             :tenant "acme"
              :team-id "alpha"
              :activity "session"
              :forked-from session-id
+             :project "app"
              :fork-pending true
              :pending :start
              :labels {:workflow "fix" :conversation "ses_abcdefgh12"}}
             (select-keys (:session (mock/query (support/as-platform ctx) {:query-id :get-session-record :session-id fork-id}))
-                         [:sub :name :visibility :team-id :activity :forked-from :fork-pending :pending :labels])))
-        (testing "only team members can fork"
+                         [:sub :name :visibility :tenant :team-id :activity :forked-from :project :fork-pending :pending
+                          :labels])))
+        (testing "a fork needs an id of its own"
           (is
-           (= 403
-              (failure #(fixtures/command! (support/as-user ctx "mallory")
+           (= {:id ["missing required key"]}
+              (get-in (try
+                        (fixtures/command! (fixtures/as ctx "carol") {:cmd-id :fork-session :attrs {:source-id session-id}})
+                        (catch clojure.lang.ExceptionInfo e
+                          (ex-data e)))
+                      [:error]))))
+        (testing "people of the tenant outside the team fork into the same team"
+          (let [mallory-fork
+                (random-uuid)]
+            (fixtures/command! (fixtures/as ctx "mallory")
+                               {:cmd-id :fork-session :id mallory-fork :attrs {:source-id session-id}})
+            (is
+             (= {:sub "mallory" :tenant "acme" :team-id "alpha"}
+                (select-keys (:session (mock/query (support/as-platform ctx) {:query-id :get-session-record :session-id mallory-fork}))
+                             [:sub :tenant :team-id])))))
+        (testing "people of another tenant can't"
+          (is
+           (= 404
+              (failure #(fixtures/command! (fixtures/as ctx "hank")
                                            {:cmd-id :fork-session :id (random-uuid) :attrs {:source-id session-id}})))))))))
+
+(deftest forking-needs-the-credentials-the-team-requires-of-the-person
+  (mock/with-mock-dal
+    (let [system
+          (fixtures/system)
+
+          ctx
+          (edd/reg-query (fixtures/ctx system) :get-missing-required-credentials
+                         (fn [_ {:keys [team-id user]}]
+                           {:team-id team-id
+                            :team-name "Alpha"
+                            :missing (if (= "carol" user) [{:id "JIRA_TOKEN" :name "Jira"}] [])})
+                         :auth {:role [:non-interactive]})
+
+          fork!
+          (fn [username id]
+            (try
+              (fixtures/command! (fixtures/as ctx username) {:cmd-id :fork-session :id id :attrs {:source-id session-id}})
+              nil
+              (catch clojure.lang.ExceptionInfo e
+                {:status (:status (ex-data e)) :message (ex-message e)})))]
+      (fixtures/with-domains ctx
+        (with-redefs [platform/teams-of (fn [_ caller]
+                                          (set (filter #{"alpha"} (map name (keys (:teams caller))))))]
+          (fixtures/create-session! system ctx {:id session-id :owner "bob" :visibility :tenant
+                                                :labels {:workflow "fix" :activity "fix"}})
+          (is
+           (= {:status 422
+               :message "Team Alpha requires your own Jira credential. Add it under Accounts, then start again; team and tenant values don't count."}
+              (fork! "carol" fork-id)))
+          (is
+           (nil? (:session (mock/query (support/as-platform ctx) {:query-id :get-session-record :session-id fork-id}))))
+          (testing "people outside the team fork without its requirements, which they couldn't meet"
+            (is
+             (nil? (fork! "mallory" (random-uuid))))))))))
 
 (deftest forking-needs-a-workflow
   (mock/with-mock-dal
@@ -236,10 +385,10 @@
           ctx
           (fixtures/ctx system)]
       (fixtures/with-domains ctx
-        (fixtures/create-session! system ctx {:id session-id :owner "bob" :visibility :public :labels {}})
+        (fixtures/create-session! system ctx {:id session-id :owner "bob" :visibility :tenant :labels {}})
         (is
          (= 422
-            (failure #(fixtures/command! (support/as-user ctx "carol")
+            (failure #(fixtures/command! (fixtures/as ctx "carol")
                                          {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id}}))))))))
 
 (deftest stopping-idle-sessions
@@ -255,12 +404,12 @@
           (fixtures/set-status! system session-id :running)
           (is
            (= 403
-              (failure #(fixtures/command! (support/as-user ctx "bob") {:cmd-id :stop-idle-sessions}))))
+              (failure #(fixtures/command! (fixtures/as ctx "bob") {:cmd-id :stop-idle-sessions}))))
           (testing "the administrator's request is only recorded"
-            (fixtures/command! (support/as-user ctx "root") {:cmd-id :stop-idle-sessions})
+            (fixtures/command! (fixtures/as ctx "root") {:cmd-id :stop-idle-sessions})
             (is
              (= "root"
-                (:requested-by (mock/get-by-id ctx aggregate/reaper-id))))
+                (:requested-by (mock/get-by-id ctx (aggregate/reaper-id "acme")))))
             (is
              (nil?
               (:pending (record ctx)))))
@@ -284,7 +433,7 @@
           (fixtures/ctx system)
 
           bob
-          (support/as-user ctx "bob")]
+          (fixtures/as ctx "bob")]
       (fixtures/with-domains ctx
         (fixtures/create-session! system ctx {:id session-id :owner "bob"})
         (fixtures/command! bob {:cmd-id :delete-session :id session-id})
@@ -302,14 +451,14 @@
           (fixtures/ctx system)]
       (fixtures/with-domains ctx
         (fixtures/create-session! system ctx {:id session-id :owner "bob"})
-        (fixtures/command! (support/as-user ctx "bob") {:cmd-id :stop-session :id session-id})
+        (fixtures/command! (fixtures/as ctx "bob") {:cmd-id :stop-session :id session-id})
         (fixtures/command! (support/as-platform ctx) {:cmd-id :record-session-stopped :id session-id})
         (let [row-before
-              (first (directory/rows ctx "user:bob" :sessions))]
+              (first (directory/rows ctx "/user/bob" :sessions))]
           (fixtures/command! (support/as-platform ctx) {:cmd-id :touch-session :id session-id})
           (is
            (= row-before
-              (first (directory/rows ctx "user:bob" :sessions))))
+              (first (directory/rows ctx "/user/bob" :sessions))))
           (testing "a late touch keeps the session stopped"
             (is
              (some?
@@ -344,7 +493,51 @@
             (swap! (:sessions/state system) assoc-in [:activity session-id] later)
             (is
              (= (str (java.time.Instant/ofEpochMilli later))
-                (:last-activity-at (first (mock/query (support/as-user ctx "bob") {:query-id :list-sessions})))))))))))
+                (:last-activity-at (first (mock/query (fixtures/as ctx "bob") {:query-id :list-sessions})))))))))))
+
+(deftest sessions-of-a-team-or-project-and-for-search
+  (mock/with-mock-dal
+    (let [system
+          (fixtures/system)
+
+          ctx
+          (fixtures/ctx system)
+
+          [on-project elsewhere private-of-carol other-team]
+          (repeatedly 4 random-uuid)
+
+          listed
+          (fn [username query]
+            (set (map :id (mock/query (fixtures/as ctx username) (merge {:query-id :list-sessions} query)))))]
+      (fixtures/with-domains ctx
+        (fixtures/create-session! system ctx {:id on-project :owner "bob" :project "app"})
+        (fixtures/create-session! system ctx {:id elsewhere :owner "bob" :visibility :team})
+        (fixtures/create-session! system ctx {:id private-of-carol :owner "carol" :project "app"})
+        (fixtures/create-session! system ctx {:id other-team :owner "dave" :team-id "beta" :project "app" :visibility :tenant})
+        (is
+         (= #{on-project}
+            (listed "bob" {:team-id "alpha" :project-id "app"})))
+        (is
+         (= #{on-project elsewhere}
+            (listed "bob" {:team-id "alpha"})))
+        (is
+         (= "app"
+            (:project (first (mock/query (fixtures/as ctx "bob") {:query-id :list-sessions :project-id "app" :team-id "alpha"})))))
+        (testing "a project id alone names no project: ids are only unique within a team"
+          (is
+           (= #{on-project elsewhere other-team}
+              (listed "bob" {:project-id "app"}))))
+        (testing "search reads the rows the person may see: never someone's private session"
+          (is
+           (= #{on-project elsewhere other-team}
+              (set (map :id (sessions/visible-rows system (fixtures/person "bob"))))))
+          (is
+           (= #{on-project elsewhere private-of-carol other-team}
+              (set (map :id (sessions/visible-rows system (fixtures/person "root")))))))
+        (testing "nor another tenant's"
+          (is
+           (= []
+              (sessions/visible-rows system (fixtures/person "hank")))))))))
 
 (deftest listing-reads-the-owner-and-team-directories
   (mock/with-mock-dal
@@ -359,10 +552,10 @@
 
           listed
           (fn [username]
-            (set (map :id (mock/query (support/as-user ctx username) {:query-id :list-sessions}))))]
+            (set (map :id (mock/query (fixtures/as ctx username) {:query-id :list-sessions}))))]
       (fixtures/with-domains ctx
         (fixtures/create-session! system ctx {:id own :owner "bob"})
-        (fixtures/create-session! system ctx {:id public :owner "dave" :team-id "beta" :visibility :public})
+        (fixtures/create-session! system ctx {:id public :owner "dave" :team-id "beta" :visibility :tenant})
         (fixtures/create-session! system ctx {:id hidden :owner "erin" :team-id "beta"})
         (fixtures/create-session! system ctx {:id team-shared :owner "carol" :visibility :team})
         (is
@@ -376,33 +569,33 @@
             (listed "root")))
         (is
          (= #{own team-shared}
-            (set (map :id (directory/rows ctx "team:alpha" :sessions)))))
+            (set (map :id (directory/rows ctx "/team/acme/alpha" :sessions)))))
         (is
          (= #{own}
-            (set (map :id (directory/rows ctx "user:bob" :sessions)))))
+            (set (map :id (directory/rows ctx "/user/bob" :sessions)))))
         (testing "a rename shows in the list"
-          (fixtures/command! (support/as-user ctx "bob") {:cmd-id :update-session :id own :attrs {:name "Renamed"}})
+          (fixtures/command! (fixtures/as ctx "bob") {:cmd-id :update-session :id own :attrs {:name "Renamed"}})
           (is
            (= "Renamed"
-              (:name (first (filter #(= own (:id %)) (mock/query (support/as-user ctx "bob") {:query-id :list-sessions})))))))
+              (:name (first (filter #(= own (:id %)) (mock/query (fixtures/as ctx "bob") {:query-id :list-sessions})))))))
         (testing "a fork is listed for the person who forked"
-          (fixtures/command! (support/as-user ctx "bob") {:cmd-id :fork-session :id fork-id :attrs {:source-id team-shared}})
+          (fixtures/command! (fixtures/as ctx "bob") {:cmd-id :fork-session :id fork-id :attrs {:source-id team-shared}})
           (is
            (contains? (listed "bob") fork-id))
           (is
            (not (contains? (listed "carol") fork-id))))
         (testing "a deleted session leaves every directory"
-          (fixtures/command! (support/as-user ctx "bob") {:cmd-id :delete-session :id own})
+          (fixtures/command! (fixtures/as ctx "bob") {:cmd-id :delete-session :id own})
           (fixtures/command! (support/as-platform ctx) {:cmd-id :record-session-deleted :id own})
           (is
            (= #{public team-shared fork-id}
               (listed "bob")))
           (is
            (= #{team-shared fork-id}
-              (set (map :id (directory/rows ctx "team:alpha" :sessions)))))
+              (set (map :id (directory/rows ctx "/team/acme/alpha" :sessions)))))
           (is
            (= #{fork-id}
-              (set (map :id (directory/rows ctx "user:bob" :sessions)))))
+              (set (map :id (directory/rows ctx "/user/bob" :sessions)))))
           (is
            (= #{public hidden team-shared fork-id}
               (set (map :id (mock/query (support/as-platform ctx) {:query-id :list-session-rows}))))))))))
@@ -425,4 +618,110 @@
         (fixtures/set-status! system other-id :running)
         (is
          (= {:count 1}
-            (mock/query (support/as-platform ctx) {:query-id :count-running-sessions :team-id "alpha"})))))))
+            (mock/query (support/as-platform ctx) {:query-id :count-running-sessions :tenant "acme" :team-id "alpha"})))
+        (testing "beside a session of the team: the others running in it"
+          (is
+           (= {:running-itself {:count 0} :stopped {:count 1} :unknown {:count 0}}
+              {:running-itself (mock/query (support/as-platform ctx) {:query-id :count-running-sessions :session-id session-id})
+               :stopped (mock/query (support/as-platform ctx) {:query-id :count-running-sessions :session-id fork-id})
+               :unknown (mock/query (support/as-platform ctx) {:query-id :count-running-sessions
+                                                               :session-id (random-uuid)})})))))))
+
+(deftest sessions-the-platform-owns-are-listed-with-their-team-only
+  (mock/with-mock-dal
+    (let [system
+          (fixtures/system)
+
+          ctx
+          (fixtures/ctx system)
+
+          platform-ctx
+          (support/as-platform ctx)]
+      (fixtures/with-domains ctx
+        (fixtures/create-session! system ctx {:id session-id :owner "platform" :visibility :team})
+        (fixtures/create-session! system ctx {:id other-session-id :owner "bob"})
+        (is
+         (= {:team #{session-id other-session-id} :bob #{other-session-id} :platform #{}}
+            {:team (set (map :id (directory/rows platform-ctx (directory/team "acme" "alpha") :sessions)))
+             :bob (set (map :id (directory/rows platform-ctx (directory/user "bob") :sessions)))
+             :platform (set (map :id (directory/rows platform-ctx (directory/user "platform") :sessions)))}))
+        (testing "nor is the platform a person of the tenant"
+          (is
+           (= [(directory/user "bob")]
+              (directory/identities platform-ctx "acme" "user"))))
+        (testing "team members still list it"
+          (is
+           (contains? (set (map :id (mock/query (fixtures/as ctx "carol") {:query-id :list-sessions})))
+                      session-id)))))))
+
+(deftest stopping-idle-sessions-stays-in-the-tenant
+  (mock/with-mock-dal
+    (let [system
+          (fixtures/system)
+
+          ctx
+          (fixtures/ctx system)
+
+          globex-id
+          #uuid "44444444-4444-4444-4444-444444444444"]
+      (fixtures/with-domains ctx
+        (fixtures/create-session! system ctx {:id session-id :owner "bob"})
+        (fixtures/create-session! system ctx {:id globex-id :owner "hank" :tenant "globex"})
+        (with-redefs [live/done? (constantly true)]
+          (fixtures/set-status! system session-id :running)
+          (fixtures/set-status! system globex-id :running)
+          (fixtures/command! (fixtures/as ctx "gina") {:cmd-id :stop-idle-sessions})
+          (is
+           (= [globex-id]
+              (lifecycle/reap-requested! system)))
+          (is
+           (= :running
+              (get-in @(get-in system [:sessions/backend :state]) [:statuses session-id]))))))))
+
+(deftest a-teams-idle-limit-shortens-the-harness-limit
+  (fixtures/with-domains (fixtures/ctx (fixtures/system))
+    (let [system
+          (fixtures/system)
+
+          session
+          {:tenant "acme" :team-id "alpha"}]
+      (is
+       (= 15
+          (live/idle-minutes system session {:idle-minutes 15})))
+      (binding [fixtures/*team* {:budget {:idle-minutes 5}}]
+        (is
+         (= 5
+            (live/idle-minutes system session {:idle-minutes 15})))
+        (is
+         (= 3
+            (live/idle-minutes system session {:idle-minutes 3})))))))
+
+(deftest sessions-of-other-tenants-are-not-listed
+  (mock/with-mock-dal
+    (let [system
+          (fixtures/system)
+
+          ctx
+          (fixtures/ctx system)
+
+          globex-id
+          #uuid "44444444-4444-4444-4444-444444444444"
+
+          listed
+          (fn [username]
+            (set (map :id (mock/query (fixtures/as ctx username) {:query-id :list-sessions}))))]
+      (fixtures/with-domains ctx
+        (fixtures/create-session! system ctx {:id session-id :owner "bob" :visibility :tenant})
+        (fixtures/create-session! system ctx {:id globex-id :owner "hank" :tenant "globex" :visibility :tenant})
+        (is
+         (= #{session-id}
+            (listed "root")))
+        (is
+         (= #{globex-id}
+            (listed "gina")))
+        (is
+         (= #{session-id}
+            (set (map :id (mock/query (support/as-platform ctx) {:query-id :list-session-rows :tenant "acme"})))))
+        (is
+         (= #{session-id globex-id}
+            (set (map :id (mock/query (support/as-platform ctx) {:query-id :list-session-rows})))))))))

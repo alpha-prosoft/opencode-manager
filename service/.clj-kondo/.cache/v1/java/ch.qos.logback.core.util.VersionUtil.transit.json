@@ -1,0 +1,1 @@
+["^ ","~:members",["^ ","getVersionOfArtifact",["~#set",[["^ ","~:flags",["^2",["~:method","~:public","~:static"]]]]],"nonNull",["^2",[["^ ","^3",["^2",["^4","^5","^6"]]]]],"checkForVersionEquality",["^2",[["^ ","^3",["^2",["^4","^5","^6"]]]]],"compareExpectedAndFoundVersion",["^2",[["^ ","^3",["^2",["^4","^5"]]]]]]]

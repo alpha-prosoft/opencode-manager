@@ -25,8 +25,9 @@
    :complete-run platform
    :create-session platform
    :delete-my-credential people
-   :delete-platform-credential people
-   :delete-session both
+   :delete-session people
+   :delete-team-credential people
+   :delete-tenant-credential people
    :fail-run platform
    :finalize-run platform
    :follow-run-ci platform
@@ -37,7 +38,6 @@
    :mark-run-preparing platform
    :mark-trigger-items-seen platform
    :record-model-unavailable platform
-   :record-platform-sync platform
    :record-review-comment platform
    :record-run-conversation platform
    :record-run-notified platform
@@ -55,24 +55,32 @@
    :record-session-stopped platform
    :record-team-sync platform
    :record-telemetry platform
+   :record-tenant-sync platform
    :record-usage platform
    :register-schedule platform
+   :register-tenant people
    :remove-directory-row platform
    :retry-run people
    :roll-up-telemetry platform
    :roll-up-usage platform
    :set-my-credential people
-   :set-platform-credential people
+   :set-team-credential people
+   :set-tenant-credential people
    :start-run both
    :start-session both
-   :stop-idle-sessions both
+   :start-team-session people
+   :stop-idle-sessions people
    :stop-session both
    :submit-run-result platform
-   :sync-platform both
+   :sync-tenant both
    :touch-session platform
    :update-run-ci platform
-   :update-session both
-   :upsert-directory-row platform})
+   :update-session people
+   :upsert-directory-row platform
+   :save-webhook people
+   :set-webhook-secret people
+   :delete-webhook people
+   :record-webhook-delivery platform})
 
 (def queries
   {:check-credential platform
@@ -82,11 +90,10 @@
    :get-audit-summary platform
    :get-idle-stop-request platform
    :get-me people
+   :get-project people
+   :get-missing-required-credentials platform
    :get-my-credentials people
    :get-observability-metrics platform
-   :get-personas platform
-   :get-platform people
-   :get-platform-state platform
    :get-registry platform
    :get-run people
    :get-run-source platform
@@ -96,9 +103,11 @@
    :get-session-activity both
    :get-session-record platform
    :get-stored-credential platform
+   :get-sync-requests platform
    :get-team people
    :get-team-tokens-today platform
    :get-team-usage platform
+   :get-tenant people
    :get-trigger-items platform
    :get-usage-by-user platform
    :get-usage-rows platform
@@ -112,16 +121,26 @@
    :list-harnesses people
    :list-mcp-servers people
    :list-open-pull-requests people
+   :list-required-credentials people
    :list-pending-runs platform
    :list-people-runs-since platform
+   :list-projects people
    :list-runs people
    :list-runs-since platform
    :list-schedules people
    :list-session-rows platform
    :list-sessions people
+   :list-team-credentials people
    :list-teams people
+   :list-tenants people
+   :search people
    :test-llm-connection people
-   :verify-audit both})
+   :verify-audit both
+   :list-webhooks people
+   :get-webhook people
+   :list-webhook-targets people
+   :preview-webhook people
+   :get-webhook-for-delivery platform})
 
 (defn- registered
   [ctx kind]

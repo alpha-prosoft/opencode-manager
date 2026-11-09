@@ -11,7 +11,6 @@
             [manager-svc.http :as http]
             [manager-svc.platform.api :as platform]
             [manager-svc.runs.edd :as edd]
-            [manager-svc.runs.run :as run]
             [manager-svc.runs.submissions :as submissions]
             [manager-svc.sessions.api :as sessions]
             [manager-svc.workers :as workers]))
@@ -89,7 +88,7 @@
   "Validates and records a submission; returns the text answered to the agent."
   [system session tool arguments]
   (let [run-id
-        (or (run/->uuid (:run-id session))
+        (or (sessions/parse-id (:run-id session))
             (throw (tool-error "This session does not belong to a platform run")))
 
         found

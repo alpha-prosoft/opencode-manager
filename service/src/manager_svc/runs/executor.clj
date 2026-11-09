@@ -34,7 +34,6 @@
             [manager-svc.runs.edd :as edd]
             [manager-svc.runs.handlers :as handlers]
             [manager-svc.runs.model :as model]
-            [manager-svc.runs.run :as run]
             [manager-svc.runs.sandbox :as sandbox]
             [manager-svc.runs.submissions :as submissions]
             [manager-svc.sessions.api :as sessions]
@@ -56,8 +55,6 @@
 (def step-attempts 3)
 
 (def max-passes 25)
-
-(def conversation-label "conversation")
 
 (def attempt-label
   "Session label <model-index>:<conversation> of the conversation the run
@@ -89,8 +86,8 @@
 
 (defn- workflow!
   [system run]
-  (or (definitions/workflow system (:team-id run) (:workflow-id run))
-      (throw (permanent (str "Workflow " (:team-id run) "/" (:workflow-id run) " does not exist or is invalid")))))
+  (or (definitions/workflow system (:tenant run) (:team-id run) (:workflow-id run))
+      (throw (permanent (definitions/missing-workflow (:team-id run) (:workflow-id run))))))
 
 (defn owner
   [settings run]
@@ -123,7 +120,7 @@
           (sessions/get-session system session-id))]
     {:system system
      :run run
-     :team (definitions/team system (:team-id run))
+     :team (definitions/team system (:tenant run) (:team-id run))
      :workflow workflow
      :options (options workflow run)
      :inputs (:inputs run)
@@ -140,32 +137,36 @@
         title
         (get-in run [:inputs :title])]
     (cond
-      pull-request (str (:name workflow) " · PR #" pull-request)
+      pull-request (str (:name workflow) (if (= :gerrit (model/scm-provider run)) " · Change " " · PR #") pull-request)
       (not (string/blank? title)) title
       :else (:name workflow))))
 
 (defn visibility
+  "A team-scoped session keeps what its team admin chose; a person's
+   interactive session starts private (tenant-wide for a tenant workflow);
+   other sessions are shared as the workflow says."
   [workflow activity run]
   (let [team?
         (= "team" (:visibility workflow))]
     (cond
-      (and (:interactive activity) (not (model/platform-created? run))) (if team? :private :public)
+      (:session-visibility run) (keyword (:session-visibility run))
+      (and (:interactive activity) (not (model/platform-created? run))) (if team? :private :tenant)
       team? :team
-      :else :public)))
+      :else :tenant)))
 
 (defn agent-prompt
-  [system team-id agent options]
+  [system tenant team-id agent options]
   (let [base
         (or (:prompt agent)
-            (platform/read-team-file system team-id (:prompt-file agent)))]
+            (platform/read-team-file system tenant team-id (:prompt-file agent)))]
     (if-let [instructions (:instructions-file options)]
-      (str base "\n\n" (platform/read-team-file system team-id instructions))
+      (str base "\n\n" (platform/read-team-file system tenant team-id instructions))
       base)))
 
 (defn check-session-limit!
-  [system team-id]
+  [system tenant team-id]
   (when-let [message
-             (run/session-limit-error system team-id (sessions/running-count system team-id))]
+             (sessions/session-limit-error system tenant team-id (sessions/running-count system tenant team-id))]
     (throw (ex-info message {:status 422 :message message}))))
 
 (declare release-session!)
@@ -186,14 +187,17 @@
   (let [workflow
         (workflow! system run)
 
+        tenant
+        (:tenant run)
+
         team-id
         (:team-id run)
 
         agent
-        (definitions/agent-spec system team-id (:agent workflow))
+        (definitions/agent-spec system tenant team-id (:agent workflow))
 
         harness
-        (definitions/harness-spec system team-id (:harness workflow))
+        (definitions/harness-spec system tenant team-id (:harness workflow))
 
         _
         (when-not (and agent harness)
@@ -208,7 +212,7 @@
         existing
         (sessions/get-session system session-id)]
     (when-not existing
-      (check-session-limit! system team-id)
+      (check-session-limit! system tenant team-id)
       (let [ctx
             (run-context system run workflow)
 
@@ -222,23 +226,24 @@
           :name (session-title workflow run)
           :description (:description workflow)
           :visibility (visibility workflow activity run)
+          :tenant tenant
           :team-id team-id
+          :project (:project run)
           :run-id (:id run)
           :activity (:activity run)
           :labels {:workflow (:workflow-id run) :activity (:activity run)}
-          :sandbox (sandbox/sandbox settings
-                                    {:session-id session-id
-                                     :agent-id (:agent workflow)
-                                     :agent agent
-                                     :prompt (agent-prompt system team-id agent (:options ctx))
-                                     :harness harness
-                                     :interactive (:interactive activity)
-                                     :result-tool (:result-tool activity)
-                                     :password (sessions/secret-key system session-id)
-                                     :team-id team-id
-                                     :run-id (:id run)
-                                     :skills (when (seq (:skills harness))
-                                               (platform/read-skills system team-id (:skills harness)))})})
+          :sandbox (sandbox/session-sandbox system
+                                            {:session-id session-id
+                                             :tenant tenant
+                                             :team-id team-id
+                                             :workflow workflow
+                                             :agent agent
+                                             :harness harness
+                                             :team (:team ctx)
+                                             :prompt (agent-prompt system tenant team-id agent (:options ctx))
+                                             :interactive (:interactive activity)
+                                             :result-tool (:result-tool activity)
+                                             :run-id (:id run)})})
         (sessions/hand-over! system session-id)))
     (record! system run :record-run-session {:session-id session-id
                                              :interactive (boolean (:interactive activity))
@@ -292,7 +297,7 @@
   (or (reusable-conversation (sessions/get-session system (:session-id run)) run)
       (let [conversation
             (opencode/create-session! base-url password (:name workflow))]
-        (sessions/label! system (:session-id run) conversation-label conversation)
+        (sessions/label! system (:session-id run) sessions/conversation-label conversation)
         (sessions/label! system (:session-id run) attempt-label (str (or (:model-index run) 0) ":" conversation))
         conversation)))
 
@@ -464,9 +469,8 @@
 (defn- start-follow-up!
   [system run ci-config]
   (let [follow-up-workflow
-        (or (definitions/workflow system (:team-id run) (:on-failure ci-config))
-            (throw (permanent (str "Workflow " (:team-id run) "/" (:on-failure ci-config)
-                                   " does not exist or is invalid"))))
+        (or (definitions/workflow system (:tenant run) (:team-id run) (:on-failure ci-config))
+            (throw (permanent (definitions/missing-workflow (:team-id run) (:on-failure ci-config)))))
 
         build-number
         (get-in run [:result :ci :build :number])
@@ -485,7 +489,7 @@
     (when-not (:session-released run)
       (release-session! system run (:session-id run))))
   (let [workflow
-        (definitions/workflow system (:team-id run) (:workflow-id run))
+        (definitions/workflow system (:tenant run) (:team-id run) (:workflow-id run))
 
         ci-config
         (when workflow (ci/follow-config workflow run))]
@@ -509,7 +513,7 @@
 (defn- follow-ci!
   [system run now]
   (let [workflow
-        (definitions/workflow system (:team-id run) (:workflow-id run))
+        (definitions/workflow system (:tenant run) (:team-id run) (:workflow-id run))
 
         ci-config
         (merge (when workflow (ci/follow-config workflow run))
@@ -545,7 +549,7 @@
 (defn notify!
   [system run]
   (let [team
-        (definitions/team system (:team-id run))
+        (definitions/team system (:tenant run) (:team-id run))
 
         webhook
         (get-in team [:notifications :webhook])
@@ -555,7 +559,7 @@
 
         url
         (when (and webhook (contains? wanted (name (:status run))))
-          (credentials/secret system webhook))]
+          (credentials/secret system (:tenant run) webhook))]
     (when url
       (let [settings
             (:settings system)

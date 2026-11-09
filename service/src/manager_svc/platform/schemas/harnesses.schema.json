@@ -83,6 +83,9 @@
   "additionalProperties": false,
   "description": ".platform/harnesses/<id>.json \u2014 the sandbox an agent runs in.",
   "properties": {
+    "$schema": {
+      "type": "string"
+    },
     "description": {
       "default": "",
       "title": "Description",

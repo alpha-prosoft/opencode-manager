@@ -114,5 +114,6 @@
   [:<>
    [data/poll {:key [:audit-verify session-id] :query {:query-id :verify-audit :session-id session-id}}]
    [data/loaded {:key [:audit session-id]
-                 :query {:query-id :list-audit-events :session-id session-id :after 0 :limit page-size}}
+                 :query {:query-id :list-audit-events :session-id session-id :after 0 :limit page-size}
+                 :error-el-id els/audit-error}
     #(records session-id %)]])

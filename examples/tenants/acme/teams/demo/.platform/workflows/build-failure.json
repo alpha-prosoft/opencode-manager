@@ -1,0 +1,7 @@
+{
+  "name": "Analyse a build failure",
+  "description": "Started when the build of a pushed change fails: finds the cause in the console log and proposes a fix.",
+  "activity": "analysis",
+  "agent": "analyst",
+  "harness": "read-only"
+}

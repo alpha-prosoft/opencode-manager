@@ -1,5 +1,7 @@
 (ns manager-web.home.elements)
 
+(def problems-link [:home :problems-link])
+
 (def page [:home :page])
 (def title [:home :title])
 (def intro [:home :intro])
@@ -12,3 +14,8 @@
 (def recent-runs [:home :recent-runs])
 (def runs-error [:home :runs-error])
 (def all-runs [:home :all-runs])
+(def all-sessions [:home :all-sessions])
+(def operator [:home :operator])
+(def operator-tenants [:home :operator-tenants])
+(def context [:home :context])
+(def shared-section [:home :shared])
