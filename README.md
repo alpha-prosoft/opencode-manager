@@ -49,7 +49,7 @@ flowchart LR
     end
     subgraph platform["Platform"]
         manager["Manager<br/>API · UI · registry"]
-        temporal["Temporal<br/>runs · triggers · schedules"]
+        workers["Workers<br/>runs · triggers · schedules"]
         gateway["LLM gateway<br/>keys · model allow-list · metering"]
         mcpgw["MCP gateway<br/>credentials · tool allow-list · audit"]
         audit[("Audit trail<br/>hash-chained, append-only")]
@@ -64,12 +64,12 @@ flowchart LR
 
     onboarding -- lists --> teamrepo
     manager -- syncs --> onboarding & teamrepo
-    manager <--> temporal
-    temporal -- starts --> s1 & s2
+    manager <--> workers
+    workers -- starts --> s1 & s2
     s1 & s2 -- "LLM calls (session key)" --> gateway --> llm
     s1 & s2 -- "tool calls (session key)" --> mcpgw --> tools
     s1 & s2 -. "events" .-> audit
-    temporal -- "PR polling, comments" --> scm
+    workers -- "PR polling, comments" --> scm
 ```
 
 ## Contents
@@ -136,14 +136,13 @@ Open <http://localhost:8080> and log in as `alice` (a platform admin in the exam
 The demo team has four workflows ready to run. To check that everything works:
 
 ```bash
-python3 tests/e2e.py
+(cd service && MANAGER_URL=http://localhost:8080 clojure -M:e2e)
 ```
 
 | URL | What |
 |---|---|
 | <http://localhost:8080> | Platform UI and API (`/api/docs`) |
 | `http://<session>.localhost:8080` | OpenCode sessions (every browser resolves `*.localhost` to your machine) |
-| <http://localhost:8233> | Temporal UI (local only) |
 | <http://localhost:9090> | Traefik dashboard (local only) |
 
 **Getting a Copilot token.** Log in once with OpenCode and copy the `refresh` value from the generated
@@ -224,10 +223,15 @@ can see it can still read it and fork it. Locking can't be undone.
 | Team admin | `teams[].admins` | Run the team's workflows; stop, delete or re-share any team session; cancel any team run. |
 | Team member | `teams[].members` | Run the team's workflows; see team and public sessions; manage their own sessions and runs. |
 
-Anyone else can log in but sees only public sessions. With `MANAGER_AUTH_MODE=login` (local testing), the login page
-offers a dropdown of every user in `platform.json`, with their roles. You can also type any other name.
+Anyone else can log in but sees only public sessions. People sign in through your identity provider
+(`MANAGER_AUTH_MODE=jwt`, the default): the manager accepts its token as a bearer token or as its cookie
+(`MANAGER_JWT_COOKIE`) when the token's issuer (`MANAGER_JWT_ISSUER`) and audience (`MANAGER_JWT_AUDIENCE`) match and
+its subject is a valid username; the keys come from `MANAGER_JWT_JWKS_URL` (or `MANAGER_JWT_SECRET`). The username
+`platform` is reserved for the platform itself. For local testing only, `MANAGER_AUTH_MODE=login` (set in
+`compose.yml`) offers a login page without passwords, with a dropdown of every user in `platform.json` and their
+roles. You can also type any other name.
 The examples include dummy teams (*Payments*: `dave` admin, `erin` member; *Data Science*: `frank` admin, `grace`
-and `bob` members) to try this out.
+and `bob` members; *Operations*: `henry`, with a scheduled workspace and a tiny token budget) to try this out.
 
 Visibility: interactive sessions are private to their owner by default; runs of automated workflows are visible to
 the team (`"visibility": "team"`) or every user (`"public"`). Session owners and team admins can stop, delete or
@@ -449,7 +453,7 @@ validates against.
 | Activity | Kind | Options (workflow file) | Inputs (per run) | Result |
 |---|---|---|---|---|
 | `session` | interactive | `repository`, `instructions_file` | `title`, `prompt`, `branch` | A personal OpenCode workspace. |
-| `review` | automated | `scm`, `guidelines_file`, `post_mode` (`off` · `dry-run` · `auto`), `max_comments` | `pull_request` | Structured review: verdict, findings (severity, file, line, fix), checked items, and a comment plan. |
+| `review` | automated | `scm` or `repository`, `guidelines_file`, `post_mode` (`off` · `dry-run` · `auto`), `max_comments` | `pull_request`, or `branch` and `base` (default `main`) with `repository` | Structured review: verdict, findings (severity, file, line, fix), checked items, and a comment plan. |
 | `implement` | automated | `repository`, `guidelines_file`, `pull_request`, `ci` | `task`, `pull_request`, `branch` | Title, summary, changes, verification commands and whether they passed, and a **patch computed by the platform** from the working tree. Optionally a pull request and its build (below). |
 | `analysis` | automated | `repository`, `template_file` | `brief` | A Markdown analysis document. |
 
@@ -458,10 +462,14 @@ Automated activities end with the agent calling a typed result tool (`submit_rev
 turned into at most `max_comments` comments (a summary plus inline comments anchored only to lines that are in the
 diff, highest severity first) and posted only in `auto` mode. The agent never posts anything itself.
 
+A review workflow reviews pull requests (`scm` or a `pull_request` trigger) or, with `repository` instead, a
+branch: the platform checks out the run's `branch`, gives the agent the diff `base...branch`, and returns the same
+result without posting anything (see `examples/team-repo/.platform/workflows/review-branch.json`).
+
 ```mermaid
 sequenceDiagram
     participant T as Trigger
-    participant W as Temporal RunWorkflow
+    participant W as Run executor
     participant S as Session (sandbox)
     participant G as LLM gateway
     participant P as Platform tools (MCP)
@@ -473,7 +481,7 @@ sequenceDiagram
         G-->>S: response (tokens metered)
     end
     S->>P: submit_review / submit_implementation / submit_document
-    P->>W: signal (validated result)
+    P->>W: record result (validated)
     W->>W: finalize (plan comments, compute patch, store document)
     W->>S: stop session
 ```
@@ -528,10 +536,22 @@ flowchart LR
   models and MCP servers, and its run's result tool. Every MCP tool call is written to the session's audit trail,
   with which credential was used (personal or platform).
 - **Personal credentials stay personal.** Only the owner can work in a session that uses their own credentials;
-  others fork it and continue with theirs.
-- **Network isolation.** Sessions run on an internal-only network: no internet, only the manager (gateway, result
-  tools) and the HTTP gateway (for you). `network: internet` opts a harness into outbound access. On Kubernetes the
-  same rules are enforced by NetworkPolicies.
+  others fork it and continue with theirs. Sessions of runs the platform started use the team's credentials, so
+  only members of that team can work in them or fork them, even when they are public; everyone else can only view
+  them.
+- **Network isolation.** Sessions run on an internal-only network: no internet, only the manager's sandbox
+  listener (`manager:8001`: LLM and MCP gateways, result tools, telemetry, nothing else) and the HTTP gateway (for
+  you). The manager's public listener (UI, API, login, forward-auth) is not reachable from that network, neither
+  directly nor through Traefik, which listens only on the public network.
+  `network: internet` opts a harness into outbound access. On Kubernetes the same rules are enforced by
+  NetworkPolicies.
+- **Session hosts never see your login.** The login cookie is host-only on the manager's domain (`__Host-` on
+  https). Opening a session hands you over with a one-time token; the session host then gets its own short-lived
+  cookie, valid only for that session and only for its forward-auth, and Traefik strips all cookies before a
+  request reaches the sandbox.
+- **Browser hardening.** State-changing requests with cookies must come from the UI (same origin, or the
+  `X-Requested-With` header the UI sends), the UI is served with a strict Content-Security-Policy and
+  `frame-ancestors 'none'`, and request bodies and read times are limited on both listeners.
 - **Immutable agent configuration.** The OpenCode config (model, provider, permissions, MCP servers) is generated
   by the platform and mounted read-only. Project-level and home-directory overrides are disabled, and external
   plugins are turned off.
@@ -547,7 +567,7 @@ flowchart LR
   their owner only. Sessions are opened through a short-lived, session-bound handoff token.
 - **Controlled side effects.** Agents return typed results; the platform decides what is posted, with hard limits.
 
-The test suite probes these controls from inside a real session (`tests/e2e.py`).
+The test suite probes these controls from inside a real session (`service/test-e2e`).
 
 ## Audit trail and metrics
 
@@ -579,6 +599,9 @@ kubectl -n agents create secret generic platform-secrets \
 helm dependency build charts/opencode-manager
 helm install platform charts/opencode-manager -n agents \
   --set domain=agents.example.com \
+  --set auth.jwtJwksUrl=https://idp.example.com/.well-known/jwks.json \
+  --set auth.jwtIssuer=https://idp.example.com/ \
+  --set auth.jwtAudience=agent-platform \
   --set onboarding.url=https://git.example.com/platform/onboarding.git \
   --set onboarding.credentials=GIT_TOKEN \
   --set platformSecrets.existingSecret=platform-secrets \
@@ -591,10 +614,12 @@ servers as ordinary cluster services; sessions with internet access are kept awa
 (`networkPolicies.internetExcept`), so they reach MCP servers only through the gateway.
 
 The chart installs:
-- the manager (with Temporal and Traefik as sub-charts);
+- the manager and its Postgres event store (with Traefik as a sub-chart);
 - an HTTPRoute for `domain` and `*.domain`;
-- the ForwardAuth middleware;
-- NetworkPolicies isolating session pods;
+- the ForwardAuth middleware and a middleware that strips cookies before requests reach sessions;
+- a separate Service for the manager's sandbox listener (port 8001), which no route exposes;
+- NetworkPolicies isolating session pods (they may reach only the sandbox listener) and the manager (public
+  listener only from the gateway, sandbox listener only from session pods);
 - shared storage for workspaces.
 
 Point DNS for both `domain` and `*.domain` at the gateway. Sessions run as Deployments scaled to zero when idle.
@@ -603,22 +628,33 @@ NetworkPolicies.
 
 ## Development
 
+The manager is written in Clojure: an [edd-core](https://github.com/alpha-prosoft/edd-core) event-sourced service
+and an [edd-core-web](https://github.com/alpha-prosoft/edd-core-web) re-frame UI. State lives in edd aggregates
+(Postgres, or in memory for development); background workers start sandboxes, drive runs, poll pull requests and
+reap idle sessions. See [AGENTS.md](AGENTS.md) for the architecture, API contract and conventions.
+
 ```
-manager/app/
-├── platform/        spec, registry (sync), catalog (activities), harness, gateway, audit, runs, triggers, tools
-├── temporal/        workflows (RunWorkflow, triggers, sync, reaper) and activities
-├── backends/        Docker and Kubernetes session backends
-├── routes/          REST API, session gateway (handoff, ForwardAuth)
-manager/ui/          React 19 + MUI + React Router
+service/             manager-svc: edge server, edd commands/queries, workers
+├── src/manager_svc/platform/       spec, registry (sync), catalog (activities), harnesses, admin views
+├── src/manager_svc/sessions/       sessions, Docker and Kubernetes backends, routing, session gateway
+├── src/manager_svc/runs/           runs, run executor, activity handlers, triggers, SCM, platform tools (MCP)
+├── src/manager_svc/credentials/    secrets, encrypted credentials, MCP gateway
+├── src/manager_svc/observability/  LLM gateway, usage, telemetry, audit trail, metrics
+└── test-e2e/                       end-to-end suite against a running stack
+web/                 manager-web: pages, MUI theme (src/manager_web/theme.cljs), Playwright tests (test/it)
 charts/              Helm chart
 examples/            onboarding repo, team repo and demo service used by the quick start
 schemas/             JSON Schemas for the definition files
-tests/e2e.py         end-to-end tests against a running stack
 ```
 
-- `docker compose up -d --build` rebuilds the manager. `./scripts/seed-local-repos.sh` republishes example and
-  local repos; the platform picks the changes up on the next sync.
-- `cd manager && pip install -r requirements.txt -r requirements-dev.txt && pytest` runs the unit tests (spec
-  validation, security rules, harness lockdown, audit chain, review planning).
-- `python3 tests/e2e.py` runs the end-to-end suite. `E2E_REVIEW=<team>/<workflow>/<pr>` adds a real code review.
-- CI (`.github/workflows/build.yml`) builds the manager image with the UI and packages the Helm chart.
+The edd-core checkout is expected next to this repository (`../edd-core`).
+
+- `docker compose up -d --build` rebuilds the manager image (web release + service uberjar).
+  `./scripts/seed-local-repos.sh` republishes example and local repos; the platform picks the changes up on the
+  next sync.
+- `cd service && clojure -M:test:unit` runs the backend unit tests.
+- `cd service && MANAGER_URL=http://localhost:8080 clojure -M:e2e` runs the end-to-end suite against the stack
+  (including a review of the `e2e-review` branch that `scripts/seed-local-repos.sh` creates in demo-service).
+- `cd web && npm install && npm run fonts && clojure -M:shadow-cljs watch app` builds the UI;
+  `clojure -M:it` runs the Playwright tests against `MANAGER_URL` (default `http://localhost:18000`).
+- CI (`.github/workflows/build.yml`) runs the tests, builds the manager image and packages the Helm chart.

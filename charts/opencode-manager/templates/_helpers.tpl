@@ -26,6 +26,14 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- printf "%s-shared" (include "opencode-manager.fullname" .) -}}
 {{- end -}}
 
+{{- define "opencode-manager.sandboxService" -}}
+{{ include "opencode-manager.fullname" . }}-sandbox
+{{- end -}}
+
+{{- define "opencode-manager.stripCookie" -}}
+{{ include "opencode-manager.fullname" . }}-strip-cookie
+{{- end -}}
+
 {{- define "opencode-manager.forwardAuth" -}}
 {{- printf "%s-forward-auth" (include "opencode-manager.fullname" .) -}}
 {{- end -}}

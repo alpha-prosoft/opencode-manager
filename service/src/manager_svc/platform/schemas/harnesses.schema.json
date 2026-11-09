@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "HarnessLlm": {
+      "additionalProperties": false,
+      "properties": {
+        "connection": {
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+          "title": "Connection",
+          "type": "string"
+        },
+        "models": {
+          "description": "Tried in order",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Models",
+          "type": "array"
+        }
+      },
+      "required": [
+        "connection",
+        "models"
+      ],
+      "title": "HarnessLlm",
+      "type": "object"
+    },
+    "HarnessPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "deny_commands": {
+          "default": [],
+          "description": "Regular expressions; matching bash commands are blocked",
+          "items": {
+            "type": "string"
+          },
+          "title": "Deny Commands",
+          "type": "array"
+        },
+        "deny_paths": {
+          "default": [],
+          "description": "Regular expressions; matching file paths are blocked for file tools",
+          "items": {
+            "type": "string"
+          },
+          "title": "Deny Paths",
+          "type": "array"
+        }
+      },
+      "title": "HarnessPolicy",
+      "type": "object"
+    },
+    "HarnessResources": {
+      "additionalProperties": false,
+      "properties": {
+        "cpus": {
+          "default": 1.0,
+          "exclusiveMinimum": 0,
+          "maximum": 8,
+          "title": "Cpus",
+          "type": "number"
+        },
+        "memory_mb": {
+          "default": 2048,
+          "maximum": 32768,
+          "minimum": 256,
+          "title": "Memory Mb",
+          "type": "integer"
+        },
+        "pids": {
+          "default": 512,
+          "maximum": 4096,
+          "minimum": 64,
+          "title": "Pids",
+          "type": "integer"
+        }
+      },
+      "title": "HarnessResources",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": ".platform/harnesses/<id>.json \u2014 the sandbox an agent runs in.",
+  "properties": {
+    "description": {
+      "default": "",
+      "title": "Description",
+      "type": "string"
+    },
+    "image": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Must be in the platform's allowed_images",
+      "title": "Image"
+    },
+    "llm": {
+      "$ref": "#/$defs/HarnessLlm"
+    },
+    "network": {
+      "default": "none",
+      "description": "none: only the platform LLM gateway is reachable",
+      "enum": [
+        "none",
+        "internet"
+      ],
+      "title": "Network",
+      "type": "string"
+    },
+    "permissions": {
+      "additionalProperties": {
+        "enum": [
+          "allow",
+          "ask",
+          "deny"
+        ],
+        "type": "string"
+      },
+      "default": {},
+      "description": "OpenCode tool permissions, e.g. {\"bash\": \"allow\", \"webfetch\": \"deny\"}",
+      "title": "Permissions",
+      "type": "object"
+    },
+    "resources": {
+      "$ref": "#/$defs/HarnessResources",
+      "default": {
+        "cpus": 1.0,
+        "memory_mb": 2048,
+        "pids": 512
+      }
+    },
+    "idle_minutes": {
+      "default": 15,
+      "maximum": 1440,
+      "minimum": 1,
+      "title": "Idle Minutes",
+      "type": "integer"
+    },
+    "policy": {
+      "$ref": "#/$defs/HarnessPolicy",
+      "default": {
+        "deny_commands": [],
+        "deny_paths": []
+      },
+      "description": "Guardrails enforced by the platform plugin before a tool runs"
+    },
+    "mcp": {
+      "default": [],
+      "description": "MCP servers from the onboarding repository this harness may use",
+      "items": {
+        "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+        "type": "string"
+      },
+      "title": "Mcp",
+      "type": "array"
+    },
+    "skills": {
+      "default": [],
+      "description": "Skill directories (each with a SKILL.md) in the team definitions, copied read-only into the sandbox",
+      "items": {
+        "type": "string"
+      },
+      "title": "Skills",
+      "type": "array"
+    }
+  },
+  "required": [
+    "llm"
+  ],
+  "title": "HarnessSpec",
+  "type": "object"
+}

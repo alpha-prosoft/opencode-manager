@@ -11,12 +11,16 @@ domain: opencode.example.com
 publicScheme: https
 publicPort: null
 
-# login: username-only login form (no password). jwt: identity from an external IdP token.
+# jwt: identity from an external IdP token (bearer or the IdP's cookie). The token's issuer and
+# audience must match jwtIssuer and jwtAudience (both required) and its subject must be a valid
+# username. login (username-only form, no password) is for local development only.
 auth:
-  mode: login
+  mode: jwt
   ttlHours: 12
   jwtJwksUrl: ""
+  jwtIssuer: ""
   jwtAudience: ""
+  jwtCookie: access_token
   jwtSecret:
     existingSecret: ""
     key: jwt-secret
@@ -83,16 +87,12 @@ gateway:
   namespace: ""
   sectionName: web
 
-temporalConnection:
-  address: temporal-frontend:7233
-  namespace: default
-
-temporalPostgres:
+# The manager's event store. edd-core connects as user "postgres" to database "postgres".
+postgres:
   enabled: true
-  serviceName: temporal-postgres
+  serviceName: opencode-manager-postgres
   image: postgres:18.6-alpine
-  user: temporal
-  password: temporal
+  password: change-me
   storage:
     size: 8Gi
     storageClassName: ""
@@ -113,51 +113,3 @@ traefik:
   gateway:
     enabled: true
     name: traefik-gateway
-
-temporal:
-  enabled: true
-  fullnameOverride: temporal
-  schema:
-    useHelmHooks: false
-  server:
-    config:
-      persistence:
-        datastores:
-          default:
-            sql:
-              pluginName: postgres12
-              driverName: postgres12
-              databaseName: temporal
-              connectAddr: temporal-postgres:5432
-              connectProtocol: tcp
-              user: temporal
-              existingSecret: temporal-postgres
-              secretKey: password
-              createDatabase: true
-              manageSchema: true
-              defaultDb: postgres
-              maxConns: 20
-              maxIdleConns: 20
-              maxConnLifetime: 1h
-          visibility:
-            sql:
-              pluginName: postgres12
-              driverName: postgres12
-              databaseName: temporal_visibility
-              connectAddr: temporal-postgres:5432
-              connectProtocol: tcp
-              user: temporal
-              existingSecret: temporal-postgres
-              secretKey: password
-              createDatabase: true
-              manageSchema: true
-              defaultDb: postgres
-              maxConns: 20
-              maxIdleConns: 20
-              maxConnLifetime: 1h
-      namespaces:
-        create: true
-        useHelmHooks: false
-        namespace:
-          - name: default
-            retention: 3d

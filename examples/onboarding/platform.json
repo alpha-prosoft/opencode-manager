@@ -146,6 +146,25 @@
       "budget": {
         "daily_tokens": 1000000
       }
+    },
+    {
+      "id": "ops",
+      "name": "Operations",
+      "description": "Dummy team (local path source) with a scheduled workspace and a tiny daily token budget, for testing platform-started sessions and budgets.",
+      "repository": {
+        "type": "path",
+        "location": "/repos/demo-team",
+        "path": ".platform-ops"
+      },
+      "members": [
+        "henry"
+      ],
+      "admins": [],
+      "secrets": [],
+      "budget": {
+        "daily_tokens": 1000,
+        "max_running_sessions": 3
+      }
     }
   ]
 }

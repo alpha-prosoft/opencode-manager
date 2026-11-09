@@ -1,0 +1,2 @@
+-Dclojure.tools.logging.factory=lambda.logging-local/slf4j-local-factory
+-Dclojure.tools.logging.factory=lambda.logging-local/slf4j-local-factory

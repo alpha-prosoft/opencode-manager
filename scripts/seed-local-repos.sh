@@ -20,10 +20,22 @@ publish() {
   fi
 }
 
+# Branch <branch> of repository <name>: main with the files of <fixture> on top.
+fixture_branch() {
+  local name="$1" branch="$2" fixture="$3" target="$repos/$1"
+  git -C "$target" checkout --quiet -B "$branch" main
+  cp -a "$fixture/." "$target/"
+  git -C "$target" add --all
+  git -C "$target" -c user.name=platform -c user.email=platform@localhost commit --quiet -m "Apply $(basename "$fixture")"
+  git -C "$target" checkout --quiet main
+  echo "  $name@$branch: $(git -C "$target" rev-parse --short "$branch")"
+}
+
 echo "Publishing repositories to $repos"
 publish onboarding "$root/examples/onboarding"
 publish demo-team "$root/examples/team-repo"
 publish demo-service "$root/examples/demo-service"
+fixture_branch demo-service e2e-review "$root/examples/review-fixture"
 if [ -d "$root/local/sources" ]; then
   for source in "$root"/local/sources/*/; do
     publish "$(basename "$source")" "$source"

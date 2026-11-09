@@ -1,8 +1,11 @@
 services:
   traefik:
     image: traefik:v3.7.17
+    # Traefik reaches session containers on opencode-sandbox but listens only on its
+    # opencode-net address (alias traefik-public), so sandboxes can't send requests through it.
     command:
-      - --entrypoints.web.address=:80
+      - --entrypoints.web.address=traefik-public:80
+      - --entrypoints.traefik.address=traefik-public:8080
       - --providers.file.directory=/traefik/dynamic
       - --providers.file.watch=true
       - --api.dashboard=true
@@ -14,21 +17,25 @@ services:
     volumes:
       - traefik-dynamic:/traefik/dynamic:ro
     networks:
-      - opencode-net
-      - opencode-sandbox
+      opencode-net:
+        aliases: [traefik-public]
+      opencode-sandbox:
     depends_on:
       - manager
     restart: unless-stopped
 
-  temporal:
-    image: temporalio/temporal:1.10.0
-    command: ["server", "start-dev", "--ip", "0.0.0.0", "--db-filename", "/home/temporal/temporal.db"]
-    ports:
-      - "127.0.0.1:8233:8233"
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-no-secret}
     volumes:
-      - temporal-data:/home/temporal
+      - postgres-data:/var/lib/postgresql/data
     networks:
       - opencode-net
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 5s
+      retries: 20
     restart: unless-stopped
 
   opencode-dev:
@@ -37,7 +44,10 @@ services:
     profiles: [images]
 
   manager:
-    build: ./manager
+    build:
+      context: .
+      additional_contexts:
+        edd-core: ../edd-core
     environment:
       MANAGER_BACKEND: docker
       MANAGER_ROUTER: traefik-file
@@ -46,10 +56,26 @@ services:
       MANAGER_DOCKER_SANDBOX_NETWORK: opencode-sandbox
       MANAGER_DOCKER_EGRESS_NETWORK: opencode-egress
       MANAGER_DOCKER_SHARED_VOLUME: opencode-shared
-      MANAGER_TEMPORAL_ADDRESS: temporal:7233
+      MANAGER_STORE: postgres
+      MANAGER_DATA_DIR: /data
+      DatabaseEndpoint: postgres
+      DatabasePassword: ${POSTGRES_PASSWORD:-no-secret}
+      # Local stack only: username login without a password. Any other
+      # deployment uses jwt (the default) with issuer and audience.
       MANAGER_AUTH_MODE: ${MANAGER_AUTH_MODE:-login}
       MANAGER_JWT_JWKS_URL: ${MANAGER_JWT_JWKS_URL:-}
       MANAGER_JWT_SECRET: ${MANAGER_JWT_SECRET:-}
+      MANAGER_JWT_ISSUER: ${MANAGER_JWT_ISSUER:-}
+      MANAGER_JWT_AUDIENCE: ${MANAGER_JWT_AUDIENCE:-}
+      # People and Traefik reach the public listener only on opencode-net,
+      # sandboxes reach only the sandbox listener (gateways, result tools,
+      # telemetry) as manager:8001 on opencode-sandbox.
+      MANAGER_PUBLIC_BIND_HOST: manager-public
+      MANAGER_PUBLIC_PORT_INTERNAL: 8000
+      MANAGER_MANAGER_SERVICE_URL: http://manager-public:8000
+      MANAGER_SANDBOX_BIND_HOST: manager-sandbox
+      MANAGER_SANDBOX_PORT: 8001
+      MANAGER_SANDBOX_SERVICE_URL: http://manager:8001
       MANAGER_ONBOARDING_URL: ${ONBOARDING_URL:-file:///repos/onboarding}
       MANAGER_REAP_INTERVAL_SECONDS: ${MANAGER_REAP_INTERVAL_SECONDS:-300}
     env_file:
@@ -63,11 +89,13 @@ services:
       - manager-data:/data
       - opencode-shared:/shared
     networks:
-      opencode-net: {}
+      opencode-net:
+        aliases: [manager-public]
       opencode-sandbox:
-        aliases: [manager]
+        aliases: [manager, manager-sandbox]
     depends_on:
-      - temporal
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
   mcp-bitbucket:
@@ -98,6 +126,6 @@ networks:
 volumes:
   traefik-dynamic:
   manager-data:
-  temporal-data:
+  postgres-data:
   opencode-shared:
     name: opencode-shared

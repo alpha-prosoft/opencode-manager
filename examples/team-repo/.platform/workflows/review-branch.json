@@ -1,0 +1,11 @@
+{
+  "name": "Review a branch",
+  "description": "Reviews a branch of demo-service against main. Nothing is posted.",
+  "activity": "review",
+  "agent": "reviewer",
+  "harness": "read-only",
+  "options": {
+    "repository": { "url": "file:///repos/demo-service" },
+    "guidelines_file": "context/review-guidelines.md"
+  }
+}

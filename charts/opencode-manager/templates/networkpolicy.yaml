@@ -1,6 +1,6 @@
 {{- if .Values.networkPolicies.enabled }}
-# Session pods: reachable only from the gateway and the manager; may only call the manager (LLM gateway,
-# result tools) and DNS. Pods whose harness sets network: internet get an additional allow-all egress policy.
+# Session pods: reachable only from the gateway and the manager; may only call the manager's sandbox
+# listener (LLM and MCP gateways, result tools, telemetry) and DNS. Pods whose harness sets network: internet get an additional allow-all egress policy.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -27,7 +27,7 @@ spec:
             matchLabels:
               {{- include "opencode-manager.selectorLabels" . | nindent 14 }}
       ports:
-        - port: 8000
+        - port: 8001
           protocol: TCP
     - to:
         - namespaceSelector: {}
@@ -57,4 +57,33 @@ spec:
             cidr: 0.0.0.0/0
             except:
               {{- toYaml .Values.networkPolicies.internetExcept | nindent 14 }}
+---
+# The manager: its public listener only from the gateway, its sandbox listener only from session pods.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "opencode-manager.fullname" . }}-manager
+  labels:
+    {{- include "opencode-manager.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "opencode-manager.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    {{- with .Values.networkPolicies.ingressFrom }}
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - port: 8000
+          protocol: TCP
+    {{- end }}
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: opencode-manager/session
+                operator: Exists
+      ports:
+        - port: 8001
+          protocol: TCP
 {{- end }}

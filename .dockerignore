@@ -1,0 +1,8 @@
+**/node_modules
+**/.cpcache
+**/.shadow-cljs
+**/target
+web/www/js
+web/www/fonts
+local
+manager/ui/node_modules

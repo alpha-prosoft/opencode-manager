@@ -20,43 +20,40 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
         with:
-          python-version: "3.14"
-          cache: pip
-          cache-dependency-path: |
-            manager/requirements.txt
-            manager/requirements-dev.txt
-      - run: pip install -r manager/requirements.txt -r manager/requirements-dev.txt
-      - name: Unit tests
-        run: pytest -q
-        working-directory: manager
-        env:
-          MANAGER_UI_DIST_DIR: /nonexistent
-      - name: JSON Schemas are up to date
-        working-directory: manager
-        run: |
-          python - <<'PY'
-          import json
-          from app.platform.spec import json_schemas
-          for name, schema in json_schemas().items():
-              path = f"../schemas/{name}.schema.json"
-              expected = json.dumps({"$schema": "https://json-schema.org/draft/2020-12/schema", **schema}, indent=2) + "\n"
-              assert open(path).read() == expected, f"{path} is outdated; regenerate it"
-          PY
+          path: opencode-manager
+      - uses: actions/checkout@v7
+        with:
+          repository: alpha-prosoft/edd-core
+          path: edd-core
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: DeLaGuardo/setup-clojure@13.4
+        with:
+          cli: latest
       - uses: actions/setup-node@v7
         with:
           node-version: lts/*
           cache: npm
-          cache-dependency-path: manager/ui/package-lock.json
-      - run: npm ci && npm run build
-        working-directory: manager/ui
+          cache-dependency-path: opencode-manager/web/package-lock.json
+      - name: Service unit tests
+        working-directory: opencode-manager/service
+        run: clojure -M:test:unit
+      - name: Web build
+        working-directory: opencode-manager/web
+        run: npm ci && npm run fonts && clojure -M:shadow-cljs release app
 
   image:
     needs: check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: alpha-prosoft/edd-core
+          path: .edd-core
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
         if: github.event_name != 'pull_request'
@@ -76,7 +73,9 @@ jobs:
             type=sha
       - uses: docker/build-push-action@v7
         with:
-          context: manager
+          context: .
+          build-contexts: |
+            edd-core=.edd-core
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -142,7 +141,6 @@ jobs:
           fi
       - run: |
           helm repo add traefik https://traefik.github.io/charts
-          helm repo add temporal https://go.temporal.io/helm-charts
           helm dependency build "$CHART_DIR"
       - run: helm lint "$CHART_DIR"
       - run: helm template ci "$CHART_DIR" > /dev/null

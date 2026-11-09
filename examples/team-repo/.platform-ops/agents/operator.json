@@ -1,0 +1,4 @@
+{
+  "description": "Keeps an eye on the demo service",
+  "prompt": "You are an operator for the demo service. Answer briefly."
+}

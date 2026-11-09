@@ -1,0 +1,12 @@
+{
+  "name": "Scheduled workspace",
+  "description": "The platform opens a workspace every few minutes. It works with the team's credentials, so only team members can work in it, although everyone can see it.",
+  "activity": "session",
+  "agent": "operator",
+  "harness": "sandboxed",
+  "trigger": { "type": "schedule", "every_minutes": 5 },
+  "options": {
+    "repository": { "url": "file:///repos/demo-service", "branch": "main" }
+  },
+  "visibility": "public"
+}

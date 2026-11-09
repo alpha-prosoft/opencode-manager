@@ -1,0 +1,24 @@
+{:paths ["src" "resources"]
+ :deps {org.clojure/clojure {:mvn/version "1.12.6"}
+        com.alpha-prosoft/edd-core {:local/root "../../edd-core"}
+        com.alpha-prosoft/edd-core-security {:local/root "../../edd-core/modules/edd-core-security"}
+        com.alpha-prosoft/edd-core-undertow {:local/root "../../edd-core/modules/edd-core-undertow"}
+        com.alpha-prosoft/edd-core-view-store-postgres {:local/root "../../edd-core/modules/edd-core-view-store-postgres"}
+        com.alpha-prosoft/edd-router {:local/root "../../edd-core/modules/edd-router"}
+        com.auth0/java-jwt {:mvn/version "4.5.1"}
+        com.auth0/jwks-rsa {:mvn/version "0.23.0"}
+        org.flywaydb/flyway-core {:mvn/version "10.21.0"}
+        org.flywaydb/flyway-database-postgresql {:mvn/version "10.21.0"}}
+ :aliases {:run {:main-opts ["-m" "manager-svc.main"]
+                 :jvm-opts ["-Dclojure.tools.logging.factory=lambda.logging-local/slf4j-local-factory"]}
+           :test {:extra-paths ["test"]
+                  :extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}}
+                  :jvm-opts ["-Dclojure.tools.logging.factory=lambda.logging-local/slf4j-local-factory"]}
+           :unit {:main-opts ["-m" "kaocha.runner" "unit"]}
+           :e2e {:extra-paths ["test-e2e"]
+                 :jvm-opts ["-Dclojure.tools.logging.factory=lambda.logging-local/slf4j-local-factory"]
+                 :main-opts ["-m" "manager-svc.e2e"]}
+           :format {:extra-deps {dev.weavejester/cljfmt {:mvn/version "0.16.6"}}
+                    :main-opts ["-m" "cljfmt.main"]}
+           :uberjar {:deps {io.github.clojure/tools.build {:mvn/version "0.10.14"}}
+                     :ns-default build}}}

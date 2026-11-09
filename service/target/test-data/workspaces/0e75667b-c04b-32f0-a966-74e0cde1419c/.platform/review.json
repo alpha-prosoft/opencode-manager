@@ -1,0 +1,1 @@
+{"findings":[{"path":"src/app.py","title":"Unused import","line":2,"severity":"major","body":"Remove it"},{"path":"src/other.py","title":"Elsewhere","line":40,"severity":"nit","body":"Off diff"}],"summary":"One problem","verdict":"REQUEST_CHANGES","checked":[]}

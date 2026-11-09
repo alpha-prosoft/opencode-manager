@@ -28,6 +28,8 @@ spec:
           ports:
             - name: http
               containerPort: 8000
+            - name: sandbox
+              containerPort: 8001
           env:
             - name: MANAGER_BACKEND
               value: kubernetes
@@ -59,10 +61,17 @@ spec:
             {{- end }}
             - name: MANAGER_FORWARD_AUTH_MIDDLEWARE
               value: {{ include "opencode-manager.forwardAuth" . }}
-            - name: MANAGER_TEMPORAL_ADDRESS
-              value: {{ .Values.temporalConnection.address | quote }}
-            - name: MANAGER_TEMPORAL_NAMESPACE
-              value: {{ .Values.temporalConnection.namespace | quote }}
+            - name: MANAGER_STRIP_COOKIE_MIDDLEWARE
+              value: {{ include "opencode-manager.stripCookie" . }}
+            - name: MANAGER_STORE
+              value: postgres
+            - name: DatabaseEndpoint
+              value: {{ .Values.postgres.serviceName | quote }}
+            - name: DatabasePassword
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.serviceName }}
+                  key: password
             - name: MANAGER_SESSION_IMAGE
               value: {{ .Values.sessionImage | quote }}
             - name: MANAGER_REAP_INTERVAL_SECONDS
@@ -87,16 +96,24 @@ spec:
             {{- end }}
             - name: MANAGER_MANAGER_SERVICE_URL
               value: http://{{ include "opencode-manager.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:8000
+            - name: MANAGER_SANDBOX_PORT
+              value: "8001"
+            - name: MANAGER_SANDBOX_SERVICE_URL
+              value: http://{{ include "opencode-manager.sandboxService" . }}.{{ .Release.Namespace }}.svc.cluster.local:8001
             - name: MANAGER_AUTH_MODE
               value: {{ .Values.auth.mode | quote }}
             - name: MANAGER_AUTH_TTL_HOURS
               value: {{ .Values.auth.ttlHours | quote }}
+            {{- if eq .Values.auth.mode "jwt" }}
+            - name: MANAGER_JWT_ISSUER
+              value: {{ required "auth.jwtIssuer is required when auth.mode is jwt" .Values.auth.jwtIssuer | quote }}
+            - name: MANAGER_JWT_AUDIENCE
+              value: {{ required "auth.jwtAudience is required when auth.mode is jwt" .Values.auth.jwtAudience | quote }}
+            - name: MANAGER_JWT_COOKIE
+              value: {{ .Values.auth.jwtCookie | quote }}
+            {{- end }}
             {{- with .Values.auth.jwtJwksUrl }}
             - name: MANAGER_JWT_JWKS_URL
-              value: {{ . | quote }}
-            {{- end }}
-            {{- with .Values.auth.jwtAudience }}
-            - name: MANAGER_JWT_AUDIENCE
               value: {{ . | quote }}
             {{- end }}
             {{- if .Values.credentialsKey.existingSecret }}
@@ -173,3 +190,19 @@ spec:
     - name: http
       port: 8000
       targetPort: http
+---
+# Sandbox-facing listener (LLM and MCP gateways, result tools, telemetry). No route exposes it;
+# only session pods may reach it (see networkpolicy.yaml).
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "opencode-manager.sandboxService" . }}
+  labels:
+    {{- include "opencode-manager.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "opencode-manager.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: sandbox
+      port: 8001
+      targetPort: sandbox

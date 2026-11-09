@@ -1,0 +1,10 @@
+{
+  "name": "Workspace",
+  "description": "Personal workspace with the demo service checked out.",
+  "activity": "session",
+  "agent": "operator",
+  "harness": "sandboxed",
+  "options": {
+    "repository": { "url": "file:///repos/demo-service", "branch": "main" }
+  }
+}

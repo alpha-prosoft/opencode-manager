@@ -1,0 +1,19 @@
+{:paths ["src"]
+ :deps {com.alpha-prosoft/edd-core-web {:mvn/version "2.260.0"}
+        com.alpha-prosoft/edd-web-primitives {:mvn/version "2.260.0"}
+        metosin/malli {:mvn/version "0.20.3"}}
+ :aliases {:shadow-cljs {:main-opts ["-m" "shadow.cljs.devtools.cli"]
+                         :extra-paths ["test/unit"]
+                         :extra-deps {thheller/shadow-cljs {:mvn/version "3.5.8"}}}
+           :dev {:extra-deps {binaryage/devtools {:mvn/version "1.0.7"}}}
+           :test {:extra-paths ["test/unit"]}
+           :it {:replace-paths ["src" "test/it"]
+                :replace-deps {org.clojure/clojure {:mvn/version "1.12.6"}
+                               com.microsoft.playwright/playwright {:mvn/version "1.64.0"}
+                               com.alpha-prosoft/clojure-playwright {:mvn/version "1.3"}
+                               com.alpha-prosoft/edd-web-primitives-ui-sdk {:mvn/version "2.260.0"}
+                               lambdaisland/kaocha {:mvn/version "1.91.1392"}}
+                :main-opts ["-m" "kaocha.runner" "--config-file" "tests-it.edn"]}
+           :headed {:jvm-opts ["-Dplaywright.browser.headless=false"]}
+           :format {:extra-deps {dev.weavejester/cljfmt {:mvn/version "0.16.6"}}
+                    :main-opts ["-m" "cljfmt.main"]}}}

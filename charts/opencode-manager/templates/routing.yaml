@@ -9,6 +9,22 @@ spec:
     address: http://{{ include "opencode-manager.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:8000/api/gateway/auth
     authResponseHeaders:
       - Authorization
+    # forward-auth refreshes the session host's own cookie (never the login cookie).
+    addAuthCookiesToResponse:
+      - oc_session
+      - __Host-oc_session
+---
+# Session hosts: no cookie reaches the untrusted sandbox; forward-auth has already read it.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: {{ include "opencode-manager.stripCookie" . }}
+  labels:
+    {{- include "opencode-manager.labels" . | nindent 4 }}
+spec:
+  headers:
+    customRequestHeaders:
+      Cookie: ""
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
