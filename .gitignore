@@ -15,8 +15,8 @@ target/
 node_modules/
 .shadow-cljs/
 .nrepl-port
-.lsp/.cache/
-.clj-kondo/.cache/
+**/.lsp/
+**/.clj-kondo/.cache/
 /web/www/js/
 /web/www/fonts/
 

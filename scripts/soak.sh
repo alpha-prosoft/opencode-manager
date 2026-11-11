@@ -9,7 +9,8 @@
 # MANAGER_URL (default http://localhost:8080), SOAK_OUT (default a new
 # directory under /tmp) and SOAK_MANAGER (the manager's container, default
 # opencode-manager-manager-1) may be set. Results: $SOAK_OUT/summary.tsv, one
-# log per run, errors-<n>.log per iteration and report.txt at the end.
+# log per run, errors-<n>.log per iteration, threads-<n>-<suite>.log (the
+# manager's thread dump, taken when a suite fails) and report.txt at the end.
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -54,6 +55,14 @@ failed_namespaces() {
   sed 's/\x1b\[[0-9;]*m//g' "$1" | grep -oE '(FAIL|ERROR) in [a-z0-9.-]+-it' | awk '{print $3}' | sort -u
 }
 
+thread_dump() {
+  local since
+  since=$(date -Is)
+  docker kill --signal QUIT "$MANAGER" > /dev/null 2>&1 || return 0
+  sleep 2
+  docker logs --since "$since" "$MANAGER" > "$OUT/threads-$1-$2.log" 2>&1
+}
+
 service_errors() {
   local iteration="$1" since="$2" file="$OUT/errors-$1.log"
   docker logs --since "$since" "$MANAGER" 2>&1 \
@@ -93,10 +102,12 @@ for iteration in $(seq 1 "$ITERATIONS"); do
   since=$(date -Is)
 
   if ! run_suite "$iteration" e2e 1 "$OUT/e2e-$iteration-1.log" e2e; then
+    thread_dump "$iteration" e2e
     run_suite "$iteration" e2e 2 "$OUT/e2e-$iteration-2.log" e2e
   fi
 
   if ! run_suite "$iteration" it 1 "$OUT/it-$iteration-1.log" it; then
+    thread_dump "$iteration" it
     focus=()
     for namespace in $(failed_namespaces "$OUT/it-$iteration-1.log"); do
       focus+=(--focus "$namespace")

@@ -1,1 +1,0 @@
-["^ ","~$session-view",["^ ","~:row",8,"~:col",1,"~:fixed-arities",["~#set",[4]],"~:name","^0","~:ns","~$manager-svc.sessions.views","~:top-ns","^7","~:arities",["^ ","~i4",["^ ","~:ret","~:nilable/map","~:arglist-str","[system statuses session who]"]],"~:type","~:fn"],"~:filename","/home/pofuk/alpha/opencode-manager/service/src/manager_svc/sessions/views.clj"]

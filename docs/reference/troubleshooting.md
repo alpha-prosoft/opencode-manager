@@ -207,3 +207,21 @@ All save messages are in the [Webhooks reference](webhooks.md#messages-when-savi
 | Everything is gone after a restart | `MANAGER_STORE` is `memory`, the default outside compose and the chart. | Operator: set `MANAGER_STORE=postgres`. |
 | Every stored credential stopped working | The credentials key changed. | Operator: restore the previous `MANAGER_CREDENTIALS_KEY` or `credentials.key` file. Without it, values must be entered again. |
 | The UI is blank with a development (watch) build | The Content-Security-Policy blocks the development build. | Development only: `MANAGER_CONTENT_SECURITY_POLICY=off`. |
+
+## The manager stops answering
+
+**Symptom:** pages stay on their loading indicator and API calls time out, while the manager's container or pod is still running.
+
+**What to do:** take a thread dump before you restart it. The dump says what every request is waiting for, and a restart throws that away.
+
+```bash
+# Docker Compose: the dump goes to the manager's log
+docker kill --signal QUIT opencode-manager-manager-1
+docker logs --since 1m opencode-manager-manager-1 > manager-threads.log
+
+# Kubernetes (release "platform" in namespace "agents")
+kubectl -n agents exec deploy/platform-opencode-manager -- kill -3 1
+kubectl -n agents logs deploy/platform-opencode-manager --since=1m > manager-threads.log
+```
+
+The signal does not stop the manager. Attach the file to the issue you open, together with the manager's log of the minutes before.

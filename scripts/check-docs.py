@@ -116,12 +116,21 @@ def run(arguments):
     return subprocess.run(arguments, cwd=ROOT, capture_output=True, text=True)
 
 
+def build_dependencies():
+    """Fetches the chart's dependencies; helm only does that from repositories
+    it has been told about."""
+    chart = yaml.safe_load((CHART / "Chart.yaml").read_text())
+    for dependency in chart.get("dependencies", []):
+        run(["helm", "repo", "add", "--force-update", dependency["name"], dependency["repository"]])
+    return run(["helm", "dependency", "build", str(CHART)])
+
+
 def check_helm(values):
     if not shutil.which("helm"):
         problems.append("helm is not installed: the documented Helm commands were not rendered")
         return
     if not any((CHART / "charts").glob("*.tgz")):
-        build = run(["helm", "dependency", "build", str(CHART)])
+        build = build_dependencies()
         if build.returncode != 0:
             problems.append("helm dependency build failed: " + build.stderr.strip()[-400:])
             return
