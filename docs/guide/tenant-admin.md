@@ -7,7 +7,7 @@ This guide is for the admins of a tenant: the organisation's own space on the pl
 **Admin** in the sidebar (under **Tenant**) is your view of the whole tenant. It shows the effect of the tenant's configuration; the configuration itself is a file, `tenant.json`, in the tenant's onboarding repository.
 
 <figure markdown>
-![The Admin page on Overview: teams and people, sessions running now, today's runs, tokens and estimated cost, and the state of the tenant's configuration.](img/tn01-admin-overview.png){ loading=lazy }
+![The Admin page on Overview: teams and people, sessions running now, today's runs, tokens and estimated cost, and the state of the tenant's configuration.](img/tn01-admin-overview.png){ loading=lazy width="1194" }
 <figcaption>The Admin page on <strong>Overview</strong>: teams and people, sessions running now, today's runs, tokens and estimated cost, and the state of the tenant's configuration.</figcaption>
 </figure>
 
@@ -32,12 +32,12 @@ The platform reads the onboarding repository and every team repository regularly
 4. Select **See each team** to open the **Teams** tab with every team's source and last sync.
 
 <figure markdown>
-![After Sync …'s repositories: the page first confirms the request, then shows the outcome with a link to the teams.](img/tn02-sync.png){ loading=lazy }
+![After Sync …'s repositories: the page first confirms the request, then shows the outcome with a link to the teams.](img/tn02-sync.png){ loading=lazy width="1205" }
 <figcaption>After <strong>Sync …'s repositories</strong>: the page first confirms the request, then shows the outcome with a link to the teams.</figcaption>
 </figure>
 
 <figure markdown>
-![Teams: each team with the source of its definitions, when it was last synced and how many definitions were read. The name opens the team's page.](img/tn03-teams.png){ loading=lazy }
+![Teams: each team with the source of its definitions, when it was last synced and how many definitions were read. The name opens the team's page.](img/tn03-teams.png){ loading=lazy width="1200" }
 <figcaption><strong>Teams</strong>: each team with the source of its definitions, when it was last synced and how many definitions were read. The name opens the team's page.</figcaption>
 </figure>
 
@@ -48,7 +48,7 @@ A team whose files are invalid keeps its last good version; its row says what is
 Two tabs answer who uses the platform and what it costs. Both read what the platform's gateway measured: every LLM call passes through it.
 
 <figure markdown>
-![People: everyone of the tenant who ran a workflow or called a model in the last 30 days, with their number of runs and the tokens they used.](img/tn04-people.png){ loading=lazy }
+![People: everyone of the tenant who ran a workflow or called a model in the last 30 days, with their number of runs and the tokens they used.](img/tn04-people.png){ loading=lazy width="1200" }
 <figcaption><strong>People</strong>: everyone of the tenant who ran a workflow or called a model in the last 30 days, with their number of runs and the tokens they used.</figcaption>
 </figure>
 
@@ -57,7 +57,7 @@ Two tabs answer who uses the platform and what it costs. Both read what the plat
 3. Compare teams in the first table; the second splits each team by model, with cached and failed calls.
 
 <figure markdown>
-![Usage & cost by team, then by team and model. The cost is an estimate from the model prices in tenant.json; a model without a price shows none.](img/tn05-usage.png){ loading=lazy }
+![Usage & cost by team, then by team and model. The cost is an estimate from the model prices in tenant.json; a model without a price shows none.](img/tn05-usage.png){ loading=lazy width="1207" }
 <figcaption><strong>Usage &amp; cost</strong> by team, then by team and model. The cost is an estimate from the model prices in <code>tenant.json</code>; a model without a price shows none.</figcaption>
 </figure>
 
@@ -72,7 +72,7 @@ An **LLM connection** is a model provider the tenant has an account with. `tenan
 3. Read the answer under the connection's models.
 
 <figure markdown>
-![LLM connections. Test connection sends a tiny prompt to the connection's first model and shows whether address and key work.](img/tn06-llm-connections.png){ loading=lazy }
+![LLM connections. Test connection sends a tiny prompt to the connection's first model and shows whether address and key work.](img/tn06-llm-connections.png){ loading=lazy width="1200" }
 <figcaption><strong>LLM connections</strong>. <strong>Test connection</strong> sends a tiny prompt to the connection's first model and shows whether address and key work.</figcaption>
 </figure>
 
@@ -83,7 +83,7 @@ If the test fails, check the connection's secret under **Credentials** and its a
 `tenant.json` declares every credential the tenant's tools use: its name, the hosts it may be sent to, who may provide a value and whether each person must add their own. The **Credentials** tab shows them and holds the tenant's values.
 
 <figure markdown>
-![Credentials: who may provide each one, whether the tenant has a value, how many teams and people added their own, and what uses it.](img/tn07-credentials.png){ loading=lazy }
+![Credentials: who may provide each one, whether the tenant has a value, how many teams and people added their own, and what uses it.](img/tn07-credentials.png){ loading=lazy width="1200" }
 <figcaption><strong>Credentials</strong>: who may provide each one, whether the tenant has a value, how many teams and people added their own, and what uses it.</figcaption>
 </figure>
 
@@ -100,7 +100,7 @@ If the test fails, check the connection's secret under **Credentials** and its a
 4. A credential with a test is checked against its service first; a wrong value is refused and not stored.
 
 <figure markdown>
-![Setting the tenant's value. It is stored encrypted and never shown again, only a short hint.](img/tn08-set-tenant-credential.png){ loading=lazy }
+![Setting the tenant's value. It is stored encrypted and never shown again, only a short hint.](img/tn08-set-tenant-credential.png){ loading=lazy width="912" }
 <figcaption>Setting the tenant's value. It is stored encrypted and never shown again, only a short hint.</figcaption>
 </figure>
 
@@ -109,7 +109,7 @@ If the test fails, check the connection's secret under **Credentials** and its a
 Mark a credential `"required": true` in `tenant.json` when every person in the teams it applies to must work with their own account, as PagerDuty is in the figure above. The row then shows **Required** and who requires it; people without their own value are held on the setup page at their next visit. Teams can require credentials of their own members in their `team.json`.
 
 <figure markdown>
-![Required of every member on a team's Team settings: here one credential is required by the team itself (team.json) and one by the tenant (tenant.json).](img/tn09-required.png){ loading=lazy }
+![Required of every member on a team's Team settings: here one credential is required by the team itself (team.json) and one by the tenant (tenant.json).](img/tn09-required.png){ loading=lazy width="1200" }
 <figcaption><strong>Required of every member</strong> on a team's <strong>Team settings</strong>: here one credential is required by the team itself (<code>team.json</code>) and one by the tenant (<code>tenant.json</code>).</figcaption>
 </figure>
 
@@ -122,12 +122,12 @@ Mark a credential `"required": true` in `tenant.json` when every person in the t
 **MCP servers** are the tool servers agents may call: issue trackers, code hosts, build servers. They are declared in `tenant.json` with the credential they use and, optionally, the teams and tools they are limited to.
 
 <figure markdown>
-![MCP servers: each server with its address, the credential the gateway adds and the tools agents may call.](img/tn10-mcp-servers.png){ loading=lazy }
+![MCP servers: each server with its address, the credential the gateway adds and the tools agents may call.](img/tn10-mcp-servers.png){ loading=lazy width="1206" }
 <figcaption><strong>MCP servers</strong>: each server with its address, the credential the gateway adds and the tools agents may call.</figcaption>
 </figure>
 
 <figure markdown>
-![Background jobs: the recurring jobs behind workflows that start by themselves, on a schedule or when a new pull request appears, with their last and next run.](img/tn11-background-jobs.png){ loading=lazy }
+![Background jobs: the recurring jobs behind workflows that start by themselves, on a schedule or when a new pull request appears, with their last and next run.](img/tn11-background-jobs.png){ loading=lazy width="1200" }
 <figcaption><strong>Background jobs</strong>: the recurring jobs behind workflows that start by themselves, on a schedule or when a new pull request appears, with their last and next run.</figcaption>
 </figure>
 
@@ -143,7 +143,7 @@ The **Webhooks** page lists every webhook you may see across the tenant. Only te
 4. Select **Save**, then test it as described in the [team admins' guide](team-admin.md#webhooks).
 
 <figure markdown>
-![A webhook that belongs to the tenant: Belongs to decides who manages it and where it is listed, Team whose workflow it starts and Starts workflow what it starts.](img/tn12-tenant-webhook.png){ loading=lazy }
+![A webhook that belongs to the tenant: Belongs to decides who manages it and where it is listed, Team whose workflow it starts and Starts workflow what it starts.](img/tn12-tenant-webhook.png){ loading=lazy width="1164" }
 <figcaption>A webhook that belongs to the tenant: <strong>Belongs to</strong> decides who manages it and where it is listed, <strong>Team whose workflow it starts</strong> and <strong>Starts workflow</strong> what it starts.</figcaption>
 </figure>
 
@@ -154,7 +154,7 @@ Only tenant admins can change a webhook that belongs to the tenant.
 As tenant admin you are an admin of every team, also of those your account isn't a member of. The platform says so wherever it matters, because some things depend on membership.
 
 <figure markdown>
-![A team seen as tenant admin. The chip says Tenant admin, not a member: you manage the team, but you are not one of its people.](img/tn13-not-a-member.png){ loading=lazy }
+![A team seen as tenant admin. The chip says Tenant admin, not a member: you manage the team, but you are not one of its people.](img/tn13-not-a-member.png){ loading=lazy width="642" }
 <figcaption>A team seen as tenant admin. The chip says <strong>Tenant admin, not a member</strong>: you manage the team, but you are not one of its people.</figcaption>
 </figure>
 

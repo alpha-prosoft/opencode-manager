@@ -106,7 +106,7 @@ Set exactly one of `prompt` (inline text) or `prompt_file` (a path relative to `
 
 ## A harness
 
-A [harness](../index.md#terms) is the sandbox an agent works in. `.platform/harnesses/sandboxed.json`:
+A [harness](../reference/concepts.md#terms) is the sandbox an agent works in. `.platform/harnesses/sandboxed.json`:
 
 ```json
 {
@@ -156,7 +156,7 @@ A skill is a directory with a `SKILL.md` in the [Agent Skills](https://opencode.
 
 ## A first workflow of each kind
 
-A [workflow](../index.md#terms) wires an activity to an agent and a harness. The file name is its id. The **Activities** page in the UI lists every activity's options and inputs with an example file.
+A [workflow](../reference/concepts.md#terms) wires an activity to an agent and a harness. The file name is its id. The **Activities** page in the UI lists every activity's options and inputs with an example file.
 
 ### A workspace session
 

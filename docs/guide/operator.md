@@ -12,7 +12,7 @@ A **tenant** is one organisation on the platform, with its own teams, people, cr
 4. The row updates by itself when the sync has finished.
 
 <figure markdown>
-![Tenants: every tenant with its onboarding repository, the state and version of its last sync, its number of teams and where it was configured.](img/op01-tenants.png){ loading=lazy }
+![Tenants: every tenant with its onboarding repository, the state and version of its last sync, its number of teams and where it was configured.](img/op01-tenants.png){ loading=lazy width="1202" }
 <figcaption><strong>Tenants</strong>: every tenant with its onboarding repository, the state and version of its last sync, its number of teams and where it was configured.</figcaption>
 </figure>
 
@@ -36,7 +36,7 @@ A tenant starts as a name and an **onboarding repository**: a Git repository (or
 4. Watch the state. **Sync failed** shows the reason, typically an unreachable repository or an invalid `tenant.json`.
 
 <figure markdown>
-![The registration form under the list, filled in for a new tenant.](img/op02-register-tenant.png){ loading=lazy }
+![The registration form under the list, filled in for a new tenant.](img/op02-register-tenant.png){ loading=lazy width="1417" }
 <figcaption>The registration form under the list, filled in for a new tenant.</figcaption>
 </figure>
 
@@ -51,7 +51,7 @@ The platform re-reads its own configuration files by itself: the tenants file, t
 3. Check that every part says **Reloaded**; fix what failed and reload again.
 
 <figure markdown>
-![After Reload configuration: one line per part. A part that failed keeps its last good value and shows why.](img/op03-reload.png){ loading=lazy }
+![After Reload configuration: one line per part. A part that failed keeps its last good value and shows why.](img/op03-reload.png){ loading=lazy width="1202" }
 <figcaption>After <strong>Reload configuration</strong>: one line per part. A part that failed keeps its last good value and shows why.</figcaption>
 </figure>
 
@@ -69,7 +69,7 @@ Nothing breaks while a file is wrong: the platform keeps the last version that l
 Operating the platform is not the same as being in a tenant. An operator account that belongs to no tenant has no teams, runs, sessions or credentials, and the pages of a tenant stay closed to it.
 
 <figure markdown>
-![A tenant's address opened as an operator: the page says whose it is and loads none of its data.](img/op04-not-your-tenant.png){ loading=lazy }
+![A tenant's address opened as an operator: the page says whose it is and loads none of its data.](img/op04-not-your-tenant.png){ loading=lazy width="1200" }
 <figcaption>A tenant's address opened as an operator: the page says whose it is and loads none of its data.</figcaption>
 </figure>
 

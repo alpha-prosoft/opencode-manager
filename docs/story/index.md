@@ -13,7 +13,7 @@ The pages use one example company throughout, the one shipped in the repository'
 | Team admin | `frank` (admin of Demo team), `dave` (admin of Payments, member of Operations) |
 | Members | `bob` (Demo team and Payments), `henry` (Operations) |
 
-The words tenant, team, harness, workflow, run and session are defined once, in [Terms](../index.md#terms).
+The words tenant, team, harness, workflow, run and session are defined once, in [Terms](../reference/concepts.md#terms).
 
 ## Before you start
 

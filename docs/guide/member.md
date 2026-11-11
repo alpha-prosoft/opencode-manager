@@ -12,12 +12,12 @@ You sign in with your company account. The platform has no passwords of its own:
 4. You land on **Home** or, the first time, on the setup page described in [Connect your accounts](#connect-your-accounts).
 
 <figure markdown>
-![The login page. Sign in takes you to your organisation's login.](img/m01-sign-in.png){ loading=lazy }
+![The login page. Sign in takes you to your organisation's login.](img/m01-sign-in.png){ loading=lazy width="500" }
 <figcaption>The login page. <strong>Sign in</strong> takes you to your organisation's login.</figcaption>
 </figure>
 
 <figure markdown>
-![Your identity provider's login page (here Keycloak; yours may look different). After signing in there you are sent back to the platform.](img/m02-identity-provider.png){ loading=lazy }
+![Your identity provider's login page (here Keycloak; yours may look different). After signing in there you are sent back to the platform.](img/m02-identity-provider.png){ loading=lazy width="996" }
 <figcaption>Your identity provider's login page (here Keycloak; yours may look different). After signing in there you are sent back to the platform.</figcaption>
 </figure>
 
@@ -36,7 +36,7 @@ When your tenant or team **requires** a credential of every member, the platform
 3. Go on to the next step. Optional credentials can be skipped; select **Do this later** when only optional ones are left.
 
 <figure markdown>
-![Setup after the first login. The step says who requires the credential, and Do this later stays disabled until every required one is added.](img/m03-setup-required.png){ loading=lazy }
+![Setup after the first login. The step says who requires the credential, and Do this later stays disabled until every required one is added.](img/m03-setup-required.png){ loading=lazy width="1242" }
 <figcaption>Setup after the first login. The step says who requires the credential, and <strong>Do this later</strong> stays disabled until every required one is added.</figcaption>
 </figure>
 
@@ -52,7 +52,7 @@ Only your **own** value satisfies a required credential. A value your team or te
 4. To go back to the team's or tenant's value, select **Remove**.
 
 <figure markdown>
-![Accounts. Each credential shows whose value is used (yours, your team's or the tenant's) and, underneath, the same per team.](img/m05-accounts.png){ loading=lazy }
+![Accounts. Each credential shows whose value is used (yours, your team's or the tenant's) and, underneath, the same per team.](img/m05-accounts.png){ loading=lazy width="1184" }
 <figcaption>Accounts. Each credential shows whose value is used (yours, your team's or the tenant's) and, underneath, the same per team.</figcaption>
 </figure>
 
@@ -68,7 +68,7 @@ A value is looked up from the most specific owner to the least:
 | **Set by admins** | Only team or tenant admins provide it; ask yours. |
 
 <figure markdown>
-![Adding your own value. It is stored encrypted and never shown again; later you can replace or remove it.](img/m06-add-credential.png){ loading=lazy }
+![Adding your own value. It is stored encrypted and never shown again; later you can replace or remove it.](img/m06-add-credential.png){ loading=lazy width="806" }
 <figcaption>Adding your own value. It is stored encrypted and never shown again; later you can replace or remove it.</figcaption>
 </figure>
 
@@ -79,7 +79,7 @@ Some credentials are tested against their service when you save them. If the tes
 The sidebar is the same on every page: your tenant, the search, the team you are looking at, the pages, and who you are.
 
 <figure markdown>
-![The sidebar every page has.](img/m07-sidebar.png){ loading=lazy }
+![The sidebar every page has.](img/m07-sidebar.png){ loading=lazy width="540" }
 <figcaption>The sidebar every page has.</figcaption>
 </figure>
 
@@ -99,7 +99,7 @@ The sidebar is the same on every page: your tenant, the search, the team you are
 If you are in more than one team, the **Team** box narrows Home, Projects, Runs, Sessions and Harnesses to one of them. The choice travels in the address (`?team=demo`), so a link you share opens the same view.
 
 <figure markdown>
-![The team switcher lists your teams; All my teams shows everything again.](img/m08-team-switcher.png){ loading=lazy }
+![The team switcher lists your teams; All my teams shows everything again.](img/m08-team-switcher.png){ loading=lazy width="326" }
 <figcaption>The team switcher lists your teams; <strong>All my teams</strong> shows everything again.</figcaption>
 </figure>
 
@@ -108,7 +108,7 @@ If you are in more than one team, the **Team** box narrows Home, Projects, Runs,
 Press **Ctrl+K** (**Cmd+K** on a Mac) anywhere, or select the search box, and type a few letters. Results are grouped into projects, teams and sessions you may see. Arrow keys move, Enter opens.
 
 <figure markdown>
-![Search finds projects, teams and sessions by name.](img/m09-search.png){ loading=lazy }
+![Search finds projects, teams and sessions by name.](img/m09-search.png){ loading=lazy width="799" }
 <figcaption>Search finds projects, teams and sessions by name.</figcaption>
 </figure>
 
@@ -117,7 +117,7 @@ Press **Ctrl+K** (**Cmd+K** on a Mac) anywhere, or select the search box, and ty
 A **project** is a repository a team works on. Its page gathers the workflows made for it, their runs and sessions, the open changes (pull requests) and the latest builds.
 
 <figure markdown>
-![Projects of your teams. Select one to see everything that happens around that repository.](img/m10-projects.png){ loading=lazy }
+![Projects of your teams. Select one to see everything that happens around that repository.](img/m10-projects.png){ loading=lazy width="626" }
 <figcaption>Projects of your teams. Select one to see everything that happens around that repository.</figcaption>
 </figure>
 
@@ -126,7 +126,7 @@ A **project** is a repository a team works on. Its page gathers the workflows ma
 A **workflow** is a piece of work your team has prepared for an agent: review a change, implement something, analyse a problem, or open a workspace to work in yourself. Your team defines them; you start them from **Home**, the team's page or a project.
 
 <figure markdown>
-![Start something on Home. Each row says what kind of work it is and how it starts; Run (or Start session for a workspace) opens the start dialog.](img/m11-start-something.png){ loading=lazy }
+![Start something on Home. Each row says what kind of work it is and how it starts; Run (or Start session for a workspace) opens the start dialog.](img/m11-start-something.png){ loading=lazy width="1184" }
 <figcaption><strong>Start something</strong> on Home. Each row says what kind of work it is and how it starts; <strong>Run</strong> (or <strong>Start session</strong> for a workspace) opens the start dialog.</figcaption>
 </figure>
 
@@ -136,7 +136,7 @@ A **workflow** is a piece of work your team has prepared for an agent: review a 
 4. Select **Run**. The run's page opens at once.
 
 <figure markdown>
-![The start dialog. Above the inputs it says where the work happens, whose credentials the agent uses and who will see the session.](img/m12-start-dialog.png){ loading=lazy }
+![The start dialog. Above the inputs it says where the work happens, whose credentials the agent uses and who will see the session.](img/m12-start-dialog.png){ loading=lazy width="902" }
 <figcaption>The start dialog. Above the inputs it says where the work happens, whose credentials the agent uses and who will see the session.</figcaption>
 </figure>
 
@@ -151,7 +151,7 @@ Every start creates a **run**. Its page shows where it is, what you gave it and,
 3. When the run is **Completed**, read the result on the same page.
 
 <figure markdown>
-![A run right after its start. The progress steps update by themselves; the breadcrumbs lead back to the team.](img/m13-run-running.png){ loading=lazy }
+![A run right after its start. The progress steps update by themselves; the breadcrumbs lead back to the team.](img/m13-run-running.png){ loading=lazy width="1194" }
 <figcaption>A run right after its start. The progress steps update by themselves; the breadcrumbs lead back to the team.</figcaption>
 </figure>
 
@@ -169,7 +169,7 @@ While a run is under way the page shows these steps, and the chip under the titl
 A run that is over shows one of three chips: **Completed** (the result is on the page), **Failed** (the page shows the reason) or **Cancelled** (somebody stopped it).
 
 <figure markdown>
-![A finished analysis. The result is the document the agent wrote; Open session shows how it got there and Run again starts the same workflow with the same inputs.](img/m14-run-result.png){ loading=lazy }
+![A finished analysis. The result is the document the agent wrote; Open session shows how it got there and Run again starts the same workflow with the same inputs.](img/m14-run-result.png){ loading=lazy width="1199" }
 <figcaption>A finished analysis. The result is the document the agent wrote; <strong>Open session</strong> shows how it got there and <strong>Run again</strong> starts the same workflow with the same inputs.</figcaption>
 </figure>
 
@@ -183,14 +183,14 @@ A run that is over shows one of three chips: **Completed** (the result is on the
 A **code review** starts with the verdict and a summary. Each finding has a severity, the file and line it is about, an explanation and, where the agent has one, the replacement it suggests.
 
 <figure markdown>
-![A finished review of a branch: the verdict, then the findings, most severe first. This workflow posts nothing; a review of a pull request can post the same findings as comments.](img/m15-review-result.png){ loading=lazy }
+![A finished review of a branch: the verdict, then the findings, most severe first. This workflow posts nothing; a review of a pull request can post the same findings as comments.](img/m15-review-result.png){ loading=lazy width="1200" }
 <figcaption>A finished review of a branch: the verdict, then the findings, most severe first. This workflow posts nothing; a review of a pull request can post the same findings as comments.</figcaption>
 </figure>
 
 An **implementation** shows what the agent changed and how it checked it, then the change itself as a patch you can download. A workflow with a project also delivers the change: the run links to the pull request or change it opened and follows its build.
 
 <figure markdown>
-![A finished implementation: the change it opened for review, the summary and the tests the agent ran, and the change as a patch. Further down, the page shows the build that checked it.](img/m16-implementation-result.png){ loading=lazy }
+![A finished implementation: the change it opened for review, the summary and the tests the agent ran, and the change as a patch. Further down, the page shows the build that checked it.](img/m16-implementation-result.png){ loading=lazy width="1200" }
 <figcaption>A finished implementation: the change it opened for review, the summary and the tests the agent ran, and the change as a patch. Further down, the page shows the build that checked it.</figcaption>
 </figure>
 
@@ -206,17 +206,17 @@ A **session** is one sandbox: a locked-down container with OpenCode, your team's
 6. Come back to the session's page to stop, share, rename or delete it.
 
 <figure markdown>
-![Starting a workspace. Shared with decides, before it starts, whether the session is only yours, your team's or visible to the whole tenant.](img/m17-start-session.png){ loading=lazy }
+![Starting a workspace. Shared with decides, before it starts, whether the session is only yours, your team's or visible to the whole tenant.](img/m17-start-session.png){ loading=lazy width="1192" }
 <figcaption>Starting a workspace. <strong>Shared with</strong> decides, before it starts, whether the session is only yours, your team's or visible to the whole tenant.</figcaption>
 </figure>
 
 <figure markdown>
-![A session's page: status and sharing under the title, the actions on the right, and tabs for its conversations, live activity and audit trail.](img/m18-session.png){ loading=lazy }
+![A session's page: status and sharing under the title, the actions on the right, and tabs for its conversations, live activity and audit trail.](img/m18-session.png){ loading=lazy width="1190" }
 <figcaption>A session's page: status and sharing under the title, the actions on the right, and tabs for its conversations, live activity and audit trail.</figcaption>
 </figure>
 
 <figure markdown>
-![The session in OpenCode, in a browser tab of its own: what the agent did for the first prompt, and its answer. You go on talking to the agent here; files, terminal and tools all stay inside the sandbox.](img/m19-opencode.png){ loading=lazy }
+![The session in OpenCode, in a browser tab of its own: what the agent did for the first prompt, and its answer. You go on talking to the agent here; files, terminal and tools all stay inside the sandbox.](img/m19-opencode.png){ loading=lazy width="1200" }
 <figcaption>The session in OpenCode, in a browser tab of its own: what the agent did for the first prompt, and its answer. You go on talking to the agent here; files, terminal and tools all stay inside the sandbox.</figcaption>
 </figure>
 
@@ -225,7 +225,7 @@ A **session** is one sandbox: a locked-down container with OpenCode, your team's
 **Live activity** shows whether the agent is busy, the tools it has called and a timeline, without opening OpenCode. **Conversations** lists the chats in the session and opens each in OpenCode.
 
 <figure markdown>
-![Live activity: the agent's state, the tools it called and how long they took, and a timeline. The warning names a call the platform blocked: the agent tried git push, which this workflow's harness denies.](img/m20-live-activity.png){ loading=lazy }
+![Live activity: the agent's state, the tools it called and how long they took, and a timeline. The warning names a call the platform blocked: the agent tried git push, which this workflow's harness denies.](img/m20-live-activity.png){ loading=lazy width="1194" }
 <figcaption>Live activity: the agent's state, the tools it called and how long they took, and a timeline. The warning names a call the platform blocked: the agent tried <code>git push</code>, which this workflow's harness denies.</figcaption>
 </figure>
 
@@ -236,7 +236,7 @@ A harness can deny commands and paths. A blocked call never runs: the agent is t
 Every prompt, answer, tool call and LLM request of a session is recorded in an **audit trail**. Each record carries a hash of the one before, so a change or a gap would show; the page checks the chain and says so.
 
 <figure markdown>
-![The audit trail. The banner confirms the chain is intact; the download gives you the records as JSON lines.](img/m21-audit.png){ loading=lazy }
+![The audit trail. The banner confirms the chain is intact; the download gives you the records as JSON lines.](img/m21-audit.png){ loading=lazy width="1199" }
 <figcaption>The audit trail. The banner confirms the chain is intact; the download gives you the records as JSON lines.</figcaption>
 </figure>
 
@@ -255,7 +255,7 @@ The actions at the top right of a session's page, and in the Sessions list, are 
 | Delete (bin icon) | Removes the session and its files. The audit trail of what happened is kept. |
 
 <figure markdown>
-![A name and description that say what the session is for make it easy to find in lists and in search.](img/m22-rename.png){ loading=lazy }
+![A name and description that say what the session is for make it easy to find in lists and in search.](img/m22-rename.png){ loading=lazy width="864" }
 <figcaption>A name and description that say what the session is for make it easy to find in lists and in search.</figcaption>
 </figure>
 
@@ -271,12 +271,12 @@ You decide who sees a session you own. Seeing is not the same as working in it: 
 4. The chip under the title shows the choice; it is saved at once.
 
 <figure markdown>
-![Shared with on a session's page, as its owner sees it.](img/m23-sharing.png){ loading=lazy }
+![Shared with on a session's page, as its owner sees it.](img/m23-sharing.png){ loading=lazy width="619" }
 <figcaption><strong>Shared with</strong> on a session's page, as its owner sees it.</figcaption>
 </figure>
 
 <figure markdown>
-![Sharing with the whole tenant asks first: everyone in the tenant will be able to read the conversations.](img/m24-share-tenant.png){ loading=lazy }
+![Sharing with the whole tenant asks first: everyone in the tenant will be able to read the conversations.](img/m24-share-tenant.png){ loading=lazy width="712" }
 <figcaption>Sharing with the whole tenant asks first: everyone in the tenant will be able to read the conversations.</figcaption>
 </figure>
 
@@ -300,7 +300,7 @@ You decide who sees a session you own. Seeing is not the same as working in it: 
 4. The session shows **Locked** under its title and stops within a minute. Anyone who can see it can still read it and fork it.
 
 <figure markdown>
-![Locking asks first, because it can't be undone.](img/m25-lock.png){ loading=lazy }
+![Locking asks first, because it can't be undone.](img/m25-lock.png){ loading=lazy width="677" }
 <figcaption>Locking asks first, because it can't be undone.</figcaption>
 </figure>
 
@@ -314,17 +314,17 @@ A **fork** is your own private copy of a session: its files and conversations up
 4. Work in the copy with **Open**.
 
 <figure markdown>
-![A team session of a team you are not in. The banner says why you can't work in it and offers the fork.](img/m26-team-session.png){ loading=lazy }
+![A team session of a team you are not in. The banner says why you can't work in it and offers the fork.](img/m26-team-session.png){ loading=lazy width="1194" }
 <figcaption>A team session of a team you are not in. The banner says why you can't work in it and offers the fork.</figcaption>
 </figure>
 
 <figure markdown>
-![A locked session, marked Locked under its title: nobody works in it any more, not even its owner. Fork to continue makes a copy you can work in.](img/m27-locked.png){ loading=lazy }
+![A locked session, marked Locked under its title: nobody works in it any more, not even its owner. Fork to continue makes a copy you can work in.](img/m27-locked.png){ loading=lazy width="1194" }
 <figcaption>A locked session, marked <strong>Locked</strong> under its title: nobody works in it any more, not even its owner. <strong>Fork to continue</strong> makes a copy you can work in.</figcaption>
 </figure>
 
 <figure markdown>
-![The fork is private and yours; the original stays as it is.](img/m28-fork-confirm.png){ loading=lazy }
+![The fork is private and yours; the original stays as it is.](img/m28-fork-confirm.png){ loading=lazy width="673" }
 <figcaption>The fork is private and yours; the original stays as it is.</figcaption>
 </figure>
 
@@ -335,12 +335,12 @@ A fork counts as one of the team's running sessions, and it needs the credential
 Two lists hold everything you may see, in every team or in the one the team switcher is set to.
 
 <figure markdown>
-![Runs, newest first: what was started, by whom or what, in which team, and how it ended. Show narrows the list by status; the team switcher by team.](img/m29-runs.png){ loading=lazy }
+![Runs, newest first: what was started, by whom or what, in which team, and how it ended. Show narrows the list by status; the team switcher by team.](img/m29-runs.png){ loading=lazy width="1202" }
 <figcaption>Runs, newest first: what was started, by whom or what, in which team, and how it ended. <strong>Show</strong> narrows the list by status; the team switcher by team.</figcaption>
 </figure>
 
 <figure markdown>
-![Sessions. Owner and Shared with say whose a session is and who sees it; the actions on the right are the ones you may take.](img/m30-sessions.png){ loading=lazy }
+![Sessions. Owner and Shared with say whose a session is and who sees it; the actions on the right are the ones you may take.](img/m30-sessions.png){ loading=lazy width="1189" }
 <figcaption>Sessions. <strong>Owner</strong> and <strong>Shared with</strong> say whose a session is and who sees it; the actions on the right are the ones you may take.</figcaption>
 </figure>
 
@@ -358,13 +358,13 @@ Two lists hold everything you may see, in every team or in the one the team swit
 An agent only gets what its **harness** grants: a model, tools, MCP servers, skills, network hosts and credentials. Nothing else leaves the sandbox.
 
 <figure markdown>
-![A harness on the Harnesses page: network access, model, skills, the tool server it may call and the account that is used. The chip reads Ready for you in … when every credential it needs has a value for you, Needs setup otherwise.](img/m31-harnesses.png){ loading=lazy }
+![A harness on the Harnesses page: network access, model, skills, the tool server it may call and the account that is used. The chip reads Ready for you in … when every credential it needs has a value for you, Needs setup otherwise.](img/m31-harnesses.png){ loading=lazy width="1007" }
 <figcaption>A harness on the <strong>Harnesses</strong> page: network access, model, skills, the tool server it may call and the account that is used. The chip reads <strong>Ready for you in …</strong> when every credential it needs has a value for you, <strong>Needs setup</strong> otherwise.</figcaption>
 </figure>
 
 **Activities** are the four kinds of work the platform knows: workspace, code review, implementation and analysis. Each of your team's workflows is one activity with the team's own inputs, agent and harness. The page describes what each activity does and delivers.
 
 <figure markdown>
-![The activity catalogue: what each kind of workflow does, needs and returns.](img/m32-activities.png){ loading=lazy }
+![The activity catalogue: what each kind of workflow does, needs and returns.](img/m32-activities.png){ loading=lazy width="1200" }
 <figcaption>The activity catalogue: what each kind of workflow does, needs and returns.</figcaption>
 </figure>

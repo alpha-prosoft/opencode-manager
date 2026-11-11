@@ -1,6 +1,6 @@
 # tenant.json
 
-This page is for tenant admins. It lists every field of `tenant.json`, the file at the root of a tenant's [onboarding repository](../index.md#terms), with its type, default and an example. For a guided build-up of the file, read [Onboard a tenant](../story/tenant.md).
+This page is for tenant admins. It lists every field of `tenant.json`, the file at the root of a tenant's [onboarding repository](concepts.md#terms), with its type, default and an example. For a guided build-up of the file, read [Onboard a tenant](../story/tenant.md).
 
 - JSON Schema: [schemas/tenant.schema.json](https://github.com/alpha-prosoft/opencode-manager/blob/main/schemas/tenant.schema.json). Add `"$schema": "<url>"` to the file for editor validation; the platform ignores that key.
 - Complete example: [examples/tenants/acme/onboarding/tenant.json](https://github.com/alpha-prosoft/opencode-manager/blob/main/examples/tenants/acme/onboarding/tenant.json).

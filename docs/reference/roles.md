@@ -4,7 +4,7 @@ This page is for anyone who needs to know exactly who can see or do what: the fo
 
 ## Where roles come from
 
-Membership and roles come only from the claims in a person's token, through the [claims parser](../story/identity.md). No file on the platform lists members. A person belongs to one [tenant](../index.md#terms) and has a role in each of its teams that their claims name.
+Membership and roles come only from the claims in a person's token, through the [claims parser](../story/identity.md). No file on the platform lists members. A person belongs to one [tenant](concepts.md#terms) and has a role in each of its teams that their claims name.
 
 | Role | Comes from (default parser) | Scope |
 |---|---|---|

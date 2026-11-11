@@ -39,9 +39,15 @@ markdown_extensions:
   - toc:
       permalink: true
   - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
   - pymdownx.superfences
   - pymdownx.tabbed:
       alternate_style: true
+
+extra_css:
+  - stylesheets/extra.css
 
 exclude_docs: |
   requirements.txt
@@ -68,6 +74,7 @@ nav:
       - For tenant admins: guide/tenant-admin.md
       - For platform operators: guide/operator.md
   - Reference:
+      - Concepts and terms: reference/concepts.md
       - Roles and visibility: reference/roles.md
       - Server settings: reference/settings.md
       - tenant.json: reference/tenant-json.md

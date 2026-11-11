@@ -3,7 +3,8 @@
    Text is Markdown: UI labels in **bold**, links as [text](page.md#anchor)."
   (:require [clojure.java.io :as io]
             [clojure.string :as string]
-            [manager-web.guide-shots :as shots]))
+            [manager-web.guide-shots :as shots])
+  (:import [javax.imageio ImageIO]))
 
 (def site-dir
   "../docs/guide")
@@ -106,6 +107,20 @@
   [cells]
   (str "| " (string/join " | " cells) " |"))
 
+(def device-scale
+  "Screenshots are taken at this device scale factor, so a figure shown at
+   its pixel width divided by it is as large as the page was on screen."
+  2)
+
+(defn- width-attribute
+  [img]
+  (let [^java.io.File file
+        (first (filter #(.isFile ^java.io.File %)
+                       [(io/file shots/out-dir (str img ".png")) (io/file site-dir "img" (str img ".png"))]))]
+    (if-let [image (some-> file ImageIO/read)]
+      (str " width=\"" (quot (.getWidth image) device-scale) "\"")
+      "")))
+
 (defn- render-block
   [{:keys [type title intro text items img caption header rows]}]
   (case type
@@ -118,7 +133,7 @@
     :tip (str "!!! tip\n\n    " text)
     :note (str "!!! note\n\n    " text)
     :figure (str "<figure markdown>\n"
-                 "![" (alt-text caption) "](img/" img ".png){ loading=lazy }\n"
+                 "![" (alt-text caption) "](img/" img ".png){ loading=lazy" (width-attribute img) " }\n"
                  "<figcaption>" (caption-html caption) "</figcaption>\n"
                  "</figure>")))
 

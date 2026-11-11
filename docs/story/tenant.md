@@ -6,7 +6,7 @@ The finished file is [examples/tenants/acme/onboarding/tenant.json](https://gith
 
 ## The onboarding repository
 
-Each tenant has one [onboarding repository](../index.md#terms) with a single file, `tenant.json`, at its root. Tenant admins own it; whoever may push to it decides what the tenant's teams may use. The platform reads it every 10 minutes by default and whenever an admin asks for a sync.
+Each tenant has one [onboarding repository](../reference/concepts.md#terms) with a single file, `tenant.json`, at its root. Tenant admins own it; whoever may push to it decides what the tenant's teams may use. The platform reads it every 10 minutes by default and whenever an admin asks for a sync.
 
 Nothing in it is secret. Secrets are referred to by name (`COPILOT_TOKEN`); the values are set elsewhere.
 
