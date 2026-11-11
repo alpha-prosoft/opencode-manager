@@ -145,7 +145,16 @@ jobs:
           helm repo add traefik https://traefik.github.io/charts
           helm dependency build "$CHART_DIR"
       - run: helm lint "$CHART_DIR"
-      - run: helm template ci "$CHART_DIR" > /dev/null
+      - name: Render the chart in every auth mode
+        run: |
+          helm template ci "$CHART_DIR" --set auth.mode=login > /dev/null
+          helm template ci "$CHART_DIR" --set auth.mode=jwt \
+            --set auth.jwtIssuer=https://idp.example.com/realms/company \
+            --set auth.jwtAudience=agent-platform > /dev/null
+          helm template ci "$CHART_DIR" --set auth.mode=oidc \
+            --set auth.oidc.issuer=https://idp.example.com/realms/company \
+            --set auth.oidc.clientId=agent-platform \
+            --set auth.oidc.clientSecret.existingSecret=agent-platform-oidc > /dev/null
       - run: helm package "$CHART_DIR" --version ${{ steps.version.outputs.version }} --app-version ${{ steps.version.outputs.app_version }} --destination dist
       - uses: actions/upload-artifact@v7
         with:
