@@ -11,19 +11,19 @@ hide:
 The Agent Platform runs coding agents for your teams on your own infrastructure. Each piece of work runs in a locked-down sandbox, uses the tools its team allowed, and comes back as a checked result: review findings, a patch with test results, or a document.
 
 [See the path to a working platform](story/index.md){ .md-button .md-button--primary }
-[Try it on a laptop](story/install.md#evaluation-on-a-laptop){ .md-button }
+[Run locally](story/install.md#evaluation-on-a-laptop){ .md-button }
 
 </div>
 
 <figure class="pitch-shot" markdown>
-![A finished analysis run: the result document, the session behind it and Run again](guide/img/m14-run-result.png){ loading=lazy width="900" }
+![Home: the workflows a team member can start, in the team they chose](img/home.png){ width="960" }
 </figure>
 
 <div class="pitch-section" markdown>
 
 ## The problem it solves
 
-Agents are useful the moment they can read your code, call your tools and open pull requests. That is also the moment they hold your tokens, reach your network and act with nobody watching. Teams end up either blocking agents or running them on laptops with personal keys.
+Agents are useful the moment they can read your code, call your tools and open pull requests. That is also the moment they hold your tokens, reach your network and act with nobody watching. Teams end up either blocking agents or running them on laptops with personal keys. The platform removes that choice.
 
 </div>
 
@@ -100,23 +100,23 @@ A team keeps its agents in its own Git repository, reviewed like any other code.
 <div class="grid pitch-four" markdown>
 
 <figure markdown>
-![Starting a workflow: the team, whose credentials it uses and who will see it](guide/img/m12-start-dialog.png){ loading=lazy width="460" }
+![Starting a workflow: the team, whose credentials it uses and who will see it](img/start-dialog.png){ loading=lazy width="560" }
 <figcaption><strong>One place to start agent work.</strong> Every start says which team it runs in, whose credentials it uses and who will see it.</figcaption>
 </figure>
 
 <figure markdown>
-![A code review result: the verdict and findings on the lines they concern](guide/img/m15-review-result.png){ loading=lazy width="460" }
+![A code review result: the verdict and findings on the lines they concern](img/review-result.png){ loading=lazy width="560" }
 <figcaption><strong>Results you can act on.</strong> Review findings on real lines, posted to the pull request or Gerrit change if you want.</figcaption>
 </figure>
 
 <figure markdown>
-![Live activity of a session with a git push blocked by policy](guide/img/m20-live-activity.png){ loading=lazy width="460" }
-<figcaption><strong>Agents you can watch.</strong> Live activity shows each tool call, including the ones the harness blocked.</figcaption>
+![An implementation delivered as a change for review, with the tests the agent ran and the patch](img/change-and-build.png){ loading=lazy width="560" }
+<figcaption><strong>Changes delivered for review.</strong> An implementation comes back as a change with the tests the agent ran and the patch; its CI build is followed, and a failure starts an analysis.</figcaption>
 </figure>
 
 <figure markdown>
-![A project's builds: one passed, one failed and analysed](guide/img/ta11-builds.png){ loading=lazy width="460" }
-<figcaption><strong>Changes followed to their build.</strong> A change is delivered for review, its CI build is followed, and a failure starts an analysis.</figcaption>
+![Usage and cost per team and model](img/usage.png){ loading=lazy width="560" }
+<figcaption><strong>Cost in plain sight.</strong> Calls, tokens and cost per team and model, with budgets enforced at the gateway.</figcaption>
 </figure>
 
 </div>

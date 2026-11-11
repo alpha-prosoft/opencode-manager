@@ -4,6 +4,7 @@
 
      cd web && clojure -M:guide                  every guide
      cd web && clojure -M:guide member operator  only these
+     cd web && clojure -M:guide site             only the landing page's pictures
 
    On the documentation stack (make docs-stack, scripted LLM) it first plays
    the seeded cast (manager-web.guide-seed), once per stack, so every figure
@@ -16,6 +17,7 @@
             [manager-web.guide-support :as s]
             [manager-web.member-guide :as member]
             [manager-web.operator-guide :as operator]
+            [manager-web.site-shots :as site-shots]
             [manager-web.team-admin-guide :as team-admin]
             [manager-web.tenant-admin-guide :as tenant-admin]
             [testing.pw :as pw]))
@@ -43,6 +45,15 @@
     (catch Exception e
       (println "Could not clean up after the guides:" (ex-message e)))))
 
+(defn- site-pictures!
+  []
+  (try
+    (site-shots/shoot!)
+    true
+    (catch Exception e
+      (println "  [guide] FAILED: the landing page's pictures -" (ex-message e))
+      false)))
+
 (defn -main
   [& names]
   (println "The guides expect a clean documentation stack (make docs-stack); they also run on a used one.")
@@ -57,9 +68,13 @@
           (binding [pw/*current-page* (:page browser)]
             (try
               (seed/ensure-seeded!)
-              (doall
-               (for [[guide-name guide body-fn] (chosen names)]
-                 [guide-name (doc/run-guide! guide body-fn)]))
+              (let [guide-results
+                    (doall
+                     (for [[guide-name guide body-fn] (chosen names)]
+                       [guide-name (doc/run-guide! guide body-fn)]))]
+                (if (or (empty? names) (some #{"site"} names))
+                  (conj (vec guide-results) ["site" (site-pictures!)])
+                  guide-results))
               (finally
                 (clean-up!))))
           (finally
