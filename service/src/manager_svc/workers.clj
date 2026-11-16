@@ -4,7 +4,8 @@
      {:id :sync :interval-seconds 600 :initial-delay-seconds 5 :run (fn [system])
       :reactive true}
 
-   Reactive jobs also run right after any command the UI sends (`kick!`),
+   Reactive jobs also run right after a command arrives from outside: the UI,
+   an edge endpoint, a result tool, a webhook or a fired trigger (`kick!`),
    so commands stay pure state changes and jobs carry out the side effects
    (start a sandbox, run an agent) without waiting for the next interval.
 

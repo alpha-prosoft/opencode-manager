@@ -1,7 +1,7 @@
 (ns manager-web.team-sessions-it
   "A team admin starts a session in the team's scope; a member works in
    it; someone of the tenant outside the team sees it, may not work in it and
-   forks it; nobody of another tenant sees it."
+   forks it into their own team; nobody of another tenant sees it."
   (:require [clojure.test :refer [deftest is]]
             [manager-web.components.elements :as component-els]
             [manager-web.helpers :as h]
@@ -80,7 +80,7 @@
       (step "Someone of the tenant outside the team sees why they can't work in it"
             (fn []
               (h/logout)
-              (h/login (:teamless h/fixture))
+              (h/login (:outside-team h/fixture))
               (goto-session @session-id)
               (is
                (= "team-only"
@@ -92,7 +92,7 @@
                (false?
                 (h/visible? els/sharing)))))
 
-      (step "They fork it to continue in their own private copy"
+      (step "They fork it to continue in their own private copy, in their own team"
             (fn []
               (is
                (false?
@@ -101,8 +101,8 @@
               (h/click els/fork-to-continue)
               (is
                (true?
-                (.isVisible (h/wait-visible component-els/confirm-dialog))))
-              (h/click component-els/confirm-accept)
+                (.isVisible (h/wait-visible component-els/fork-dialog))))
+              (h/click component-els/fork-dialog-submit)
               (h/wait-until "the fork's page" 60000 100 #(not= @session-id (h/path-id)))
               (h/wait-visible els/page)
               (reset! fork-id (h/path-id))
@@ -112,6 +112,10 @@
               (is
                (true?
                 (.isVisible (h/wait-visible els/forked-from))))
+              (is
+               (= (:outside-team-member-of h/fixture)
+                  (h/attribute els/team-link "data-team"))
+               "their only team was chosen for them")
               (is
                (false?
                 (h/visible? els/team-session)))))
@@ -141,5 +145,5 @@
               (h/wait-hidden (component-els/session-link @session-id) h/session-timeout-ms)
               (reset! session-id nil)))
       (finally
-        (h/delete-sessions! (:teamless h/fixture) [@fork-id])
+        (h/delete-sessions! (:outside-team h/fixture) [@fork-id])
         (h/delete-sessions! (:tenant-admin h/fixture) [@session-id])))))

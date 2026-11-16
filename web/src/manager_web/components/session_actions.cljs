@@ -10,11 +10,11 @@
             ["@mui/material/Tooltip" :default Tooltip]
             [manager-web.components.confirm :as confirm]
             [manager-web.components.elements :as els]
+            [manager-web.components.fork-dialog :as fork-dialog]
             [manager-web.components.layout :as layout]
             [manager-web.data :as data]
             [manager-web.el :as el]
             [manager-web.format :as format]
-            [manager-web.roles :as roles]
             [manager-web.theme :as theme]
             [re-frame.core :as rf]
             [reagent.core :as r]
@@ -27,35 +27,6 @@
    :error error-id
    :command {:cmd-id cmd-id :id session-id}
    :refetch refetch})
-
-(defn fork-spec
-  [session-id new-id error-id]
-  {:id [:fork-session session-id]
-   :error error-id
-   :command {:cmd-id :fork-session :id new-id :attrs {:source-id session-id}}
-   :refetch-on-failure [:my-credentials]
-   :navigate [:session {:session-id (str new-id)}]})
-
-(defn fork-body
-  "The three facts of a fork: where the copy lives, who sees it, whose
-   credentials it runs with."
-  [me {:keys [name team-id]}]
-  (str "You get your own copy of \"" name "\". It stays in " (roles/team-name me team-id)
-       " and is private to you. It runs with your credentials: " (roles/credential-order me team-id "your")
-       ". The original stays as it is."))
-
-(defn fork-request
-  [me session error-id]
-  {:title "Fork this session?"
-   :body (fork-body me session)
-   :confirm "Fork session"
-   :color "primary"
-   :run (fork-spec (:id session) (random-uuid) error-id)})
-
-(rf/reg-event-fx
- ::fork
- (fn [{:keys [db]} [_ session error-id]]
-   {:fx [[:dispatch [::confirm/ask (fork-request (:manager-web.session/me db) session error-id)]]]}))
 
 (defn- delete-request
   [session opts]
@@ -93,7 +64,7 @@
   "opts: :error-id where failures show, :refetch load keys to refresh,
    :on-deleted navigate args after deleting, :prominent? for the session page,
    :hide-fork? when the page offers forking elsewhere."
-  [session {:keys [prominent? error-id hide-fork?] :as opts}]
+  [session {:keys [prominent? hide-fork?] :as opts}]
   (let [id
         (:id session)
 
@@ -115,7 +86,7 @@
         fork
         (fn [title variant]
           [fork-button {:title title :variant variant :busy? (busy? :fork-session)
-                        :on-click #(rf/dispatch [::fork session error-id])
+                        :on-click #(rf/dispatch [::fork-dialog/open session])
                         :el-id (els/session-action :fork id)}])]
     [RawStack {:direction "row" :spacing 0.5 :sx (:end-aligned-row theme/sx)}
      (if can-open?
@@ -123,7 +94,7 @@
                                 :el-id (els/session-action :open id)}
         "Open"]
        (when-not hide-fork?
-         (fork "Continue in your own private copy, with your own credentials" variant)))
+         (fork "Continue in your own private copy, in a team of yours" variant)))
      (when (and prominent? can-open?)
        (fork "Make your own private copy to continue in" "text"))
      (when (and (not live?) can-open?)

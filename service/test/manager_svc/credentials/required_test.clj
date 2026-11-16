@@ -213,7 +213,7 @@
              (api/required-credentials-dep (as "root") "acme" "beta")
              (api/required-credentials-dep (as "hank") "acme" "alpha")
              (api/required-credentials-dep (platform-ctx) "acme" "alpha")])
-         "not to someone forking from outside the team, a tenant admin who isn't a member, another tenant or the platform"))
+         "not to someone outside the team, a tenant admin who isn't a member, another tenant or the platform"))
       (testing "what starting work asks is what :get-my-credentials lists as missing"
         (doseq [[ctx team-ids] [[(as "alice") ["alpha" "beta"]]
                                 [(as "erin") ["alpha" "beta"]]

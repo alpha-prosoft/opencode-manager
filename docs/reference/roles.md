@@ -139,14 +139,19 @@ Team sessions work with the team's credentials, else the tenant's, never a perso
 
 ## Forking
 
-Anyone who can see a session can fork it. A fork:
+Anyone who can see a session can fork it. The fork dialog asks which of the person's own teams the copy belongs to; the session's team is chosen for them when they are in it. A fork:
 
 - copies the workspace and every conversation into a new session;
-- **stays in the source's team**;
+- **belongs to the team the person chose**, one of the teams their sign-in names: it is listed with that team and counts against its session limit and token budget;
 - is shared with **Only me**, the person who forked it;
-- runs with **that person's** credentials (their own where set, else the team's, else the tenant's).
+- runs with **that person's** credentials: their own where set, else the chosen team's, else the tenant's. A value of the source's team is never used in a fork that landed in another team;
+- keeps the source's project only when it stays in the source's team.
 
-The fork is refused when the team is at its running session limit (422), and when the person lacks a credential the team requires of them. People forking from outside the team are not held to the team's requirements, because the requirements apply to the team's members.
+The fork is refused:
+
+- with 403 (*You are not in team demo. Fork into one of your own teams.*) for a team the person is not a member of. A tenant admin forks into the teams they are a member of, like everyone else;
+- with 422 when the chosen team is not granted what the session uses, its model, MCP servers or their credentials: *Team Payments can't run this session: MCP server bitbucket is not in the team's team.json mcp_servers. Fork into another of your teams, or ask your tenant admin to grant it.*;
+- with 422 when the chosen team is at its running session limit, or the person lacks a credential that team requires of them.
 
 A session that was not started from a workflow can't be forked.
 

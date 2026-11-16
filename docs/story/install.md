@@ -87,7 +87,7 @@ Open <http://localhost:8080>. The evaluation stack runs with `MANAGER_AUTH_MODE=
 |---|---|---|
 | `alice` | acme | tenant admin; admin of Demo team |
 | `bob` | acme | member of Demo team and Payments |
-| `carol` | acme | in no team |
+| `carol` | acme | member of payments |
 | `dave` | acme | admin of Payments, member of Operations |
 | `frank` | acme | admin of Demo team (not a tenant admin) |
 | `erin` | acme | member of Payments |

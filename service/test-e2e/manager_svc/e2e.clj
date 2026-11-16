@@ -721,7 +721,7 @@
                   (UUID/randomUUID)
 
                   forked
-                  (command alice {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id}})
+                  (command alice {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id :team-id "demo"}})
 
                   fork
                   (result alice {:query-id :get-session :session-id fork-id})]
@@ -739,7 +739,15 @@
                        (get-in fork-config [:provider :platform :options :apiKey])))
               (command alice {:cmd-id :stop-session :id fork-id}))
             (check "people who can't see it cannot fork it"
-                   (= 404 (error-status (command carol {:cmd-id :fork-session :id (UUID/randomUUID) :attrs {:source-id session-id}}))))
+                   (= 404 (error-status (command carol {:cmd-id :fork-session :id (UUID/randomUUID)
+                                                        :attrs {:source-id session-id :team-id "payments"}}))))
+            (let [refused
+                  (command bob {:cmd-id :fork-session :id (UUID/randomUUID)
+                                :attrs {:source-id session-id :team-id "payments"}})]
+              (check "a team that isn't granted the session's tools can't take the fork, and the refusal names both"
+                     (and (= 422 (error-status refused))
+                          (every? #(string/includes? (error-message refused) %) ["Payments" "bitbucket"]))
+                     refused))
             (check "only the owner can lock it" (= 403 (error-status (command alice {:cmd-id :lock-session :id session-id}))))
             (let [locked
                   (command bob {:cmd-id :lock-session :id session-id})]
@@ -750,7 +758,7 @@
             (let [fork-id
                   (track-session! bob (UUID/randomUUID))]
               (check "a locked session can still be forked"
-                     (:ok (command bob {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id}})))
+                     (:ok (command bob {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id :team-id "demo"}})))
               (command bob {:cmd-id :delete-session :id fork-id}))
             (command bob {:cmd-id :delete-session :id session-id})))
         (finally
@@ -1291,12 +1299,20 @@
                     ["team credentials" {:query-id :list-team-credentials :team-id team-id}]]]
     (check (str label " can't read its " what " by id") (#{403 404} (error-status (query person q))))))
 
+(defn- credential-state-in
+  "How a credential resolves for person in one of their teams: :own, :team,
+   :tenant or :missing."
+  [person credential-id team-id]
+  (let [credential
+        (some #(when (= credential-id (:id %)) %) (:credentials (result person {:query-id :get-my-credentials})))]
+    (some #(when (= team-id (:team-id %)) (keyword (:state %))) (:teams credential))))
+
 (defn several-teams-and-sharing
   "People in several teams (bob: demo and payments; dave: admin of payments,
    member of ops; ivy of globex: research and admin of lab), team-scoped data
    within a tenant, sharing private, team, tenant, forking across teams, and
    isolation between tenants by direct id."
-  [{:keys [bob carol dave erin henry hank ivy]}]
+  [{:keys [alice bob carol dave erin henry hank ivy]}]
   (section "People in several teams, team isolation and sharing")
   (check "someone in two teams has their role in each (admin in one, member in the other)"
          (= {"payments" :admin "ops" :member} (team-roles dave :get-me))
@@ -1346,22 +1362,43 @@
       (check "shared with the tenant, everyone in it sees and lists it"
              (and (every? #(sees-session? % demo-session) [henry erin carol dave])
                   (lists-session? henry demo-session)))
+      (check "nobody forks into a team they are not in"
+             (= 403 (error-status (command erin {:cmd-id :fork-session :id (UUID/randomUUID)
+                                                 :attrs {:source-id demo-session :team-id "demo"}}))))
       (let [fork-id
             (UUID/randomUUID)
 
             forked
-            (command henry {:cmd-id :fork-session :id (track-session! henry fork-id) :attrs {:source-id demo-session}})
+            (command erin {:cmd-id :fork-session :id (track-session! erin fork-id)
+                           :attrs {:source-id demo-session :team-id "payments"}})
 
             fork
             (when (:ok forked)
-              (result henry {:query-id :get-session :session-id fork-id}))]
-        (check "someone of another team forks a session shared with the tenant" (:ok forked) (:error forked))
-        (check "the fork stays in the source's team, private to whoever forked it"
-               (= ["demo" :private "henry"] [(:team-id fork) (keyword (:visibility fork)) (:sub fork)])
+              (result erin {:query-id :get-session :session-id fork-id}))
+
+            listed-in
+            (fn [team-id]
+              (some #(= (str fork-id) (str (:id %))) (result alice {:query-id :list-sessions :team-id team-id})))]
+        (check "someone of another team forks a session shared with the tenant into their own team" (:ok forked) (:error forked))
+        (check "the fork belongs to the team they chose, private to whoever forked it"
+               (= ["payments" :private "erin"] [(:team-id fork) (keyword (:visibility fork)) (:sub fork)])
                (select-keys fork [:team-id :visibility :sub]))
+        (check "it is listed with that team, not with the source's"
+               (and (listed-in "payments") (not (listed-in "demo"))))
         (check "the fork is not visible to the source's owner"
                (not (sees-session? bob fork-id)))
-        (command henry {:cmd-id :delete-session :id fork-id}))
+        (let [saved
+              (outcome (request alice "PUT" "/api/teams/demo/credentials/NEXUS_TOKEN" {:secret "e2e-demo-nexus"}))]
+          (try
+            (check "a value of the source's team serves work in that team"
+                   (and (:ok saved) (= :team (credential-state-in bob "NEXUS_TOKEN" "demo")))
+                   saved)
+            (check "and never the fork: in the team it landed in, the credential resolves without it"
+                   (not= :team (credential-state-in erin "NEXUS_TOKEN" (:team-id fork)))
+                   (credential-state-in erin "NEXUS_TOKEN" (:team-id fork)))
+            (finally
+              (command alice {:cmd-id :delete-team-credential :attrs {:team-id "demo" :credential-id "NEXUS_TOKEN"}}))))
+        (command erin {:cmd-id :delete-session :id fork-id}))
       (by-id-refused "another tenant" ivy {:run-id (:id demo-run) :session-id demo-session :team-id "demo"})
       (check "another tenant doesn't list a session shared with acme"
              (not (lists-session? hank demo-session))))
@@ -1419,7 +1456,7 @@
 
                 forked
                 (command erin {:cmd-id :fork-session :id (track-session! erin (UUID/randomUUID))
-                               :attrs {:source-id (first sessions)}})
+                               :attrs {:source-id (first sessions) :team-id "payments"}})
 
                 retried
                 (command erin {:cmd-id :retry-run :id (track-run! erin (UUID/randomUUID))
@@ -1448,7 +1485,8 @@
 
 (defn- required-of-work-in-progress
   "henry has a session and a finished run in ops; without his own Jira value
-   he can't fork or run them again, someone outside the team still forks."
+   he can't fork or run them again, someone of another team still forks into
+   their own team, which requires nothing of them."
   [{:keys [alice carol dave henry]}]
   (room-in-team! alice "ops")
   (let [run
@@ -1458,15 +1496,16 @@
         (:session-id run)
 
         fork
-        (fn [person]
+        (fn [person team-id]
           (let [fork-id (track-session! person (UUID/randomUUID))]
-            [fork-id (command person {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id}})]))]
+            [fork-id (command person {:cmd-id :fork-session :id fork-id
+                                      :attrs {:source-id session-id :team-id team-id}})]))]
     (check "with their own values, work in ops starts" (and (= :completed (:status run)) session-id) (or (:error run) (:status run)))
     (when session-id
       (share! henry session-id :tenant)
       (command henry {:cmd-id :delete-my-credential :attrs {:credential-id "JIRA_TOKEN"}})
       (let [[_ forked]
-            (fork henry)
+            (fork henry "ops")
 
             retried
             (command henry {:cmd-id :retry-run :id (track-run! henry (UUID/randomUUID)) :attrs {:source-id (:id run)}})]
@@ -1479,13 +1518,14 @@
         (check "the same holds for a member who administers another team"
                (refused-for-credentials? refused "Jira" "PagerDuty")
                refused))
+      (room-in-team! alice "payments")
       (let [[fork-id forked]
-            (fork carol)]
-        (check "someone outside the team forks its shared session without them" (:ok forked) (:error forked))
+            (fork carol "payments")]
+        (check "someone of another team forks its shared session into their own team without them" (:ok forked) (:error forked))
         (delete-session! carol fork-id))
       (add-required! henry)
       (let [[fork-id forked]
-            (fork henry)]
+            (fork henry "ops")]
         (check "with the value back, the member forks it" (:ok forked) (:error forked))
         (delete-session! henry fork-id))
       (delete-session! henry session-id))))
@@ -1628,15 +1668,15 @@
                (and (= 303 (:status entry))
                     (= (str "/acme/sessions/" session-id) (get-in entry [:headers "location"])))
                (select-keys entry [:status :headers])))
-      (room-in-team! alice "ops")
+      (room-in-team! alice "payments")
       (let [fork-id
             (track-session! carol (UUID/randomUUID))
 
             forked
-            (command carol {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id}})]
-        (check "but they can fork it into their own copy, kept in the team"
+            (command carol {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id :team-id "payments"}})]
+        (check "but they can fork it into their own copy, in their own team"
                (and (:ok forked)
-                    (= ["carol" "ops" :private]
+                    (= ["carol" "payments" :private]
                        ((juxt :sub :team-id (comp keyword :visibility)) (:ok (session-of carol fork-id)))))
                (or (:error forked) (session-of carol fork-id)))
         (when (:ok forked)
@@ -1695,7 +1735,8 @@
       (check "another tenant's sessions are not listed"
              (not-any? #(= (str session-id) (str (:id %))) (result gina {:query-id :list-sessions})))
       (check "another tenant's sessions can't be forked"
-             (= 404 (error-status (command gina {:cmd-id :fork-session :id (UUID/randomUUID) :attrs {:source-id session-id}}))))
+             (= 404 (error-status (command gina {:cmd-id :fork-session :id (UUID/randomUUID)
+                                                 :attrs {:source-id session-id :team-id "research"}}))))
       (check "another tenant's sessions can't be changed"
              (= 404 (error-status (command gina {:cmd-id :update-session :id session-id :attrs {:visibility :tenant}}))))
       (check "another tenant's audit trail can't be exported"
@@ -1901,7 +1942,7 @@
               (track-session! bob (UUID/randomUUID))
 
               forked
-              (command bob {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id}})]
+              (command bob {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id :team-id "demo"}})]
           (check "members fork it to continue in their own copy"
                  (and (:ok forked) (= ["bob" "demo"] ((juxt :sub :team-id) (:ok (session-of bob fork-id)))))
                  (or (:error forked) (session-of bob fork-id)))

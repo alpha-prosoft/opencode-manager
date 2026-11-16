@@ -3,8 +3,7 @@
    the audit export and /metrics (public listener)."
   (:require [clojure.tools.logging :as log]
             [manager-svc.client :as client]
-            [manager-svc.edge.api :as edge-api]
-            [manager-svc.edge.server :as server]
+            [manager-svc.edge.http :as edge-http]
             [manager-svc.errors :as errors]
             [manager-svc.observability.api :as api]
             [manager-svc.observability.gateway :as gateway]
@@ -28,7 +27,7 @@
           (errors/fail! 401 "Invalid telemetry key"))
 
         report
-        (telemetry/parse-report (json/read-str (server/body-text request)))]
+        (telemetry/parse-report (json/read-str (edge-http/body-text request)))]
     (api/record-telemetry! system session report)
     (when (telemetry/tool-report? report)
       (try
@@ -69,13 +68,9 @@
 (defn export-audit
   "GET /api/sessions/{id}/audit/export: the audit trail as JSON lines, with
    each payload exactly as its hash covers it."
-  [{:keys [settings]} {:keys [path] :as request}]
+  [{:keys [settings]} {:keys [path token]}]
   (let [session-id
         (second (re-find export-path path))
-
-        token
-        (or (edge-api/caller-token settings request)
-            (errors/fail! 401 "Not authenticated"))
 
         first-page
         (audit-page settings token session-id 0)]
@@ -91,8 +86,12 @@
                  (recur (audit-page settings token session-id (:seq (last entries)))))))}))
 
 (def routes
-  [{:method :get :prefix "/api/sessions/" :match #(re-find export-path (:path %)) :handler export-audit}
-   {:method :get :path "/metrics" :handler metrics/handler}])
+  [{:method :get
+    :prefix "/api/sessions/"
+    :match #(re-find export-path (:path %))
+    :caller :person
+    :handler export-audit}
+   {:method :get :path "/metrics" :caller :person :handler metrics/handler}])
 
 (def sandbox-routes
   (conj gateway/routes

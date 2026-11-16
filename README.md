@@ -19,7 +19,7 @@ session, gives the agent exactly the tools its team allowed, and hands back a ch
 - **Give agents tools safely.** MCP servers (Bitbucket, Jenkins, Jira, your own) run behind the platform's MCP
   gateway, which adds the right credential to each call and enforces a tool allow-list.
 - **Share and continue work.** A session is shared with only you, your team or the whole tenant. Anyone who can
-  see a session can fork it into their own copy and continue with their own credentials.
+  see a session can fork it into their own copy, in a team of theirs, and continue with their own credentials.
 - **Stay in control.** Sandboxes have no internet unless a harness allows it, run read-only and unprivileged, and
   can't change their own configuration; harness policies block commands such as `git push`.
 - **Run it anywhere.** Docker Compose on a laptop (with Keycloak, Gerrit and Jenkins if you like), or Kubernetes
@@ -100,7 +100,7 @@ local use only (`MANAGER_AUTH_MODE=login`); each person's claims come from
 | `alice` | acme | tenant admin; admin of Demo team |
 | `frank` | acme | admin of Demo team (not a tenant admin) |
 | `bob` | acme | member of Demo team and Payments |
-| `carol` | acme | in no team |
+| `carol` | acme | member of payments |
 | `dave` | acme | admin of Payments, member of Operations |
 | `erin` | acme | member of Payments |
 | `henry` | acme | member of Operations (a scheduled workspace and a tiny token budget) |
@@ -133,7 +133,7 @@ requests and stop idle sessions. [AGENTS.md](AGENTS.md) describes the architectu
 conventions.
 
 ```
-service/     manager-svc: edge server, commands and queries, workers; test-e2e/ is the end-to-end suite
+service/     manager-svc: the two listeners, commands and queries, workers; test-e2e/ is the end-to-end suite
 web/         manager-web: pages, theme, unit tests, Playwright tests, the guide's screenshot generator
 charts/      Helm chart
 deploy/      Keycloak realm, Gerrit and Jenkins setup, Traefik routes, placeholder secrets of the documentation stack

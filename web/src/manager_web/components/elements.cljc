@@ -5,6 +5,17 @@
 (def confirm-accept [:confirm :accept])
 (def confirm-keep [:confirm :keep])
 
+(def fork-dialog [:fork-dialog :dialog])
+(def fork-dialog-team [:fork-dialog :team])
+(def fork-dialog-no-team [:fork-dialog :no-team])
+(def fork-dialog-error [:fork-dialog :error])
+(def fork-dialog-cancel [:fork-dialog :cancel])
+(def fork-dialog-submit [:fork-dialog :submit])
+
+(defn fork-dialog-team-option
+  [team-id]
+  [:fork-dialog :team-option team-id])
+
 (defn session-action
   [action session-id]
   [:session-action action session-id])

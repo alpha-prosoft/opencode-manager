@@ -16,7 +16,7 @@ cd web && npm install && npm run fonts && clojure -M:shadow-cljs watch app   # o
 cd service && MANAGER_UI_DIST_DIR=../web/www MANAGER_DATA_DIR=/tmp/manager MANAGER_AUTH_MODE=login \
   MANAGER_DEV_USERS_FILE=../examples/dev-users.json MANAGER_OPERATORS=oscar \
   MANAGER_TENANTS='[{"name":"acme","onboarding":"file:///repos/acme-onboarding"}]' \
-  MANAGER_PUBLIC_PORT_INTERNAL=18000 MANAGER_SANDBOX_PORT=18001 MANAGER_EDD_PORT=18081 \
+  MANAGER_PUBLIC_PORT_INTERNAL=18000 MANAGER_SANDBOX_PORT=18001 \
   MANAGER_CONTENT_SECURITY_POLICY=off clojure -M:run    # CSP off only for a shadow-cljs watch build
 cd service && clojure -M:test:unit          # backend unit tests
 cd web && clojure -M:shadow-cljs compile test   # UI unit tests (node, jsdom where a DOM is needed)
@@ -66,37 +66,69 @@ Tests move time with `with-redefs [reload/now-ms ...]`.
 ## Service architecture
 
 ```
-browser, Traefik ──► edge public listener (8000) ──/api/query, /api/command──► edd (Undertow, 127.0.0.1)
-                       login, static UI, session forward-auth,                │ commands → events → aggregates
-                       metrics, credential values, audit export               │ queries
-sandboxes ─────────► edge sandbox listener (8001)                             │
-                       LLM + MCP gateways, /mcp result tools, telemetry       │
-                     workers (scheduled jobs) ─────────────────────client─────┘
+                     one edd Undertow runtime (edd.undertow.core), edd on 127.0.0.1:8002 only
+browser, Traefik ──► :public listener (8000)                              ┐
+                       origin check → host handlers → route → caller      │ /api/query, /api/command and
+                       → body limit → handler                             ├─ manager-svc.client send edd
+                       login, static UI, session forward-auth, metrics,   │ requests over loopback:
+                       credential values, webhooks, audit export          │ commands → events → aggregates,
+sandboxes ─────────► :sandbox listener (8001)                             │ queries
+                       LLM + MCP gateways, /mcp result tools, telemetry   │
+                     workers (scheduled jobs) ────────────────────────────┘
 ```
 
+- `manager-svc.main` starts one edd runtime (`edd.undertow.core/start`, `:listeners`): edd answers on the
+  default listener, bound to 127.0.0.1 (`MANAGER_EDD_PORT`, 8002) and never published; people and sandboxes
+  get a listener each. Each of those two is a plain handler made by
+  `manager-svc.edge.listener/handler` from data: `{:routes :host-handlers :origin}`.
 - The two listeners share nothing: the public one serves `routes` and `host-handlers`, the sandbox one only
   `sandbox-routes`. Compose binds them to different networks (`manager-public` on opencode-net,
   `manager-sandbox`/`manager` on opencode-sandbox); Helm gives the sandbox listener its own Service and
   NetworkPolicies. Sandboxes reach it at `MANAGER_SANDBOX_SERVICE_URL`. Traefik joins opencode-sandbox to reach
   session containers but listens only on its opencode-net address (alias `traefik-public`), so a sandbox can't
   reach the public listener through it either.
-- Both listeners limit bodies (`MANAGER_MAX_BODY_BYTES`, a route may raise it with `:max-body-bytes`) and read
-  times. Read a body with `edge.server/body-text`, after authenticating the caller.
+- A route is `{:method :path|:prefix :match :caller :max-body-bytes :handler}` with
+  `:handler (fn [system request] response)`; requests and responses are data (`manager-svc.edge.http`: `json`,
+  `error`, `body-text`; a response body may be a function of the output stream, for streaming). A listener
+  answers in one order (`edge.listener/answer`): the origin check, host handlers, the first matching route, its
+  caller, its body limit, the handler. A handler refuses by throwing `{:status :message}`
+  (`manager-svc.errors`), answered as that status with `{:detail message}`; any other exception is logged and
+  answered 500 without its text.
+- A route that needs a login says so: `:caller :person` puts the person's `:identity` and their platform
+  `:token` on the request (`edge.listener/caller`); without one the listener answers 401 before the body is
+  read, and 403 with the reason when the claims parser refuses a provider token (jwt mode). Handlers never read
+  cookies for that themselves (the session gateway, with its own cookie and redirects, is the exception). No
+  sandbox route has a `:caller`.
+- One token says who a person is: the **platform token** (`manager-svc.tokens`), carrying `sub`, `email`,
+  `name`, `tenant`, `teams` with roles and the role flags. It is issued in one place, `manager-svc.signin`
+  (`exchange`: a provider's claims → claims parser → identity → platform token), whatever the sign-in was: the
+  test login, the OIDC callback, or in jwt mode the public listener, which verifies the provider token of each
+  request and exchanges it for a platform token that lives for that request (`manager-svc.jwt`). Everything
+  behind that reads only the platform token (`tokens/person`); nothing else runs the claims parser or reads a
+  provider token. The platform token never leaves the manager: sandboxes get keys derived per session and
+  purpose (`manager-svc.signing`), a session host its own token bound to that session, the handoff a one-time
+  token, and the gateways send LLM providers and MCP servers only the configured credential. Each token has its
+  own audience. Cookie names and headers live in `manager-svc.cookies`.
+- Both listeners limit bodies (`MANAGER_MAX_BODY_BYTES`, a route may set its own with `:max-body-bytes`) and read
+  times (`edge.listener/limits`). Read a body with `edge.http/body-text`.
 - The public listener refuses state-changing requests that carry cookies unless they come from the UI's origin
   (`Sec-Fetch-Site: same-origin`, a matching `Origin`, or the `X-Requested-With` header the UI sends).
-- Edge forwarding to edd sends only `:query` or `:commands` with fresh ids; failures reach people as
-  `{:exception {:status :message}}` (`client/failure`), never internal details.
-- The edge's own endpoints (credential values, webhooks) share `edge.api/person!` (token and identity or 401),
-  `edge.api/json-object!` (the JSON body as a map or 422) and `edge.api/command!` (commands as the caller, effects
-  settled). Whatever refuses such a request, the edge or the command, it answers the HTTP status with
-  `{:detail message}`; a success answers edd's response.
-- The caller's address (webhook allowed addresses, delivery log) is the TCP peer. `X-Forwarded-For` counts only
-  when the peer is in `MANAGER_TRUSTED_PROXIES` (comma separated addresses, CIDRs or host names standing for
-  their current addresses; default empty): then it is the last address of all its lines. compose trusts
-  `traefik-public`, the chart `trustedProxies`.
+- `/api/query` and `/api/command` (`manager-svc.edge.api`) run only `:query` or `:commands` with fresh ids, as
+  the caller; failures reach people as `{:exception {:status :message}}` (`client/failure`), never internal
+  details.
+- The edge's own endpoints (credential values, webhooks) share `edge.api/json-object!` (the JSON body as a map
+  or 422) and `edge.api/command!` (commands as the caller, effects settled). Whatever refuses such a request,
+  the edge or the command, it answers the HTTP status with `{:detail message}`; a success answers edd's response.
+- The caller's address (webhook allowed addresses, delivery log) is the TCP peer (`:remote-addr`).
+  `X-Forwarded-For` (`:forwarded-for`, every line) counts only when the peer is in `MANAGER_TRUSTED_PROXIES`
+  (comma separated addresses, CIDRs or host names standing for their current addresses; default empty): then it
+  is the last address of all its lines. compose trusts `traefik-public`, the chart `trustedProxies`.
+- `manager-svc.client` sends edd requests over HTTP to that loopback listener: the token in
+  `X-Authorization` decides the edd user (`auth/edd-user`), which accepts only tokens the manager issued: the
+  caller's platform token for the public listener, the platform's service token for workers and facades (one is
+  held and renewed before it expires).
 
-- `manager-svc.main` starts edd, an in-process router (memory distributor),
-  the edge and the workers.
+- `manager-svc.main` also starts the workers; effects reach the service itself (`manager-svc.effects`).
 - `manager-svc.system` is the process-wide map handed to everything: edd
   handlers get it as `(:manager/system ctx)`, edge handlers and workers as their
   first argument. Each domain contributes components to it.
@@ -183,8 +215,11 @@ sandboxes ─────────► edge sandbox listener (8001)           
     aggregates, newest copy per id), `directory/rows`/`rows-of`,
     `directory/identities ctx tenant "team"|"user"`, `directory/tenants` and,
     for workers over every tenant, `directory/all-identities`.
-  - Effects travel in-process (memory distributor, router in
-    `manager-svc.main`). `manager-svc.effects/settle!` waits for them;
+  - Effects come back to the service itself (`manager-svc.effects`): with Postgres from the outbox of
+    `edd.postgres.distributor`, with the memory store through the memory distributor and a router started
+    in-process. They do real work, not only lists: the run executor and the session lifecycle find what is
+    pending in directory rows, so a lost row effect means a run or session that never proceeds.
+    `manager-svc.effects/settle!` waits for whatever is pending in the process, at most 3 s, then logs and goes on;
     the edge's `/api/command` and `manager-svc.client/command` call it, so
     the UI and workers read their own writes. In tests use
     `support/apply!` (command, events, effects) or `support/settle!`.
@@ -228,7 +263,7 @@ or changes another tenant's data.
   fills in the pull_request trigger's source and the activity's `scm`, `repository`, `pull_request` and `ci` it
   leaves out, before the registry validates it. The stored definition holds the resolved trigger and options, so
   runs never look projects up. A run of such a workflow carries the project id (`:project`, in its directory rows), and so do its
-  session and forks of it, so lists filter by project.
+  session and forks of it within the team, so lists filter by project.
 - Both are malli schemas in `manager-svc.platform.spec` (snake_case JSON in, kebab-case inside); keep the JSON
   schemas in `schemas/` and `service/src/manager_svc/platform/schemas/` in step with them.
 - The sync (`platform.api/sync!`) runs every tenant concurrently with its own lock and status, so one tenant's
@@ -254,9 +289,12 @@ Login mode takes the claims of a username from `MANAGER_DEV_USERS_FILE` (usernam
 them through the same parser; `/api/auth/personas` lists those users. oidc mode verifies the provider's ID token
 (JWKS, issuer, audience = client id, nonce, expiry), merges the claims of the configured sources, runs them through
 the parser and issues the login cookie like login mode; a refusal returns to the login page with the parser's
-message (carried once in the signed `oc_oidc` cookie, read through `/api/auth/config`). jwt mode passes the verified token's claims
-through the parser on every request. The manager's own tokens (login cookie, handoff, session host) carry `sub`,
-`email`, `name`, `tenant`, `teams` and the role flags, and edd's `resolve-user` puts them on `[:meta :user]`:
+message (carried once in the signed `oc_oidc` cookie, read through `/api/auth/config`). jwt mode verifies the
+provider token of every request at the public listener, runs its claims through the parser and continues with a
+platform token minted for that request; a refusal answers 403 with the parser's message as `{:detail}`. All three
+go through `manager-svc.signin`. A person's tokens (the platform token in the login cookie, handoff, session host)
+carry `sub`, `email`, `name`, `tenant`, `teams` and the role flags, and edd's `resolve-user` puts the platform
+token's on `[:meta :user]`:
 `{:id :email :name :tenant :teams {"demo" :admin} :tenant-admin :operator}`.
 
 **Roles** (`manager-svc.roles`)
@@ -280,17 +318,26 @@ plaintext never reaches edd. Automated workflows can't rely on a credential only
 `user` in `provided_by` (`platform.spec` refuses the file otherwise). Required of a person = the tenant's, plus those
 of the teams their claims name. Only the person's own value satisfies one (team and tenant values are still used for
 calls). `:start-run`, `:start-team-session`, `:retry-run` and `:fork-session` read what the caller lacks in the
-team with the `:missing-credentials` dependency (`credentials.api/required-credentials-dep` →
+team (for a fork, the team it lands in) with the `:missing-credentials` dependency (`credentials.api/required-credentials-dep` →
 `:get-missing-required-credentials`) and fail with `credentials.api/require-credentials!` (422 naming the team and
 credentials). It applies to people whose claims name the team (`roles/claimed-team-ids`), exactly those
-`:get-my-credentials` lists as `:missing-required`: never to the platform, someone forking from outside the team
-or a tenant admin who isn't the team's member; running sessions are left alone.
+`:get-my-credentials` lists as `:missing-required`: never to the platform or a tenant admin who isn't the team's
+member; running sessions are left alone.
 
 **Sessions** always belong to a team (`:tenant`, `:team-id`). Visibility is `:private` (owner), `:team` or
 `:tenant` (everyone in the tenant). Sessions started by triggers, schedules or `:start-team-session` are owned by
 the platform and work with team credentials, so only the team's members (and tenant admins) may work in them;
-others who can see them may fork them. A fork stays in the source's team, is private and owned by the person who
-forked it. Runs, usage, audit and budgets carry the tenant and team.
+others who can see them may fork them. A fork lands in the team the person picks among those their claims name
+(`:fork-session` `:team-id`, the dialog preselects the source's team when it is one of theirs): it belongs to that
+team in every respect (directory rows, limits, budget, required credentials, usage) and is private and owned by
+the person who forked it. Its credentials resolve like any session's, from its own team: the person's value, the
+picked team's, the tenant's, never the source team's. It still runs the source's workflow, so it remembers whose
+that is (label `:workflow-team`, `sessions.api/workflow-team`) and `runs.api/fork-sandbox` builds its sandbox
+from that team's definitions as a session of the picked team. The picked team must be granted what the workflow's
+harness uses (image, LLM connection and models, MCP servers and their credentials): the `:fork-grants` dependency
+(`:get-fork-grants` of runs, over `platform.api/missing-grants`, the sync's own `registry/harness-grant-errors`)
+says what is missing and the command fails with 422 naming the team and the reasons. A fork keeps the source's
+project only inside the source's team. Runs, usage, audit and budgets carry the tenant and team.
 
 ## API contract
 
@@ -327,7 +374,7 @@ keys and keyword enum values.
 | POST /sessions/{id}/start, /stop | cmd `:start-session`, `:stop-session {:id}` (start: 409 while the session is being deleted; for a person, 422 when the team's other running sessions fill `max_running_sessions`) | sessions |
 | DELETE /sessions/{id} | cmd `:delete-session {:id}` | sessions |
 | POST /sessions/{id}/lock | cmd `:lock-session {:id}` | sessions |
-| POST /sessions/{id}/fork | cmd `:fork-session {:id <new> :attrs {:source-id}}` (422 at the team's session limit) | sessions |
+| POST /sessions/{id}/fork | cmd `:fork-session {:id <new> :attrs {:source-id :team-id}}` (`:team-id`: the team of the caller's own the fork lands in; 403 with the reason for a team their claims don't name, 404 for one the tenant doesn't have; 422 when that team isn't granted what the session's harness uses, lacks a credential it requires of the caller or is at its session limit) | sessions |
 | GET /sessions/{id}/conversations | query `:list-conversations {:session-id}` | sessions |
 | POST /admin/sessions/stop-idle | cmd `:stop-idle-sessions` | sessions |
 | POST /teams/{t}/workflows/{w}/runs | cmd `:start-run {:id <new> :attrs {:team-id :workflow-id :inputs :visibility?}}` (`:visibility` `:private`/`:team`/`:tenant`: who sees the run's session; without it the workflow decides; a retry keeps it; 403 with the reason for a team of the tenant the caller isn't in, 404 for a team the tenant doesn't have) | runs |
@@ -436,6 +483,9 @@ message.
   than one thing show `layout/scope-chip` (`[:tenant name]`, `[:team name]`, `[:platform]`).
 - Anything that starts work says the team, whose credentials it uses and who will see it (the run dialog's context
   summary); tables keep team, owner and sharing on narrow screens as a caption line (`:row-context`).
+- Forking goes through `manager-web.components.fork-dialog` (`[::fork-dialog/open session]`, mounted once in the
+  shell beside the confirm dialog): a required team select over the person's own teams (`roles/member-teams`),
+  the session's team or their only team preselected, and the command's refusals shown in the dialog.
 - `RawTypography` and `RawAlert` render only their first child; use MUI `Typography` for text with several
   children and wrap an alert's content in one element.
 - People who lack a required credential see nothing but setup: `manager-web.core` asks
@@ -454,7 +504,10 @@ message.
   tenant isolation tests: a person of another tenant gets 404 or nothing. Domain tests require only their
   domain, not `manager-svc.module`, so one broken domain doesn't break others.
   External systems (Docker, Kubernetes, git, HTTP) sit behind small protocols
-  or functions that tests replace.
+  or functions that tests replace. Edge routes are tested as the listener answers them:
+  `(edge.listener/answer system {:routes edge/routes} request)` with a request map, edd replaced by
+  `with-redefs [client/request-raw ...]`; `listeners_test` starts the whole manager (`main/start` on `service/init`, memory
+  store, ports 0, no jobs) and calls both listeners over HTTP.
 - End to end: `service/test-e2e/manager_svc/e2e.clj` (alias `:e2e`) drives a
   running compose stack through the API, Traefik and `docker exec` probes. `e2e_ci.clj` (alias `:e2e-ci`, and
   part of `:e2e` when Gerrit and Jenkins answer) covers the Gerrit review and Jenkins build flows against

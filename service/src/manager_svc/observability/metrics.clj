@@ -2,7 +2,6 @@
   "Prometheus /metrics for platform operators, over every tenant."
   (:require [clojure.string :as string]
             [edd.core :as edd]
-            [manager-svc.auth :as auth]
             [manager-svc.client :as client]
             [manager-svc.errors :as errors]
             [manager-svc.observability.telemetry :as telemetry]
@@ -71,16 +70,13 @@
      "\n")))
 
 (defn handler
-  [{:keys [settings] :as system} {:keys [cookies headers]}]
-  (let [identity
-        (auth/resolve-identity settings cookies (get headers "authorization"))]
-    (cond
-      (nil? identity) (errors/fail! 401 "Not authenticated")
-      (not (:operator identity)) (errors/forbidden! "Platform operators only")
-      :else {:status 200
-             :headers {"Content-Type" "text/plain; version=0.0.4"}
-             :body (render (client/query settings {:query-id :get-observability-metrics})
-                           (count (sessions/running-session-ids system)))})))
+  [{:keys [settings] :as system} {:keys [identity]}]
+  (when-not (:operator identity)
+    (errors/forbidden! "Platform operators only"))
+  {:status 200
+   :headers {"Content-Type" "text/plain; version=0.0.4"}
+   :body (render (client/query settings {:query-id :get-observability-metrics})
+                 (count (sessions/running-session-ids system)))})
 
 (defn register
   [ctx]

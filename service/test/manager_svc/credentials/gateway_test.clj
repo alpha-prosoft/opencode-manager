@@ -275,6 +275,39 @@
       (finally
         (.stop server 0)))))
 
+(deftest a-fork-in-another-team-never-gets-the-source-teams-value
+  (let [{:keys [server url received]}
+        (start-upstream (fn [_] (json-reply {:jsonrpc "2.0" :id 7 :result {}})))
+
+        fork
+        (assoc session
+               :id #uuid "22222222-2222-2222-2222-222222222222"
+               :sub "erin"
+               :team-id "beta"
+               :forked-from (:id session))
+
+        asked-for
+        (atom [])]
+    (try
+      (with-gateway* url
+        (fn [_audit]
+          (with-redefs [sessions-api/session-by-key (fn [_ _ _] fork)
+                        api/resolve-credential (fn [_ owner-of _]
+                                                 (swap! asked-for conj owner-of)
+                                                 (when (= "alpha" (:team-id owner-of))
+                                                   {:value {:secret "alpha-token"} :source :team}))]
+            (is
+             (= "Jira MCP needs your jira credential. Add it under Accounts in the platform."
+                (get-in (util/to-edn (body-text (call (request :post "/mcp-gw/jira" (rpc "tools/call" {:name "search"})))))
+                        [:error :message])))
+            (is
+             (= [{:tenant "acme" :team-id "beta" :user "erin"}]
+                @asked-for))
+            (is
+             (empty? @received)))))
+      (finally
+        (.stop server 0)))))
+
 (deftest foreign-json-is-relayed-unchanged
   (let [{:keys [server url]}
         (start-upstream (fn [_]

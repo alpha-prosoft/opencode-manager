@@ -11,7 +11,7 @@
    :public-bind-host "0.0.0.0"
    :sandbox-port 8001
    :sandbox-bind-host "0.0.0.0"
-   :edd-port 8081
+   :edd-port 8002
    :max-body-bytes 1048576
    :domain "localhost"
    :public-scheme "http"

@@ -42,7 +42,11 @@ markdown_extensions:
   - pymdownx.emoji:
       emoji_index: !!python/name:material.extensions.emoji.twemoji
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.tabbed:
       alternate_style: true
 
@@ -75,6 +79,7 @@ nav:
       - For platform operators: guide/operator.md
   - Reference:
       - Concepts and terms: reference/concepts.md
+      - Architecture: reference/architecture.md
       - Roles and visibility: reference/roles.md
       - Server settings: reference/settings.md
       - tenant.json: reference/tenant-json.md

@@ -116,7 +116,7 @@
       (step "Someone else of the tenant doesn't find the private session"
             (fn []
               (h/logout)
-              (h/login (:teamless h/fixture))
+              (h/login (:outside-team h/fixture))
               (search session-title)
               (is
                (nothing-found session-title))))

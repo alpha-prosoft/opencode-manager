@@ -229,7 +229,9 @@
           "temporary": false
         }
       ],
-      "groups": [],
+      "groups": [
+        "/acme/payments"
+      ],
       "realmRoles": [],
       "requiredActions": [],
       "attributes": {

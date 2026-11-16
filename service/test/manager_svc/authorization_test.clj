@@ -88,6 +88,7 @@
    :get-admin-overview people
    :get-admin-usage both
    :get-audit-summary platform
+   :get-fork-grants platform
    :get-idle-stop-request platform
    :get-me people
    :get-project people

@@ -2,10 +2,12 @@
   "Logging in and out on the public listener, and calls without a login."
   (:require [clojure.string :as string]
             [clojure.test :refer [deftest is testing]]
-            [manager-svc.auth :as auth]
             [manager-svc.edge.api :as edge-api]
-            [manager-svc.edge.server :as server]
-            [manager-svc.test-support :as support])
+            [manager-svc.edge.http :as edge-http]
+            [manager-svc.edge.listener :as listener]
+            [manager-svc.edge.login :as login]
+            [manager-svc.test-support :as support]
+            [manager-svc.tokens :as tokens])
   (:import [java.io ByteArrayInputStream]
            [java.nio.charset StandardCharsets]))
 
@@ -17,7 +19,10 @@
          :headers {}
          :cookies (or cookies {})
          :body (ByteArrayInputStream. (.getBytes (str body) StandardCharsets/UTF_8))}]
-    ((:handler (server/route edge-api/routes request)) {:settings settings} request)))
+    (try
+      (listener/answer {:settings settings} {:routes (concat login/routes edge-api/routes)} request)
+      (catch clojure.lang.ExceptionInfo e
+        (listener/refusal request e)))))
 
 (defn- cookie-value
   [set-cookie]
@@ -37,7 +42,7 @@
     (testing "the cookie names the person, normalised"
       (is
        (= "bob"
-          (:sub (auth/person support/settings (cookie-value set-cookie))))))))
+          (:sub (tokens/person support/settings (cookie-value set-cookie))))))))
 
 (deftest logging-in-without-a-name-is-refused
   (is
@@ -86,7 +91,7 @@
         (call support/settings :get "/api/auth/personas")
 
         personas
-        (into {} (map (juxt :username identity)) (server/read-json {:body (ByteArrayInputStream. (.getBytes (str (:body response)) StandardCharsets/UTF_8))}))]
+        (into {} (map (juxt :username identity)) (edge-http/read-json {:body (ByteArrayInputStream. (.getBytes (str (:body response)) StandardCharsets/UTF_8))}))]
     (is
      (= 200
         (:status response)))

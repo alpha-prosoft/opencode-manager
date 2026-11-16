@@ -1,8 +1,8 @@
 (ns manager-svc.runs.sandbox-test
   (:require [clojure.test :refer [deftest is]]
-            [manager-svc.auth :as auth]
             [manager-svc.http :as http]
             [manager-svc.runs.sandbox :as sandbox]
+            [manager-svc.signing :as signing]
             [manager-svc.test-support :as support]))
 
 (def session-id #uuid "33333333-3333-3333-3333-333333333333")
@@ -23,14 +23,14 @@
         (http/read-json (get files "opencode/opencode.json"))]
     (is
      (= {:url "http://manager:8001/mcp-gw/jenkins"
-         :headers {:X-Platform-Key (auth/derived-key settings "tools" session-id)}}
+         :headers {:X-Platform-Key (signing/derived-key settings "tools" session-id)}}
         (select-keys (get-in config [:mcp :jenkins]) [:url :headers])))
     (is
-     (= (auth/derived-key settings "llm" session-id)
+     (= (signing/derived-key settings "llm" session-id)
         (get-in config [:provider :platform :options :apiKey])))
     (is
      (= session-id
-        (auth/derived-key-owner settings (get-in config [:mcp :platform :headers :X-Platform-Key]) #{"mcp"})))
+        (signing/derived-key-owner settings (get-in config [:mcp :platform :headers :X-Platform-Key]) #{"mcp"})))
     (is
      (.contains ^String (get files "opencode/plugins/platform-monitor.js") "http://manager:8001/api/telemetry"))
     (is

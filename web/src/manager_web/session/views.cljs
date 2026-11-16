@@ -16,6 +16,7 @@
             [manager-web.components.audit :as audit]
             [manager-web.components.chips :as chips]
             [manager-web.components.conversations :as conversations]
+            [manager-web.components.fork-dialog :as fork-dialog]
             [manager-web.components.layout :as layout]
             [manager-web.components.live-activity :as live-activity]
             [manager-web.components.session-actions :as session-actions]
@@ -81,7 +82,7 @@
    :team-only (fn [me {:keys [team-id]}]
                 (let [team (roles/team-name me team-id)]
                   (str "Only members of " team " can work in this team session (it uses " (format/possessive team) " credentials)."
-                       " Fork it to get your own private copy in " team ", using your own credentials.")))
+                       " Fork it to get your own private copy in a team of yours.")))
    :hidden (fn [_ _] "You can't open this session.")})
 
 (defn blocked-text
@@ -273,7 +274,7 @@
                              [:> Button {:size "small" :color "inherit" :startIcon (r/as-element [:> CallSplitIcon])
                                          :loading @(rf/subscribe [::data/busy? [:fork-session (:id session)]])
                                          :data-testid (el/id els/fork-to-continue)
-                                         :on-click #(rf/dispatch [::session-actions/fork session ::events/action])}
+                                         :on-click #(rf/dispatch [::fork-dialog/open session])}
                               "Fork to continue"]))}
         (blocked-text blocked me session)])
      [layout/tabs {:value tab

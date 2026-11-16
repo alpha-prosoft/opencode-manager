@@ -17,6 +17,31 @@
 
 (def max-limit 500)
 
+(defn get-fork-grants
+  "{:team-id :team-name :known :missing [reason]}: what team-id of tenant
+   lacks to run the harness of a workflow of workflow-team-id, whose session
+   someone forks into it; the dependency of :fork-session. A workflow that
+   no longer exists lacks nothing here: preparing the fork reports it."
+  [ctx {:keys [tenant team-id workflow-team-id workflow-id]}]
+  (let [system
+        (system/of ctx)
+
+        team
+        (platform/team system tenant team-id)
+
+        workflow
+        (definitions/workflow system tenant workflow-team-id workflow-id)
+
+        harness
+        (when workflow
+          (definitions/harness-spec system tenant workflow-team-id (:harness workflow)))]
+    {:team-id team-id
+     :team-name (platform/team-name team)
+     :known (some? team)
+     :missing (if harness
+                (platform/missing-grants system tenant team-id harness)
+                [])}))
+
 (defn- team-rows
   [ctx tenant team-ids]
   (directory/tenant-rows ctx tenant (map #(directory/team tenant %) team-ids) :runs))
@@ -213,6 +238,13 @@
                      :consumes [:map [:tenant string?] [:since string?]]
                      :auth roles/platform-only)
       (edd/reg-query :list-pending-runs list-pending-runs
+                     :auth roles/platform-only)
+      (edd/reg-query :get-fork-grants get-fork-grants
+                     :consumes [:map
+                                [:tenant string?]
+                                [:team-id string?]
+                                [:workflow-team-id string?]
+                                [:workflow-id string?]]
                      :auth roles/platform-only)
       (edd/reg-query :list-open-pull-requests list-open-pull-requests
                      :consumes [:map [:team-id :string] [:workflow-id :string]]

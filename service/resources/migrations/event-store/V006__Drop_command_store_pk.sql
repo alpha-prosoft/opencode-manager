@@ -1,1 +1,0 @@
-ALTER TABLE command_store DROP CONSTRAINT command_store_pkey

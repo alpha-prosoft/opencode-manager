@@ -2,13 +2,13 @@
   "The OpenCode configuration and sandbox a workflow's session runs with.
    Sandboxes reach the platform on its sandbox listener
    (:sandbox-service-url) and authenticate with keys derived per session and
-   purpose (manager-svc.auth/derived-key)."
+   purpose (manager-svc.signing/derived-key)."
   (:require [clojure.java.io :as io]
             [clojure.string :as string]
-            [manager-svc.auth :as auth]
             [manager-svc.http :as http]
             [manager-svc.platform.api :as platform]
-            [manager-svc.sessions.api :as sessions]))
+            [manager-svc.sessions.api :as sessions]
+            [manager-svc.signing :as signing]))
 
 (def provider-id "platform")
 
@@ -33,7 +33,7 @@
 
 (defn session-key
   [settings purpose session-id]
-  (auth/derived-key settings purpose session-id))
+  (signing/derived-key settings purpose session-id))
 
 (defn- tool-name
   [k]
@@ -151,12 +151,13 @@
   "The sandbox of a session running a team's workflow with its agent and
    harness, the session's own key and the harness's skills. opts:
    {:session-id :tenant :team-id :workflow :agent :harness :team :prompt
-    :interactive :result-tool :run-id}."
-  [system {:keys [session-id tenant team-id workflow harness] :as opts}]
+    :interactive :result-tool :run-id :definitions-team-id (the team whose
+    definitions these are, when it isn't the session's)}."
+  [system {:keys [session-id tenant team-id definitions-team-id workflow harness] :as opts}]
   (sandbox (:settings system)
            (merge (select-keys opts [:session-id :tenant :team-id :agent :harness :team :prompt
                                      :interactive :result-tool :run-id])
                   {:agent-id (:agent workflow)
                    :password (sessions/secret-key system session-id)
                    :skills (when (seq (:skills harness))
-                             (platform/read-skills system tenant team-id (:skills harness)))})))
+                             (platform/read-skills system tenant (or definitions-team-id team-id) (:skills harness)))})))

@@ -2,7 +2,7 @@
   (:require [clojure.string :as string]
             [clojure.test :refer [deftest is testing]]
             [edd.test.fixture.dal :as mock]
-            [manager-svc.auth :as auth]
+            [manager-svc.cookies :as cookies]
             [manager-svc.sessions.api :as api]
             [manager-svc.sessions.fixtures :as fixtures]
             [manager-svc.opencode :as opencode]
@@ -11,6 +11,7 @@
             [manager-svc.sessions.live :as live]
             [manager-svc.sessions.records :as records]
             [manager-svc.test-support :as support]
+            [manager-svc.tokens :as tokens]
             [manager-svc.workers :as workers]))
 
 (def session-id #uuid "11111111-1111-1111-1111-111111111111")
@@ -24,8 +25,8 @@
 
 (defn- login-cookie
   [system username]
-  (str (auth/login-cookie (:settings system)) "="
-       (auth/login-token (:settings system) (identity-of username))))
+  (str (cookies/login-cookie (:settings system)) "="
+       (support/platform-token (:settings system) (identity-of username))))
 
 (defn- session-cookie
   ([system username]
@@ -33,15 +34,15 @@
   ([system username sid]
    (session-cookie system username sid (gateway/login-deadline (:settings system))))
   ([system username sid until]
-   (str (auth/session-cookie (:settings system)) "="
-        (auth/session-token (:settings system) (identity-of username) sid until))))
+   (str (cookies/session-cookie (:settings system)) "="
+        (tokens/session-token (:settings system) (identity-of username) sid until))))
 
 (defn- cookie-claims
   "Claims of the session-host token a response sets."
   [system response]
   (let [[_ token]
         (re-find #"oc_session=([^;]+)" (str (get-in response [:headers "Set-Cookie"])))]
-    (auth/read-session-token (:settings system) token (str session-id))))
+    (tokens/read-session-token (:settings system) token (str session-id))))
 
 (defn- epoch-seconds
   []
@@ -61,7 +62,7 @@
 
 (defn- handoff
   [system username]
-  (auth/handoff-token (:settings system) (identity-of username) (str session-id)))
+  (tokens/handoff-token (:settings system) (identity-of username) (str session-id)))
 
 (deftest forward-auth-decisions
   (mock/with-mock-dal
@@ -129,8 +130,8 @@
                     (+ (epoch-seconds) 7200)
 
                     old
-                    (auth/issue (:settings system) (identity-of "carol") auth/session-audience 60
-                                {:sid (str session-id) :until until})
+                    (with-redefs [tokens/session-ttl-seconds 60]
+                      (tokens/session-token (:settings system) (identity-of "carol") session-id until))
 
                     response
                     (forward-auth-with system "/" {"cookie" (str "oc_session=" old)})]
@@ -192,7 +193,7 @@
           (testing "a cookie that names no end is not accepted"
             (is
              (= [302 entry]
-                (answer (str "oc_session=" (auth/session-token (:settings system) (identity-of "carol") (str session-id) nil)))))))))))
+                (answer (str "oc_session=" (tokens/session-token (:settings system) (identity-of "carol") (str session-id) nil)))))))))))
 
 (deftest session-hosts-accept-only-their-own-cookie
   (mock/with-mock-dal
@@ -210,6 +211,11 @@
           (is
            (= entry
               (get-in (forward-auth-with system "/" {"cookie" (login-cookie system "bob")}) [:headers "Location"]))))
+        (testing "nor is a platform token in the session host's cookie"
+          (is
+           (= entry
+              (get-in (forward-auth-with system "/" {"cookie" (str "oc_session=" (support/platform-token (:settings system) (identity-of "bob")))})
+                      [:headers "Location"]))))
         (testing "a session cookie of another session is not accepted"
           (is
            (= entry
@@ -340,7 +346,7 @@
                (string/starts-with? location (str "http://" session-id ".example.test/L3Nlc3Npb24vd29ya3NwYWNl/session/ses_abcdefgh12?oc_handoff=")))
               (is
                (= "bob"
-                  (:sub (auth/read-handoff (:settings system) token (str session-id)))))))
+                  (:sub (tokens/read-handoff (:settings system) token (str session-id)))))))
           (is
            (= 422
               (:status (enter "bob" path {:conversation "../etc"}))))
@@ -348,6 +354,49 @@
             (is
              (= 404
                 (:status (enter "bob" (str "/sessions/%zz/" session-id)))))))))))
+
+(deftest the-platform-token-never-reaches-a-session-host
+  (mock/with-mock-dal
+    (let [system
+          (fixtures/system)
+
+          ctx
+          (fixtures/ctx system)
+
+          leaked
+          #(support/platform-tokens-in (:settings system) %)]
+      (fixtures/with-domains ctx
+        (fixtures/create-session! system ctx {:id session-id :owner "bob" :visibility :private})
+        (fixtures/set-status! system session-id :running)
+        (with-redefs [opencode/healthy? (fn [_ _] true)]
+          (let [entered
+                (gateway/enter system {:method :get
+                                       :path (str "/sessions/bob/" session-id)
+                                       :query {}
+                                       :headers {"cookie" (login-cookie system "bob")}})
+
+                handoff-uri
+                (str "/?oc_handoff=" (second (string/split (get-in entered [:headers "Location"]) #"oc_handoff=")))
+
+                handed-over
+                (forward-auth-with system handoff-uri {})
+
+                admitted
+                (forward-auth system "/" "bob")]
+            (testing "the handoff carries the person, not their platform token"
+              (is
+               (= [303 []]
+                  [(:status entered) (leaked entered)])))
+            (testing "the session host's cookie is its own token"
+              (is
+               (= [302 true []]
+                  [(:status handed-over)
+                   (string/starts-with? (get-in handed-over [:headers "Set-Cookie"]) "oc_session=")
+                   (leaked handed-over)])))
+            (testing "what Traefik passes on to the sandbox is the session's secret"
+              (is
+               (= [200 []]
+                  [(:status admitted) (leaked admitted)])))))))))
 
 (deftest waking
   (mock/with-mock-dal

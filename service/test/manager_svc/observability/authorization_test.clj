@@ -4,13 +4,13 @@
   (:require [clojure.test :refer [deftest is testing]]
             [edd.security :as security]
             [edd.test.fixture.dal :as mock]
-            [manager-svc.auth :as auth]
             [manager-svc.client :as client]
+            [manager-svc.edge.listener :as listener]
             [manager-svc.observability.core :as core]
             [manager-svc.observability.edge :as edge]
-            [manager-svc.observability.metrics :as metrics]
             [manager-svc.sessions.api :as sessions]
-            [manager-svc.test-support :as support]))
+            [manager-svc.test-support :as support]
+            [manager-svc.tokens :as tokens]))
 
 (def session-id
   #uuid "6f1c5a43-5555-4a52-9c1b-6a3f0b6a0001")
@@ -94,13 +94,12 @@
   ([username]
    (cookies-of username {}))
   ([username opts]
-   {"oc_auth" (auth/login-token support/settings
-                                (merge {:sub username
-                                        :email (str username "@users.local")
-                                        :name username
-                                        :tenant "acme"
-                                        :teams {}}
-                                       opts))}))
+   {"oc_auth" (support/platform-token (merge {:sub username
+                                              :email (str username "@users.local")
+                                              :name username
+                                              :tenant "acme"
+                                              :teams {}}
+                                             opts))}))
 
 (deftest metrics-are-for-operators
   (with-private-session
@@ -111,7 +110,7 @@
 
             scrape
             (fn [cookies]
-              (status #(metrics/handler system {:cookies cookies :headers {}})))]
+              (status #(listener/answer system {:routes edge/routes} {:method :get :path "/metrics" :cookies cookies :headers {}})))]
         (is
          (= {:anonymous 401 :member 403 :tenant-admin 403 :operator :ok}
             {:anonymous (scrape {})
@@ -122,18 +121,22 @@
 (deftest the-audit-export-reads-as-the-caller
   (let [asked
         (atom [])]
-    (with-redefs [client/query-as (fn [_ token query]
-                                    (swap! asked conj [(:sub (auth/person support/settings token)) (:session-id query)])
+    (with-redefs [client/query-as (fn [_settings token query]
+                                    (swap! asked conj [(:sub (tokens/person support/settings token)) (:session-id query)])
                                     [])]
       (let [system
             {:settings support/settings}
 
             path
-            (str "/api/sessions/" session-id "/audit/export")]
+            (str "/api/sessions/" session-id "/audit/export")
+
+            export
+            (fn [cookies]
+              (listener/answer system {:routes edge/routes} {:method :get :path path :cookies cookies :headers {}}))]
         (is
          (= 401
-            (status #(edge/export-audit system {:path path :cookies {} :headers {}}))))
-        (edge/export-audit system {:path path :cookies (cookies-of "alice") :headers {}})
+            (status #(export {}))))
+        (export (cookies-of "alice"))
         (is
          (= [["alice" (str session-id)]]
             @asked))))))

@@ -6,9 +6,9 @@
      (register ctx)         edd commands, events and queries
      (components settings)  stateful components merged into the system map,
                             keyed :<domain>/<name>
-     routes                 public edge routes (manager-svc.edge.server)
+     routes                 routes of the public listener (manager-svc.edge.listener)
      sandbox-routes         routes of the sandbox listener (gateways sandboxes call)
-     host-handlers          public edge host handlers
+     host-handlers          host handlers of the public listener
      (workers system)       background jobs (manager-svc.workers)")
 
 (defn of

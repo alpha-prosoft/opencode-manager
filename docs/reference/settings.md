@@ -101,7 +101,7 @@ With `MANAGER_STORE=postgres` the database connection comes from two variables w
 | `MANAGER_PUBLIC_PORT_INTERNAL` | `8000` | Port of the public listener: UI, API, login, webhooks, session access checks, `/metrics`. | — |
 | `MANAGER_SANDBOX_BIND_HOST` | `0.0.0.0` | Address the sandbox listener binds to. | — |
 | `MANAGER_SANDBOX_PORT` | `8001` | Port of the sandbox listener: LLM gateway, MCP gateway, result tools, telemetry. | — |
-| `MANAGER_EDD_PORT` | `8081` | Port of the internal command and query service, bound to `127.0.0.1`. | — |
+| `MANAGER_EDD_PORT` | `8002` | Port edd answers on, bound to 127.0.0.1 for the manager's own requests. Never publish it. | — |
 | `MANAGER_MANAGER_SERVICE_URL` | `http://manager:8000` | Where the router reaches the public listener for session access checks. | set by the chart |
 | `MANAGER_SANDBOX_SERVICE_URL` | `http://manager:8001` | Where sessions reach the sandbox listener. | set by the chart |
 | `MANAGER_MAX_BODY_BYTES` | `1048576` | Largest request body on both listeners (1 MB). | — |

@@ -240,7 +240,7 @@ A workflow with `"project": "<id>"` takes what it leaves out from that project o
 | `implement` | `options.repository` (clone URL, branch, credential), `options.pull_request` and, when the project has `ci.job`, `options.ci` (`mcp_server`, `job`). The workflow adds `on_failure` and `timeout_minutes`. |
 | `session`, `analysis` | `options.repository` |
 
-Anything the workflow sets itself wins. The resolved trigger and options are what the platform validates and what the team's page shows. Runs of such a workflow, their sessions and forks carry the project, so lists can be filtered by it.
+Anything the workflow sets itself wins. The resolved trigger and options are what the platform validates and what the team's page shows. Runs of such a workflow, their sessions and forks that stay in the team carry the project, so lists can be filtered by it.
 
 ```json
 {

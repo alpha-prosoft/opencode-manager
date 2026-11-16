@@ -63,7 +63,7 @@
              (= (:tenant-admin h/fixture)
                 (string/lower-case (h/text shell-els/user-name))))
             (is
-             (= (str "Tenant admin of " (:tenant h/fixture))
+             (= "Tenant admin"
                 (h/text shell-els/user-role)))
             (is
              (= (:tenant h/fixture)

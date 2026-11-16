@@ -50,7 +50,7 @@ A secret that is used but not declared under `credentials` (for example an LLM c
 
 **Team sessions and automated runs have no person.** Sessions started by a schedule, a trigger, a webhook or **Team session** belong to the platform, so step 1 never applies to them: they use the team's value, else the tenant's. A workflow that starts automatically and needs a credential whose `provided_by` is only `user` is invalid at sync.
 
-**A fork uses the forking person's values.** The same order applies, with their own value first.
+**A fork uses the forking person's values.** The same order applies in the team the fork landed in, the one the person chose when forking: their own value first, then that team's, then the tenant's. A value of the source's team is never used when the fork landed in another team.
 
 Every MCP tool call is written to the session's audit trail with which kind of value was used: a personal one or a shared one.
 
@@ -93,7 +93,7 @@ Both need `user` in the credential's `provided_by`; the sync refuses the file ot
 The rules:
 
 - **Only the person's own value satisfies the requirement.** A team or tenant value is still used for calls, but doesn't count.
-- **It applies to teams named in the person's claims.** A tenant admin who administers a team without being its member is not held to that team's requirements, and neither is someone who forks a session from outside the team.
+- **It applies to teams named in the person's claims.** A tenant admin who administers a team without being its member is not held to that team's requirements. A fork is held to the requirements of the team it lands in, which is always one of the person's own.
 - **It never applies to the platform.** Scheduled, triggered and webhook-started runs need no person's value.
 - **Running sessions are left alone.** A new requirement doesn't stop work in progress.
 
@@ -103,7 +103,7 @@ What a person who lacks a required credential experiences:
 |---|---|
 | Every page | They are sent to **Connect your accounts** (`/setup`). **Do this later** is disabled and the page says *Your teams require the credentials marked required. The platform opens once you have added them.* They leave only by adding the credential or signing out. |
 | Admin (tenant admins), Tenants (operators) | Stay open, so that a requirement nobody can meet can be repaired. |
-| Starting a run, a team session, a retry or a fork in the team | Refused with `422`: *Team Operations requires your own Jira credential. Add it under Accounts, then start again; team and tenant values don't count.* |
+| Starting a run, a team session or a retry in the team, or forking into it | Refused with `422`: *Team Operations requires your own Jira credential. Add it under Accounts, then start again; team and tenant values don't count.* |
 
 **Connect your accounts** lists required credentials first. **Team settings** and **Admin → Credentials** show which credentials are required and whether `tenant.json` or `team.json` requires them.
 

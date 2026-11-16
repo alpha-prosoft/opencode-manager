@@ -9,7 +9,7 @@
             [manager-svc.credentials.api :as credentials-api]
             [manager-svc.credentials.mcp :as mcp]
             [manager-svc.credentials.spec :as spec]
-            [manager-svc.edge.server :as server]
+            [manager-svc.edge.http :as edge-http]
             [manager-svc.errors :as errors]
             [manager-svc.http :as http]
             [manager-svc.observability.api :as observability-api]
@@ -46,8 +46,8 @@
         (for [m messages
               :when (contains? m :id)]
           {:jsonrpc "2.0" :id (:id m) :error {:code -32001 :message message}})]
-    (server/json (if (seq errors) 200 403)
-                 (if (= 1 (count errors)) (first errors) (vec errors)))))
+    (edge-http/json (if (seq errors) 200 403)
+                    (if (= 1 (count errors)) (first errors) (vec errors)))))
 
 (defn- filter-tools
   [payload allowed]
@@ -165,7 +165,7 @@
         (available-server! system session server-id)
 
         body
-        (server/body-text request)
+        (edge-http/body-text request)
 
         rpc
         (if (= :post (:method request)) (messages body) [])
@@ -240,7 +240,7 @@
   [system request]
   (if (contains? #{:get :post :delete} (:method request))
     (forward system request)
-    (server/error 405 "Method not allowed")))
+    (edge-http/error 405 "Method not allowed")))
 
 (def sandbox-routes
   [{:method :any :prefix prefix :handler handler}])

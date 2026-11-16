@@ -100,7 +100,7 @@ If the test fails, check the connection's secret under **Credentials** and its a
 4. A credential with a test is checked against its service first; a wrong value is refused and not stored.
 
 <figure markdown>
-![Setting the tenant's value. It is stored encrypted and never shown again, only a short hint.](img/tn08-set-tenant-credential.png){ loading=lazy width="912" }
+![Setting the tenant's value. It is stored encrypted and never shown again, only a short hint.](img/tn08-set-tenant-credential.png){ loading=lazy width="924" }
 <figcaption>Setting the tenant's value. It is stored encrypted and never shown again, only a short hint.</figcaption>
 </figure>
 

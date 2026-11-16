@@ -2,7 +2,7 @@
   (:require [clojure.java.io :as io]
             [clojure.test :refer [deftest is testing]]
             [jsonista.core :as json]
-            [manager-svc.auth :as auth]
+            [manager-svc.edge.listener :as listener]
             [manager-svc.platform.api :as api]
             [manager-svc.platform.reload :as reload]
             [manager-svc.platform.tenants :as tenants]
@@ -139,8 +139,13 @@
         call
         (fn [identity]
           (let [token
-                (when identity (auth/login-token settings identity))]
-            (reload/handler system {:cookies (if token {"oc_auth" token} {}) :headers {}})))]
+                (when identity (support/platform-token settings identity))]
+            (listener/answer system
+                             {:routes reload/routes}
+                             {:method :post
+                              :path "/api/admin/reload-config"
+                              :cookies (if token {"oc_auth" token} {})
+                              :headers {}})))]
     (write! file [{:name "acme" :onboarding "/repos/acme"}] 1000000)
     (is
      (= 401

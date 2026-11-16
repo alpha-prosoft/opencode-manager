@@ -7,7 +7,7 @@ This page is for team admins who want agent work to start without someone pressi
 A run that nobody started runs **as the platform, in the team's scope**. That has three consequences:
 
 - **Credentials.** It uses the team's value of a credential, else the tenant's. It never uses a person's. A workflow that runs automatically and needs a credential only people provide (`"provided_by": ["user"]`) is marked invalid at sync.
-- **Ownership.** Its session is a **team session**: it belongs to the team, not to a person. Only the team's members and tenant admins may work in it, however widely it is shared. Others who can see it fork it and continue in their own copy with their own credentials.
+- **Ownership.** Its session is a **team session**: it belongs to the team, not to a person. Only the team's members and tenant admins may work in it, however widely it is shared. Others who can see it fork it and continue in their own copy, in a team of their own, with their own credentials.
 - **Requirements.** Required credentials are asked of people, not of the platform, so they never stop an automated run.
 - **Session limit.** The team's `max_running_sessions` still counts: an automated run that would exceed it fails when it tries to create its session, with the limit's message.
 

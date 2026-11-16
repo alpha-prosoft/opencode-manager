@@ -565,7 +565,7 @@
             (:settings system)
 
             link
-            (str (config/public-url settings (:domain settings)) "/runs/" (:id run))
+            (str (config/public-url settings (:domain settings)) "/" (:tenant run) "/runs/" (:id run))
 
             verdict
             (get-in run [:result :review :verdict])

@@ -105,7 +105,7 @@ A **team session** belongs to the team, not to a person. It works with the team'
 <figcaption>The start dialog of a team session. <strong>Runs as</strong> names the team: the session uses the team's and the tenant's credentials, nobody's personal ones.</figcaption>
 </figure>
 
-People outside the team who can see a team session can't work in it; they fork it and continue in their own copy. Sessions started by schedules and triggers are team sessions too.
+People outside the team who can see a team session can't work in it; they fork it and continue in their own copy, in a team of their own. Sessions started by schedules and triggers are team sessions too.
 
 ## Projects
 

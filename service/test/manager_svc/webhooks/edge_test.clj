@@ -2,10 +2,11 @@
   (:require [clojure.string :as string]
             [clojure.test :refer [deftest is testing]]
             [lambda.util :as util]
-            [manager-svc.auth :as auth]
             [manager-svc.client :as client]
-            [manager-svc.edge.server :as server]
+            [manager-svc.cookies :as cookies]
+            [manager-svc.edge.listener :as listener]
             [manager-svc.http :as http]
+            [manager-svc.test-support :as support]
             [manager-svc.webhooks.delivery :as delivery]
             [manager-svc.webhooks.edge :as edge]
             [manager-svc.webhooks.fixtures :as fixtures]
@@ -88,23 +89,23 @@
 
 (defn- token-of
   [username]
-  (auth/login-token fixtures/settings
-                    (auth/identity-of fixtures/settings (merge {:sub username :tenant "acme"} (get fixtures/people username)))))
+  (support/platform-token fixtures/settings (merge {:sub username :tenant "acme"} (get fixtures/people username))))
 
 (defn- request
-  [method path & {:keys [body username headers remote-addr]}]
+  [method path & {:keys [body username remote-addr forwarded-for]}]
   {:method method
    :path path
    :query {}
-   :headers (or headers {})
+   :headers {}
    :remote-addr remote-addr
-   :cookies (if username {(auth/login-cookie fixtures/settings) (token-of username)} {})
+   :forwarded-for forwarded-for
+   :cookies (if username {(cookies/login-cookie fixtures/settings) (token-of username)} {})
    :body (ByteArrayInputStream. (.getBytes (str body) StandardCharsets/UTF_8))})
 
 (defn- call
   [system request]
   (try
-    ((:handler (server/route edge/routes request)) system request)
+    (listener/answer system {:routes edge/routes} request)
     (catch clojure.lang.ExceptionInfo e
       (select-keys (ex-data e) [:status :message]))))
 
@@ -116,9 +117,9 @@
   "Runs body with edd answering every command with answer (a JSON text);
    sent collects the request bodies."
   [sent answer & body]
-  `(with-redefs [client/post-raw (fn [_# path# _# text#]
-                                   (swap! ~sent conj [path# text#])
-                                   {:status 200 :body ~answer})
+  `(with-redefs [client/request-raw (fn [_settings# path# _# text#]
+                                      (swap! ~sent conj [path# text#])
+                                      {:status 200 :body ~answer})
                  workers/kick! (fn [])]
      ~@body))
 
@@ -222,6 +223,10 @@
         (is
          (= {:status 202 :body {:run-id "r1"}}
             (select-keys response [:status :body])))
+        (testing "the caller's platform token is not sent along"
+          (is
+           (= []
+              (support/platform-tokens-in fixtures/settings @called))))
         (testing "what it shows of the request hides the secret and the token"
           (is
            (= ["[redacted]" "[redacted]" "push"]
@@ -245,7 +250,7 @@
 
         from
         (fn [system peer forwarded]
-          (get-in (delivered system (request :post path :remote-addr peer :headers {"x-forwarded-for" forwarded}))
+          (get-in (delivered system (request :post path :remote-addr peer :forwarded-for forwarded))
                   [:delivered :source-ip]))]
     (testing "without trusted proxies X-Forwarded-For is never believed"
       (is

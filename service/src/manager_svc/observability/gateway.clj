@@ -10,9 +10,8 @@
    the usage block."
   (:require [clojure.string :as string]
             [clojure.tools.logging :as log]
-            [manager-svc.auth :as auth]
             [manager-svc.credentials.api :as credentials]
-            [manager-svc.edge.server :as server]
+            [manager-svc.edge.http :as edge-http]
             [manager-svc.errors :as errors]
             [manager-svc.observability.api :as api]
             [manager-svc.observability.json :as json]
@@ -44,7 +43,7 @@
 (defn- context
   [system request]
   (let [session
-        (session-of-key! system (auth/bearer (get-in request [:headers "authorization"])) #{"llm"})
+        (session-of-key! system (edge-http/bearer (get-in request [:headers "authorization"])) #{"llm"})
 
         box
         (sandbox session)
@@ -62,9 +61,9 @@
   [system request]
   (let [{:keys [sandbox]}
         (context system request)]
-    (server/json {:object "list"
-                  :data (mapv (fn [model] {:id model :object "model" :owned_by "platform"})
-                              (:llm-models sandbox))})))
+    (edge-http/json {:object "list"
+                     :data (mapv (fn [model] {:id model :object "model" :owned_by "platform"})
+                                 (:llm-models sandbox))})))
 
 (defn usage-of
   "[prompt completion cached] from an OpenAI payload (string keys)."
@@ -96,7 +95,7 @@
 (defn- validated-body!
   [request sandbox]
   (let [body
-        (json/read-str (server/body-text request))
+        (json/read-str (edge-http/body-text request))
 
         model
         (get body "model")]

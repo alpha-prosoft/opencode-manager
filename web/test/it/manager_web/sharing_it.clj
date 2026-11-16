@@ -55,7 +55,7 @@
 
       (step "Someone outside the team can't see a private session"
             (fn []
-              (as (:teamless h/fixture))
+              (as (:outside-team h/fixture))
               (is
                (= els/error
                   (goto-session @session-id)))))
@@ -63,7 +63,7 @@
       (step "Shared with the team, it is still hidden from people outside it"
             (fn []
               (share :team)
-              (as (:teamless h/fixture))
+              (as (:outside-team h/fixture))
               (is
                (= els/error
                   (goto-session @session-id)))))
@@ -71,7 +71,7 @@
       (step "Shared with the tenant, everyone in the tenant sees it"
             (fn []
               (share :tenant)
-              (as (:teamless h/fixture))
+              (as (:outside-team h/fixture))
               (is
                (= els/page
                   (goto-session @session-id)))
@@ -154,7 +154,7 @@
               (is
                (true?
                 (.isVisible (h/wait-visible (component-els/session-action :open (first @run-sessions))))))
-              (as (:teamless h/fixture))
+              (as (:outside-team h/fixture))
               (is
                (= els/error
                   (goto-session (first @run-sessions))))))

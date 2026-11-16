@@ -1,102 +1,58 @@
 (ns manager-svc.main
   (:gen-class)
-  (:require [clojure.tools.logging :as log]
-            [edd.core :as edd]
-            [edd.ctx :as edd-ctx]
-            [edd.distribution :as distribution]
-            [edd.distribution.router :as router]
+  (:require [edd.core :as edd]
             [edd.undertow.core :as undertow]
-            [lambda.ctx :as lambda-ctx]
-            [lambda.util :as util]
             [manager-svc.auth :as auth]
+            [manager-svc.client :as client]
             [manager-svc.config :as config]
-            [manager-svc.edge.server :as edge]
+            [manager-svc.edge.listener :as listener]
             [manager-svc.module :as module]
-            [manager-svc.oidc :as oidc]
-            [manager-svc.platform.tenants :as tenants]
             [manager-svc.service :as service]
-            [manager-svc.workers :as workers])
-  (:import [java.util.concurrent ExecutorService]))
+            [manager-svc.system :as system]
+            [manager-svc.workers :as workers]))
 
 (set! *warn-on-reflection* true)
 
-(defn- start-router!
-  "Effects and events go to the router destination; routing them in-process
-   moves them to this service's command and event destinations."
-  [ctx]
-  (distribution/start-consumer!
-   ctx
-   (distribution/response-destination ctx)
-   (fn [record]
-     (router/handle-record ctx (util/to-edn (:body record)))
-     true)))
-
-(defn public-listener
+(defn- public-listener
   "People and Traefik: the UI, its API, login and session forward-auth."
-  [settings]
-  {:name :public
-   :routes (module/routes)
-   :host-handlers (module/host-handlers)
-   :host (:public-bind-host settings)
-   :port (:public-port-internal settings)
-   :max-body-bytes (:max-body-bytes settings)
-   :origin (config/public-url settings (:domain settings))})
+  [{:keys [settings] :as system}]
+  (merge (listener/limits settings)
+         {:host (:public-bind-host settings)
+          :port (:public-port-internal settings)
+          :handler (listener/handler system {:routes (module/routes)
+                                             :host-handlers (module/host-handlers)
+                                             :origin (config/public-url settings (:domain settings))})}))
 
-(defn sandbox-listener
+(defn- sandbox-listener
   "Sandboxes: the LLM and MCP gateways, result tools and telemetry, nothing else."
-  [settings]
-  {:name :sandbox
-   :routes (module/sandbox-routes)
-   :host (:sandbox-bind-host settings)
-   :port (:sandbox-port settings)
-   :max-body-bytes (:max-body-bytes settings)})
+  [{:keys [settings] :as system}]
+  (merge (listener/limits settings)
+         {:host (:sandbox-bind-host settings)
+          :port (:sandbox-port settings)
+          :handler (listener/handler system {:routes (module/sandbox-routes)})}))
 
 (defn start
-  [settings & {:keys [workers?] :or {workers? true}}]
-  (auth/check-settings! settings)
-  (oidc/check-settings! settings)
-  (tenants/check-settings! settings)
-  (let [system
-        (module/build settings)
-
-        ctx
-        (service/init {} system)
-
-        runtime
-        (undertow/start ctx edd/handler
-                        :port (:edd-port settings)
-                        :host "127.0.0.1")
-
-        stop-router
-        (start-router! (edd-ctx/init-features (lambda-ctx/init ctx)))
-
-        edge-servers
-        [(edge/start system (public-listener settings))
-         (edge/start system (sandbox-listener settings))]
-
-        pool
-        (when workers?
-          (workers/start system (module/workers system)))]
-    {:system system
-     :runtime runtime
-     :stop-router stop-router
-     :edge edge-servers
-     :workers pool}))
-
-(defn stop
-  "Stops jobs first, then every executor a domain owns, then the listeners."
-  [{:keys [system runtime stop-router edge workers]}]
-  (when workers (workers/stop workers))
-  (doseq [component (vals system)
-          :when (instance? ExecutorService component)]
-    (.shutdownNow ^ExecutorService component))
-  (run! edge/stop edge)
-  (stop-router)
-  (undertow/stop runtime))
+  "One edd runtime: edd answers on loopback only (manager-svc.client), its
+   other listeners serve people and sandboxes."
+  [ctx & opts]
+  (let [{:keys [settings] :as system}
+        (system/of ctx)]
+    (apply undertow/start
+           ctx
+           edd/handler
+           :filters [(auth/authenticate settings)]
+           :listeners {:default {:host client/edd-host
+                                 :port (:edd-port settings)}
+                       :public (public-listener system)
+                       :sandbox (sandbox-listener system)}
+           opts)))
 
 (defn -main
   [& _args]
-  (let [settings
-        (config/load-settings)]
-    (log/info "Starting manager" (select-keys settings [:backend :router :store :domain :auth-mode]))
-    (start settings)))
+  (let [ctx
+        (service/init {})
+
+        system
+        (system/of ctx)]
+    (start ctx)
+    (workers/start system (module/workers system))))

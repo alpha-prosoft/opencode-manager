@@ -270,7 +270,7 @@
       (ask-in-opencode! questions "Tests" "gemini-3.5-flash" "Run the tests and tell me the result.")
       (answered! "bob's second question" questions 4))
     (when-not (session fork)
-      (command! :fork-session fork {:source-id (str "#" walkthrough)}))
+      (command! :fork-session fork {:source-id (str "#" walkthrough) :team-id "demo"}))
     (wait-for "fork to run" h/session-timeout-ms #(= :running (:status (session fork))))))
 
 (defn- dave-stops-his-session

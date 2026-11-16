@@ -206,7 +206,7 @@ A **session** is one sandbox: a locked-down container with OpenCode, your team's
 6. Come back to the session's page to stop, share, rename or delete it.
 
 <figure markdown>
-![Starting a workspace. Shared with decides, before it starts, whether the session is only yours, your team's or visible to the whole tenant.](img/m17-start-session.png){ loading=lazy width="1192" }
+![Starting a workspace. Shared with decides, before it starts, whether the session is only yours, your team's or visible to the whole tenant.](img/m17-start-session.png){ loading=lazy width="1105" }
 <figcaption>Starting a workspace. <strong>Shared with</strong> decides, before it starts, whether the session is only yours, your team's or visible to the whole tenant.</figcaption>
 </figure>
 
@@ -306,12 +306,13 @@ You decide who sees a session you own. Seeing is not the same as working in it: 
 
 ## Forking a session you can't work in
 
-A **fork** is your own private copy of a session: its files and conversations up to that moment, in your name, in the same team. Use it to continue from somebody else's work, from a team session or from a locked one.
+A **fork** is your own private copy of a session: its files and conversations up to that moment, in your name, in a team of yours. Use it to continue from somebody else's work, from a team session or from a locked one.
 
 1. Open the session (from **Sessions**, a run, or the search).
 2. Select **Fork** in its actions, or **Fork to continue** in the banner.
-3. Confirm with **Fork session**. Your copy opens; it is private until you share it.
-4. Work in the copy with **Open**.
+3. Choose the **Team** the copy belongs to. The session's team is chosen for you when you are in it; the copy works with your own credentials, then that team's, then the tenant's.
+4. Confirm with **Fork session**. Your copy opens; it is private until you share it.
+5. Work in the copy with **Open**.
 
 <figure markdown>
 ![A team session of a team you are not in. The banner says why you can't work in it and offers the fork.](img/m26-team-session.png){ loading=lazy width="1194" }
@@ -324,11 +325,11 @@ A **fork** is your own private copy of a session: its files and conversations up
 </figure>
 
 <figure markdown>
-![The fork is private and yours; the original stays as it is.](img/m28-fork-confirm.png){ loading=lazy width="673" }
-<figcaption>The fork is private and yours; the original stays as it is.</figcaption>
+![The fork is private and yours, in the team you choose; the original stays as it is.](img/m28-fork-confirm.png){ loading=lazy width="685" }
+<figcaption>The fork is private and yours, in the team you choose; the original stays as it is.</figcaption>
 </figure>
 
-A fork counts as one of the team's running sessions, and it needs the credentials the team requires of you, like anything else you start.
+A fork counts as one of the running sessions of the team you choose, and it needs the credentials that team requires of you, like anything else you start. A team that is not granted what the session uses (its model, its tools) can't take the fork; the dialog says what is missing.
 
 ## Runs and Sessions
 

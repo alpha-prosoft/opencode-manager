@@ -40,7 +40,7 @@
             (h/logout)
             (h/login (:tenant-admin h/fixture))
             (is
-             (= (str "Tenant admin of " (:tenant h/fixture))
+             (= "Tenant admin"
                 (h/text shell-els/user-role)))
             (h/wait-visible home-els/page)
             (h/wait-visible (component-els/workflow-team-link (:team h/fixture)))

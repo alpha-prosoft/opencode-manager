@@ -153,6 +153,16 @@
   (boolean (when-let [entry (team system tenant team-id)]
              (registry/team-may-use? (tenant-spec system tenant) entry credential-id))))
 
+(defn missing-grants
+  "Why the team may not run a harness of another team of its tenant, as
+   the sync says it of the team's own harnesses: its image, LLM connection
+   and models, MCP servers and their credentials. Empty when it may, or
+   when the tenant has no such team."
+  [system tenant team-id harness-spec]
+  (if-let [entry (team system tenant team-id)]
+    (registry/harness-grant-errors (tenant-spec system tenant) entry harness-spec)
+    []))
+
 (def in-scope?
   spec/in-scope?)
 

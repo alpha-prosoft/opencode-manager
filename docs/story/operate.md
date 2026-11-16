@@ -142,6 +142,8 @@ Useful things to alert on: a rising `opencode_llm_errors_total` (the LLM provide
 
 **Admin → Background jobs** shows tenant admins the recurring jobs of their tenant: **Sync repositories**, **Stop idle sessions**, and one line per workflow trigger, **Run on a schedule (…)** or **Check for new pull requests (…)**.
 
+When a run, a session or a sync is stuck, [Architecture](../reference/architecture.md#where-to-look-when-something-is-stuck) says which background job or effect carries each step out and where to look.
+
 ## Before you go live
 
 Go through this list once. Each item names the setting or page that covers it.

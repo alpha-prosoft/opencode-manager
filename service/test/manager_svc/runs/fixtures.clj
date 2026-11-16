@@ -4,7 +4,6 @@
   (:require [clojure.string :as string]
             [edd.core :as edd]
             [edd.security :as security]
-            [manager-svc.auth :as auth]
             [manager-svc.client :as client]
             [edd.test.fixture.dal :as mock]
             [malli.core :as m]
@@ -15,6 +14,7 @@
             [manager-svc.roles :as roles]
             [manager-svc.runs.core :as core]
             [manager-svc.sessions.api :as sessions]
+            [manager-svc.signing :as signing]
             [manager-svc.test-support :as support]))
 
 (def tenant
@@ -115,7 +115,7 @@
                           message messages]
                       (str (name k) ": " message)))})))
 
-(defn- definition
+(defn definition
   [tenant-name _team-id kind id]
   (when (= tenant tenant-name)
     (when-let [spec (get (case kind :workflows workflows :agents agents :harnesses harnesses) id)]
@@ -175,7 +175,7 @@
                                   session))
    #'sessions/secret-key (fn [_ _session-id] "pw")
    #'sessions/session-by-key (fn [system key purposes]
-                               (some->> (auth/derived-key-owner (:settings system) key purposes) (get @store)))
+                               (some->> (signing/derived-key-owner (:settings system) key purposes) (get @store)))
    #'sessions/hand-over! (fn [_ session-id] (swap! store assoc-in [session-id :handed-over] true))
    #'sessions/start-session! (fn [_ session-id] (swap! store assoc-in [session-id :started] true))
    #'sessions/ready? (fn [_ session-id] (boolean (get-in @store [session-id :ready])))

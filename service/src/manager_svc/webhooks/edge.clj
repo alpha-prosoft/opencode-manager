@@ -19,7 +19,7 @@
   (:require [clojure.string :as string]
             [manager-svc.client :as client]
             [manager-svc.edge.api :as edge-api]
-            [manager-svc.edge.server :as server]
+            [manager-svc.edge.http :as edge-http]
             [manager-svc.errors :as errors]
             [manager-svc.http :as http]
             [manager-svc.webhooks.delivery :as delivery]
@@ -27,10 +27,8 @@
             [manager-svc.webhooks.verify :as verify]
             [manager-svc.webhooks.workflows :as workflows]
             [manager-svc.workers :as workers])
-  (:import [io.undertow.server HttpServerExchange]
-           [io.undertow.util HeaderValues]
-           [java.io InputStream]
-           [java.net InetAddress InetSocketAddress]
+  (:import [java.io InputStream]
+           [java.net InetAddress]
            [java.nio.charset StandardCharsets]))
 
 (set! *warn-on-reflection* true)
@@ -64,23 +62,6 @@
   (if body
     (.readAllBytes ^InputStream body)
     (byte-array 0)))
-
-(defn- peer
-  [{:keys [remote-addr exchange]}]
-  (or remote-addr
-      (when exchange
-        (let [^InetSocketAddress address
-              (.getSourceAddress ^HttpServerExchange exchange)]
-          (some-> address .getAddress .getHostAddress)))))
-
-(defn- forwarded-for
-  "Every X-Forwarded-For line of the request, joined in order."
-  [{:keys [headers exchange]}]
-  (if-let [^HeaderValues lines
-           (when exchange
-             (.get (.getRequestHeaders ^HttpServerExchange exchange) "X-Forwarded-For"))]
-    (string/join "," lines)
-    (get headers "x-forwarded-for")))
 
 (def proxy-lookup-ms
   "How long the addresses of a proxy named by host are kept."
@@ -151,9 +132,9 @@
   #{:post :put :get})
 
 (defn- deliver-hook
-  [system {:keys [method headers query path] :as request}]
+  [system {:keys [method headers query path remote-addr forwarded-for] :as request}]
   (if-not (contains? delivery-methods method)
-    (server/error 405 "Use POST or PUT")
+    (edge-http/error 405 "Use POST or PUT")
     (let [{:keys [status body] :as response}
           (delivery/handle (ports system)
                            (merge (hook-path path)
@@ -162,9 +143,9 @@
                                    :query (or query {})
                                    :body (when-not (= :get method) (delay (body-bytes request)))
                                    :source-ip (verify/source-ip (trusted-proxies system (System/currentTimeMillis))
-                                                                (peer request)
-                                                                (forwarded-for request))}))]
-      (-> (server/json status body)
+                                                                remote-addr
+                                                                forwarded-for)}))]
+      (-> (edge-http/json status body)
           (update :headers merge (:headers response) {"Cache-Control" "no-store"})))))
 
 (defn- text
@@ -222,12 +203,9 @@
               sealed (assoc :sealed sealed))}))
 
 (defn- save
-  [{:keys [settings]} request]
-  (let [[token identity]
-        (edge-api/person! settings request)
-
-        {:keys [webhook-id]}
-        (api-path (:path request))
+  [{:keys [settings]} {:keys [token identity path] :as request}]
+  (let [{:keys [webhook-id]}
+        (api-path path)
 
         body
         (edge-api/json-object! request "Send the webhook as a JSON object")]
@@ -236,12 +214,9 @@
 (defn- rotate
   "A new secret, answered once the command stored it; the command refuses
    whoever doesn't manage the webhook."
-  [{:keys [settings]} request]
-  (let [[token identity]
-        (edge-api/person! settings request)
-
-        {:keys [webhook-id]}
-        (api-path (:path request))
+  [{:keys [settings]} {:keys [token identity path]}]
+  (let [{:keys [webhook-id]}
+        (api-path path)
 
         secret
         (secrets/generate)
@@ -251,7 +226,7 @@
     (edge-api/command! settings token [{:cmd-id :set-webhook-secret
                                         :id webhook-id
                                         :attrs {:sealed sealed}}])
-    (assoc (server/json {:secret secret}) :headers {"Content-Type" "application/json" "Cache-Control" "no-store"})))
+    (assoc (edge-http/json {:secret secret}) :headers {"Content-Type" "application/json" "Cache-Control" "no-store"})))
 
 (defn- visible-webhook
   [settings token webhook-id]
@@ -317,12 +292,9 @@
       (subs (str body) 0 (min 2000 (count (str body)))))))
 
 (defn- test-send
-  [{:keys [settings] :as system} request]
-  (let [[token identity]
-        (edge-api/person! settings request)
-
-        {:keys [webhook-id]}
-        (api-path (:path request))
+  [{:keys [settings] :as system} {:keys [token identity path] :as request}]
+  (let [{:keys [webhook-id]}
+        (api-path path)
 
         _
         (manageable! (visible-webhook settings token webhook-id))
@@ -340,11 +312,11 @@
 
         response
         (http/request! sent)]
-    (server/json {:status (:status response)
-                  :body (answer-body response)
-                  :request {:method (string/upper-case (name (:method sent)))
-                            :path (subs (:url sent) (string/index-of (:url sent) "/hooks/"))
-                            :headers (delivery/redact-headers webhook (:headers sent))}})))
+    (edge-http/json {:status (:status response)
+                     :body (answer-body response)
+                     :request {:method (string/upper-case (name (:method sent)))
+                               :path (subs (:url sent) (string/index-of (:url sent) "/hooks/"))
+                               :headers (delivery/redact-headers webhook (:headers sent))}})))
 
 (defn- action-of
   [request]
@@ -354,6 +326,6 @@
 
 (def routes
   [{:method :any :prefix "/hooks/" :match #(hook-path (:path %)) :handler deliver-hook}
-   {:method :put :prefix "/api/webhooks/" :match #(= [:save] (action-of %)) :handler save}
-   {:method :post :prefix "/api/webhooks/" :match #(= [:rotate] (action-of %)) :handler rotate}
-   {:method :post :prefix "/api/webhooks/" :match #(= [:test] (action-of %)) :handler test-send}])
+   {:method :put :prefix "/api/webhooks/" :match #(= [:save] (action-of %)) :caller :person :handler save}
+   {:method :post :prefix "/api/webhooks/" :match #(= [:rotate] (action-of %)) :caller :person :handler rotate}
+   {:method :post :prefix "/api/webhooks/" :match #(= [:test] (action-of %)) :caller :person :handler test-send}])

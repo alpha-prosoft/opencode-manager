@@ -13,7 +13,7 @@
   (navigation/register (views/register (state/register ctx))))
 
 (defn edd-gateway
-  "How the sync reads and records aggregates: edd over HTTP as the platform.
+  "How the sync reads and records aggregates: edd in-process as the platform.
    It reads the aggregates it wrote, not their directory rows, so it never
    waits for effects."
   [settings]

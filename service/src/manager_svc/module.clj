@@ -1,9 +1,10 @@
 (ns manager-svc.module
   "The domains of the service, defined once for edd registration and for the
-   system map, edge listeners and workers (contract in manager-svc.system)."
+   system map, the listeners and workers (contract in manager-svc.system)."
   (:require [manager-svc.credentials.core]
             [manager-svc.directory :as directory]
             [manager-svc.edge.api :as edge-api]
+            [manager-svc.edge.login :as login]
             [manager-svc.edge.static :as static]
             [manager-svc.observability.core]
             [manager-svc.platform.core]
@@ -46,7 +47,8 @@
 
 (defn routes
   []
-  (vec (concat edge-api/routes
+  (vec (concat login/routes
+               edge-api/routes
                (mapcat :routes domains)
                static/routes)))
 

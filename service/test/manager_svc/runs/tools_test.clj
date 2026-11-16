@@ -1,11 +1,11 @@
 (ns manager-svc.runs.tools-test
   (:require [clojure.test :refer [deftest is testing]]
             [edd.test.fixture.dal :as mock]
-            [manager-svc.auth :as auth]
             [manager-svc.runs.executor :as executor]
             [manager-svc.runs.fixtures :as f]
             [manager-svc.http :as http]
             [manager-svc.runs.tools :as tools]
+            [manager-svc.signing :as signing]
             [manager-svc.test-support :as support]
             [manager-svc.workers :as workers])
   (:import [java.io ByteArrayInputStream]))
@@ -16,7 +16,7 @@
 
 (defn- mcp-key
   [id]
-  (auth/derived-key support/settings "mcp" id))
+  (signing/derived-key support/settings "mcp" id))
 
 (defn- request
   [body key]

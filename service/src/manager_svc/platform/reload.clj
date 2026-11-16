@@ -11,10 +11,10 @@
    :error} (:identity-provider is nil in login mode), and :new-tenants. A failed reload keeps the last good version.
    Tenants removed from the file are no longer synced; their data stays."
   (:require [clojure.tools.logging :as log]
-            [manager-svc.auth :as auth]
             [manager-svc.claims :as claims]
             [manager-svc.errors :as errors]
             [manager-svc.http :as http]
+            [manager-svc.idp :as idp]
             [manager-svc.platform.api :as api]
             [manager-svc.platform.tenants :as tenants]
             [manager-svc.roles :as roles]))
@@ -52,22 +52,19 @@
   (let [outcomes
         {:claims-parser (claims/reload! settings)
          :tenants (tenants/reload! settings)
-         :identity-provider (auth/reload-keys! settings)}]
+         :identity-provider (idp/reload-keys! settings)}]
     (assoc outcomes :new-tenants (sync-new-tenants! system))))
 
 (defn handler
-  [{:keys [settings] :as system} {:keys [cookies headers]}]
-  (let [identity
-        (auth/resolve-identity settings cookies (get headers "authorization"))]
-    (cond
-      (nil? identity) (errors/fail! 401 "Not authenticated")
-      (not (roles/operator? identity)) (errors/forbidden! roles/operators-only)
-      :else {:status 200
-             :headers {"Content-Type" "application/json"}
-             :body (http/write-json (reload-config! system))})))
+  [system {:keys [identity]}]
+  (when-not (roles/operator? identity)
+    (errors/forbidden! roles/operators-only))
+  {:status 200
+   :headers {"Content-Type" "application/json"}
+   :body (http/write-json (reload-config! system))})
 
 (def routes
-  [{:method :post :path "/api/admin/reload-config" :handler handler}])
+  [{:method :post :path "/api/admin/reload-config" :caller :person :handler handler}])
 
 (defn worker
   [system]

@@ -50,16 +50,26 @@
 
 (defn- set-value
   [scope]
-  (fn [{:keys [settings]} request]
-    (let [[token identity]
-          (edge-api/person! settings request)
-
-          {:keys [credential-id team-id]}
-          (path-parts scope (:path request))]
-      (edge-api/command! settings token
+  (fn [{:keys [settings]} {:keys [token identity path] :as request}]
+    (let [{:keys [credential-id team-id]}
+          (path-parts scope path)]
+      (edge-api/command! settings
+                         token
                          [(sealed-command settings scope credential-id identity (read-value request) team-id)]))))
 
 (def routes
-  [{:method :put :prefix "/api/credentials/" :match #(path-parts :user (:path %)) :handler (set-value :user)}
-   {:method :put :prefix "/api/teams/" :match #(path-parts :team (:path %)) :handler (set-value :team)}
-   {:method :put :prefix "/api/admin/credentials/" :match #(path-parts :tenant (:path %)) :handler (set-value :tenant)}])
+  [{:method :put
+    :prefix "/api/credentials/"
+    :match #(path-parts :user (:path %))
+    :caller :person
+    :handler (set-value :user)}
+   {:method :put
+    :prefix "/api/teams/"
+    :match #(path-parts :team (:path %))
+    :caller :person
+    :handler (set-value :team)}
+   {:method :put
+    :prefix "/api/admin/credentials/"
+    :match #(path-parts :tenant (:path %))
+    :caller :person
+    :handler (set-value :tenant)}])

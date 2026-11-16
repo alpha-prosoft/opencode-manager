@@ -17,7 +17,7 @@ The platform runs AI agents that execute commands and read files. The design ass
 
 ## The two listeners
 
-The manager listens on two ports that share no routes.
+The manager listens on two ports that share no routes. What each route does with a request, and which commands it sends, is in [Architecture](architecture.md).
 
 | Listener | Default port | Serves | Must be reachable by |
 |---|---|---|---|

@@ -61,7 +61,7 @@ If starting the run is refused for a reason the platform can state (for example 
 The run starts **as the platform in the target team's scope**, like a scheduled run:
 
 - it uses the team's credential values, else the tenant's, never a person's;
-- its session belongs to the team; people outside the team fork it to continue;
+- its session belongs to the team; people outside the team fork it into a team of their own to continue;
 - it records its origin: `trigger: {type: "webhook", webhook-id, webhook-name, delivery-id}`.
 
 ## Authentication

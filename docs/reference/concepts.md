@@ -38,31 +38,30 @@ The exact permissions of each role are in [Roles and visibility](roles.md).
 ```text
  Git                             Platform                                   Outside
  ───                             ────────                                   ───────
- Onboarding repository           Manager (UI, API, sync)
-   tenant.json          ──────►    reads tenant.json and team repositories
- Team repositories                 every few minutes
-   .platform/team.json
-   agents, harnesses,            Workers
-   workflows                       start runs, poll pull requests,
-                                   run schedules, stop idle sessions
+ Onboarding repository           Manager (one process)
+   tenant.json          ──────►    public listener: UI, API, login, webhooks
+ Team repositories                 commands, queries and all state
+   .platform/team.json             workers: sync repositories, start and
+   agents, harnesses,              drive runs, poll pull requests, run
+   workflows                       schedules, stop idle sessions
                                         │ starts
                                         ▼
                                  Sandbox network (no internet)
                                    Session ── LLM calls ──► LLM gateway  ──► LLM provider
                                    Session ── tool calls ─► MCP gateway  ──► MCP servers
-                                        │                   (adds the credential,
-                                        │ every event        checks the allow-list)
-                                        ▼
+                                        │                   (sandbox listener of the manager:
+                                        │ every event        adds the credential,
+                                        ▼                    checks the allow-list)
                                  Audit trail (append-only, hash-chained)
 ```
 
 | Part | What it does |
 |---|---|
-| Manager | Serves the UI and API, reads the tenants' repositories, stores all state. |
+| Manager | One process. Its public listener serves the UI, the API, login and the webhook endpoint; it reads the tenants' repositories and stores all state. There is no separate internal server: requests, workers and gateways run commands and queries inside the same process. |
 | Workers | Background jobs inside the manager: they start sandboxes, drive runs, poll for pull requests, run schedules and stop idle sessions. |
 | Session | A container with OpenCode. It has no credentials and, unless its harness allows internet, reaches only the two gateways. |
-| LLM gateway | Adds the LLM key, enforces the model allow-list and the team's token budget, records usage. |
-| MCP gateway | Adds the right credential to each tool call, enforces the tool allow-list, writes the call to the audit trail. |
+| LLM gateway | Part of the manager's sandbox listener, the only port a session reaches. Adds the LLM key, enforces the model allow-list and the team's token budget, records usage. |
+| MCP gateway | Part of the same listener. Adds the right credential to each tool call, enforces the tool allow-list, writes the call to the audit trail. |
 | Audit trail | Every message, tool call and session event, recorded outside the sandbox. |
 
-The reasoning behind this layout is in the [Security model](security.md).
+How a request becomes a command, events and the work that follows, with a diagram of every main flow, is in [Architecture](architecture.md). The reasoning behind this layout is in the [Security model](security.md).

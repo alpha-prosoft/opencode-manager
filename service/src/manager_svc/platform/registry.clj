@@ -183,8 +183,11 @@
         (into (array-map) (map (juxt :id identity)) definitions))
       {})))
 
-(defn- check-harness
-  [platform team base harness]
+(defn harness-grant-errors
+  "Why team may not run harness: its image, LLM connection and models, MCP
+   servers and their credentials against what the tenant grants the team and
+   its team.json chooses."
+  [platform team harness]
   (let [image-errors
         (when (and (:image harness) (not (some #{(:image harness)} (:allowed-images platform))))
           [(str "image " (:image harness) " is not in the platform's allowed_images")])
@@ -217,13 +220,6 @@
                (and team-connection (seq not-chosen))
                [(str "models " (pr-str not-chosen) " are not allowed by the team's team.json")]))))
 
-        skill-errors
-        (try
-          (collect-skills base (:skills harness))
-          nil
-          (catch clojure.lang.ExceptionInfo error
-            [(ex-message error)]))
-
         server-errors
         (for [server-id (:mcp harness)
               :let [server (spec/mcp-server-of platform server-id)]
@@ -244,7 +240,20 @@
             :else
             (str "MCP server " server-id " needs credential " (:credential server)
                  ", which team " (:id team) " may not use")))]
-    (vec (concat image-errors connection-errors skill-errors server-errors))))
+    (vec (concat image-errors connection-errors server-errors))))
+
+(defn- skill-errors
+  [base harness]
+  (try
+    (collect-skills base (:skills harness))
+    nil
+    (catch clojure.lang.ExceptionInfo error
+      [(ex-message error)])))
+
+(defn- check-harness
+  [platform team base harness]
+  (vec (concat (harness-grant-errors platform team harness)
+               (skill-errors base harness))))
 
 (defn- check-ci
   [platform team loaded options delivery]

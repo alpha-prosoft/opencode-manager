@@ -3,7 +3,7 @@
    login mode): their role in each team and the team switcher; sessions in
    both teams; a session shared private, then with its team, then with the
    tenant, seen or not by people of another team and of another tenant; a
-   fork across teams that stays in the source's team."
+   fork across teams that lands in the team of whoever forks."
   (:require [clojure.test :refer [deftest is]]
             [manager-web.components.elements :as component-els]
             [manager-web.helpers :as h]
@@ -116,24 +116,26 @@
                (true?
                 (.isVisible (h/wait-visible team-els/error))))))
 
-      (step "Shared with the tenant, someone of another team sees it and forks it; the fork stays in the source's team"
+      (step "Shared with the tenant, someone of another team sees it and forks it into their own team"
             (fn []
               (as (:two-teams-member h/fixture))
               (share! (get @sessions (:team h/fixture)) :tenant)
-              (as (:other-team-member h/fixture))
+              (as (:outside-team h/fixture))
               (is
                (= els/page
                   (goto-session (get @sessions (:team h/fixture)))))
-              (h/fork! (get @sessions (:team h/fixture)))
+              (is
+               (= [(:team h/fixture) "SPAN"]
+                  [(h/attribute els/team-link "data-team")
+                   (.evaluate (h/locator els/team-link) "e => e.tagName")])
+               "the team's page is closed to them, so its name is no link")
+              (h/fork! (get @sessions (:team h/fixture)) (:outside-team-member-of h/fixture))
               (h/wait-visible els/forked-from)
               (swap! sessions assoc :fork (h/path-id))
               (is
-               (= (:team h/fixture)
-                  (h/attribute els/team-link "data-team")))
-              (is
-               (= "SPAN"
-                  (.evaluate (h/locator els/team-link) "e => e.tagName"))
-               "the team's page is closed to them, so its name is no link")))
+               (= (:outside-team-member-of h/fixture)
+                  (h/attribute els/team-link "data-team"))
+               "the fork belongs to the team they chose, not to the source's")))
 
       (step "Nobody of another tenant sees the tenant-shared session, even someone in two teams there"
             (fn []
@@ -151,7 +153,7 @@
 
       (step "The sessions are cleaned up"
             (fn []
-              (as (:other-team-member h/fixture))
+              (as (:outside-team h/fixture))
               (goto-session (:fork @sessions))
               (h/click (component-els/session-action :delete (:fork @sessions)))
               (h/click component-els/confirm-accept)
@@ -167,5 +169,5 @@
                 (h/visible? (component-els/session-link (get @sessions "payments")))))
               (reset! sessions {})))
       (finally
-        (h/delete-sessions! (:other-team-member h/fixture) [(:fork @sessions)])
+        (h/delete-sessions! (:outside-team h/fixture) [(:fork @sessions)])
         (h/delete-sessions! (:two-teams-member h/fixture) [(get @sessions (:team h/fixture)) (get @sessions "payments")])))))

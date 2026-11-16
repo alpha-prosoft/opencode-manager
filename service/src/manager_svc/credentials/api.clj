@@ -90,8 +90,8 @@
   "The :deps query of a command by which the caller starts work in team-id
    of tenant: which credentials the team requires that the caller has no
    own value of. nil for the platform and for people whose claims don't
-   name the team: someone forking a session from outside, or a tenant admin
-   who isn't its member, owes it nothing, as :get-my-credentials lists."
+   name the team: a tenant admin who isn't its member owes it nothing, as
+   :get-my-credentials lists."
   [ctx tenant team-id]
   (when (and tenant
              team-id

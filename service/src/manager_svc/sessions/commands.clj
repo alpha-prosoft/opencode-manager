@@ -2,7 +2,8 @@
   "Session commands. People change sharing, request start/stop/delete, lock and
    fork; the platform creates sessions for runs and records what the
    lifecycle worker did."
-  (:require [edd.core :as edd]
+  (:require [clojure.string :as string]
+            [edd.core :as edd]
             [edd.el.ctx :as el-ctx]
             [manager-svc.auth :as auth]
             [manager-svc.credentials.api :as credentials]
@@ -162,26 +163,62 @@
    :session-id (get-in cmd [:attrs :source-id])})
 
 (defn fork-credentials-dep
-  "Which credentials the source's team requires of the person forking that
-   they haven't added."
-  [ctx _cmd]
-  (let [source
-        (get-in ctx [:source :session])]
-    (credentials/required-credentials-dep ctx (:tenant source) (:team-id source))))
+  "Which credentials the team the fork lands in requires of the person
+   forking that they haven't added."
+  [ctx cmd]
+  (credentials/required-credentials-dep ctx (roles/tenant-of ctx) (get-in cmd [:attrs :team-id])))
 
 (defn fork-running-sessions-dep
-  "How many sessions run in the source's team, where the fork will run."
-  [ctx _cmd]
-  (let [{:keys [tenant team-id]}
-        (get-in ctx [:source :session])]
+  "How many sessions run in the team the fork lands in."
+  [ctx cmd]
+  (let [tenant
+        (roles/tenant-of ctx)
+
+        team-id
+        (get-in cmd [:attrs :team-id])]
     (when (and tenant team-id)
       {:query-id :count-running-sessions
        :tenant tenant
        :team-id team-id})))
 
+(defn fork-grants-dep
+  "What the team the fork lands in lacks to run the source's workflow."
+  [ctx cmd]
+  (let [source
+        (get-in ctx [:source :session])
+
+        tenant
+        (roles/tenant-of ctx)
+
+        team-id
+        (get-in cmd [:attrs :team-id])
+
+        workflow
+        (get-in source [:labels :workflow])
+
+        workflow-team
+        (aggregate/workflow-team source)]
+    (when (and tenant team-id workflow workflow-team)
+      {:query-id :get-fork-grants
+       :tenant tenant
+       :team-id team-id
+       :workflow-team-id workflow-team
+       :workflow-id workflow})))
+
+(defn- granted!
+  "Fails with 404 when the tenant has no such team and with 422, naming the
+   team and what it lacks, when it may not run the source's workflow
+   (:fork-grants, read before the command)."
+  [{:keys [known team-name missing]}]
+  (when-not known
+    (errors/not-found! "Team not found"))
+  (when (seq missing)
+    (errors/invalid! (str "Team " team-name " can't run this session: " (string/join "; " missing)
+                          ". Fork into another of your teams, or ask your tenant admin to grant it."))))
+
 (defn fork-session
-  "Anyone who may see a session (in its tenant) may fork it into their own
-   private copy, which stays in the source's team."
+  "Anyone who may see a session (in its tenant) may fork it into a private
+   copy of their own in one of their teams, which the fork then belongs to."
   [ctx {:keys [attrs]}]
   (let [username
         (auth/user-id ctx)
@@ -189,33 +226,41 @@
         source
         (visible! ctx (get-in ctx [:source :session]))
 
+        tenant
+        (:tenant source)
+
         team-id
-        (:team-id source)
+        (:team-id attrs)
 
         workflow
         (get-in source [:labels :workflow])
 
         now
         (time/now)]
+    (when-not (contains? (roles/claimed-team-ids (roles/caller ctx) tenant) team-id)
+      (errors/forbidden! (str "You are not in team " team-id ". Fork into one of your own teams.")))
     (when (current ctx)
       (errors/invalid! "Session already exists"))
-    (when-not (and team-id workflow)
+    (when-not (and (:team-id source) workflow)
       (errors/invalid! "This session was not started from a workflow, so it can't be forked"))
+    (granted! (:fork-grants ctx))
     (credentials/require-credentials! (:missing-credentials ctx))
-    (limit-checked! ctx source)
+    (limit-checked! ctx {:tenant tenant :team-id team-id})
     [(event :session-created
             {:sub username
              :email (get-in ctx [:meta :user :email])
              :name (truncate (str (:name source) " (fork)"))
              :description (or (:description source) "")
              :visibility :private
-             :labels (merge (select-keys (:labels source) [:workflow links/conversation-label])
-                            {:workflow workflow})
+             :labels (merge (select-keys (:labels source) [links/conversation-label])
+                            {:workflow workflow
+                             :workflow-team (aggregate/workflow-team source)})
              :env {}
              :image ""
-             :tenant (:tenant source)
+             :tenant tenant
              :team-id team-id
-             :project (:project source)
+             :project (when (= team-id (:team-id source))
+                        (:project source))
              :activity "session"
              :forked-from (:source-id attrs)
              :fork-pending true
@@ -308,8 +353,9 @@
                    :auth roles/people
                    :deps [:source source-dep
                           :missing-credentials fork-credentials-dep
-                          :running-sessions fork-running-sessions-dep]
-                   :consumes [:map [:id uuid?] [:attrs [:map [:source-id uuid?]]]])
+                          :running-sessions fork-running-sessions-dep
+                          :fork-grants fork-grants-dep]
+                   :consumes [:map [:id uuid?] [:attrs [:map [:source-id uuid?] [:team-id string?]]]])
       (edd/reg-cmd :touch-session touch-session
                    :auth roles/platform-only
                    :consumes Id)

@@ -1,10 +1,10 @@
 (ns manager-svc.sessions.routing-test
   (:require [clojure.java.io :as io]
             [clojure.test :refer [deftest is testing]]
-            [manager-svc.auth :as auth]
             [manager-svc.sessions.fixtures :as fixtures]
             [manager-svc.sessions.links :as links]
             [manager-svc.sessions.routing :as routing]
+            [manager-svc.signing :as signing]
             [yaml.core :as yaml]))
 
 (def session-id #uuid "11111111-1111-1111-1111-111111111111")
@@ -102,10 +102,10 @@
       (links/session-id-from-host settings "foo.example.test")))
     (is
      (= session-id
-        (auth/derived-key-owner settings (links/secret-key settings session-id) #{links/password-purpose})))
+        (signing/derived-key-owner settings (links/secret-key settings session-id) #{links/password-purpose})))
     (is
      (nil?
-      (auth/derived-key-owner settings (str session-id ".0000") #{links/password-purpose})))
+      (signing/derived-key-owner settings (str session-id ".0000") #{links/password-purpose})))
     (is
      (= "/L3Nlc3Npb24vd29ya3NwYWNl"
         (links/open-path {:labels {}})))))

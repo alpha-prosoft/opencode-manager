@@ -918,6 +918,39 @@
       (is
        (some-error? "not in the team's team.json mcp_servers" (f/errors-of system :harnesses "server"))))))
 
+(deftest another-team-runs-a-harness-only-with-the-grants-it-needs
+  (mock/with-mock-dal
+    (let [roots
+          (support/temp-dir)
+
+          tenant
+          (-> (f/tenant-json roots)
+              (update :teams conj {:id "other" :name "Other" :repository {:url (f/file-url (io/file roots "team"))}})
+              (assoc :credentials [{:id "TOOLS" :name "Tools" :hosts ["tools.internal"]}]
+                     :mcp_servers [{:id "tools" :name "Tools" :url "http://tools.internal/" :credential "TOOLS"
+                                    :teams ["team"]}]))
+
+          {:keys [system]}
+          (f/build! roots tenant {"harnesses/plain.json" f/harness
+                                  "harnesses/tools.json" (assoc f/harness :mcp ["tools"])})
+
+          missing
+          (fn [team-id harness-id]
+            (api/missing-grants system "acme" team-id (:spec (api/definition system "acme" "team" :harnesses harness-id))))]
+      (is
+       (= []
+          (missing "team" "tools")))
+      (is
+       (= ["team other may not use MCP server tools"]
+          (missing "other" "tools")))
+      (is
+       (= []
+          (missing "other" "plain")))
+      (testing "a team the tenant doesn't have lacks nothing that could be named"
+        (is
+         (= []
+            (missing "nope" "tools")))))))
+
 (deftest without-team-json-a-team-uses-what-the-tenant-grants
   (mock/with-mock-dal
     (let [roots

@@ -2,7 +2,7 @@
   (:require [clojure.java.io :as io]
             [clojure.test :refer [deftest is testing]]
             [edd.test.fixture.dal :as mock]
-            [manager-svc.auth :as auth]
+            [manager-svc.signing :as signing]
             [manager-svc.client :as client]
             [manager-svc.effects :as effects]
             [manager-svc.observability.api :as observability]
@@ -103,7 +103,7 @@
         (io/make-parents (io/file (storage/session-dir settings session-id) storage/opencode-data "opencode.db"))
         (spit (io/file (storage/session-dir settings session-id) storage/opencode-data "opencode.db") "db")
         (spit (io/file (storage/session-dir settings session-id) storage/opencode-data "log") "skip")
-        (fixtures/command! (fixtures/as ctx "carol") {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id}})
+        (fixtures/command! (fixtures/as ctx "carol") {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id :team-id "alpha"}})
         (fixtures/command! (fixtures/as ctx "carol") {:cmd-id :start-session :id fork-id})
         (let [audited
               (atom [])
@@ -111,8 +111,8 @@
               built
               (atom nil)]
           (with-redefs [observability/append-audit! (fn [_ & args] (swap! audited conj (vec args)))
-                        runs/fork-sandbox (fn [_ source fork]
-                                            (reset! built [(:id source) (:id fork) (:sub fork)])
+                        runs/fork-sandbox (fn [_ fork]
+                                            (reset! built [(:forked-from fork) (:id fork) (:sub fork)])
                                             {:mcp-servers ["github"] :env {"OPENCODE_SERVER_PASSWORD" "fork-key"}})]
             (lifecycle/reconcile! system))
           (testing "the fork's sandbox is built for the fork from the source"
@@ -153,7 +153,7 @@
           (fixtures/ctx system)]
       (fixtures/with-domains ctx
         (fixtures/create-session! system ctx {:id session-id :owner "bob" :visibility :tenant})
-        (fixtures/command! (fixtures/as ctx "carol") {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id}})
+        (fixtures/command! (fixtures/as ctx "carol") {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id :team-id "alpha"}})
         (fixtures/command! (fixtures/as ctx "bob") {:cmd-id :delete-session :id session-id})
         (fixtures/command! (support/as-platform ctx) {:cmd-id :record-session-deleted :id session-id})
         (lifecycle/reconcile! system)
@@ -206,10 +206,10 @@
           (atom [])]
       (fixtures/with-domains ctx
         (fixtures/create-session! system ctx {:id session-id :owner "bob" :visibility :tenant :start true})
-        (fixtures/command! (fixtures/as ctx "carol") {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id}})
+        (fixtures/command! (fixtures/as ctx "carol") {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id :team-id "alpha"}})
         (let [command
               client/command]
-          (with-redefs [runs/fork-sandbox (fn [_ _ _] {:mcp-servers []})
+          (with-redefs [runs/fork-sandbox (fn [_ _] {:mcp-servers []})
                         observability/append-audit! (fn [& _] nil)
                         effects/settle! (fn [] (swap! settled conj (locked?)))
                         client/command (fn [& args]
@@ -383,16 +383,16 @@
             (doseq [purpose ["llm" "mcp" "tools" "telemetry"]]
               (is
                (= id
-                  (:id (api/session-by-key system (auth/derived-key (:settings system) purpose id) #{purpose}))))
+                  (:id (api/session-by-key system (signing/derived-key (:settings system) purpose id) #{purpose}))))
               (is
                (nil?
-                (api/session-by-key system (auth/derived-key (:settings system) purpose id) #{"session"})))))
+                (api/session-by-key system (signing/derived-key (:settings system) purpose id) #{"session"})))))
           (testing "keys of stopped or locked sessions are refused"
             (fixtures/command! (fixtures/as ctx "bob") {:cmd-id :stop-session :id id})
             (fixtures/command! (support/as-platform ctx) {:cmd-id :record-session-stopped :id id})
             (is
              (nil?
-              (api/session-by-key system (auth/derived-key (:settings system) "llm" id) #{"llm"}))))
+              (api/session-by-key system (signing/derived-key (:settings system) "llm" id) #{"llm"}))))
           (testing "running sessions of a team are counted"
             (fixtures/set-status! system id :running)
             (is

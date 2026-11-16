@@ -2,9 +2,14 @@
   "Helpers for domain tests on edd's mock DAL."
   (:require [edd.test.fixture.dal :as mock]
             [manager-svc.config :as config]
-            [manager-svc.directory :as directory])
-  (:import [java.nio.file Files]
-           [java.nio.file.attribute FileAttribute]))
+            [manager-svc.directory :as directory]
+            [manager-svc.tokens :as tokens])
+  (:import [com.auth0.jwt JWT]
+           [com.auth0.jwt.algorithms Algorithm]
+           [java.nio.file Files]
+           [java.nio.file.attribute FileAttribute]
+           [java.time Instant]
+           [java.util Date]))
 
 (def settings
   (assoc (config/load-settings {})
@@ -13,6 +18,34 @@
          :dev-users-file "test/dev-users.edn"
          :secret-key "test-secret"
          :credentials-key "dGVzdC1rZXktdGVzdC1rZXktdGVzdC1rZXktMTIzNDU="))
+
+(defn platform-token
+  "The platform token of identity, as a login issues it."
+  ([identity]
+   (platform-token settings identity))
+  ([token-settings identity]
+   (tokens/platform-token token-settings identity 3600)))
+
+(defn platform-tokens-in
+  "The platform tokens anywhere in data, such as a request the manager sends
+   out: whatever in its text reads as a person's token."
+  ([data]
+   (platform-tokens-in settings data))
+  ([token-settings data]
+   (filterv #(tokens/person token-settings %)
+            (re-seq #"[\w-]+\.[\w-]+\.[\w-]+" (pr-str data)))))
+
+(defn provider-token
+  "A token of the identity provider https://idp.example for the audience
+   manager, signed with secret and good for ten minutes; claims with string
+   keys replace those."
+  [secret claims]
+  (-> (JWT/create)
+      (.withIssuer "https://idp.example")
+      (.withAudience (into-array String ["manager"]))
+      (.withExpiresAt (Date/from (.plusSeconds (Instant/now) 600)))
+      (.withPayload ^java.util.Map claims)
+      (.sign (Algorithm/HMAC256 ^String secret))))
 
 (defn ctx
   "mock/ctx with a system map and the directories; register the domain under

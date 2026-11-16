@@ -182,14 +182,18 @@
       (step "Forking makes a private copy and opens it"
             (fn []
               (h/click (component-els/session-action :fork @session-id))
-              (h/wait-visible component-els/confirm-dialog)
-              (h/click component-els/confirm-accept)
+              (h/wait-visible component-els/fork-dialog)
+              (h/click component-els/fork-dialog-submit)
               (h/wait-until "the fork's page" 60000 100 #(not= @session-id (h/path-id)))
               (h/wait-visible els/page)
               (reset! fork-id (h/path-id))
               (is
                (not= @session-id
                      @fork-id))
+              (is
+               (= (:team h/fixture)
+                  (h/attribute els/team-link "data-team"))
+               "the session's team, one of theirs, was chosen for them")
               (is
                (true?
                 (.isVisible (h/wait-visible els/forked-from))))))

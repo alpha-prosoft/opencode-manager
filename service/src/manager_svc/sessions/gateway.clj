@@ -5,7 +5,7 @@
      GET /api/gateway/auth      Traefik forward-auth for every request to a session host
      session hosts              requests reaching the manager directly wake the session
 
-   The manager's login never reaches a session host. Entering a session
+   The platform token never reaches a session host. Entering a session
    carries the person over with a one-time handoff token; the session host
    then gets its own cookie, a token bound to that session that forward-auth
    accepts only for that session's host. The token is renewed while the
@@ -14,18 +14,20 @@
    login carries by then."
   (:require [clojure.string :as string]
             [clojure.tools.logging :as log]
-            [manager-svc.auth :as auth]
-            [manager-svc.edge.server :as server]
+            [manager-svc.cookies :as cookies]
+            [manager-svc.edge.http :as edge-http]
+            [manager-svc.edge.listener :as listener]
             [manager-svc.opencode :as opencode]
             [manager-svc.sessions.access :as access]
             [manager-svc.sessions.backend :as backend]
             [manager-svc.sessions.links :as links]
             [manager-svc.sessions.live :as live]
             [manager-svc.sessions.records :as records]
-            [manager-svc.sessions.routing :as routing])
+            [manager-svc.sessions.routing :as routing]
+            [manager-svc.signin :as signin]
+            [manager-svc.tokens :as tokens])
   (:import [java.net URLDecoder URLEncoder]
-           [java.nio.charset StandardCharsets]
-           [java.time Instant]))
+           [java.nio.charset StandardCharsets]))
 
 (def starting-page
   (str "<!doctype html>\n"
@@ -54,16 +56,12 @@
 
 (defn- cookies-of
   [{:keys [headers]}]
-  (auth/parse-cookies (get headers "cookie")))
-
-(defn- now-seconds
-  []
-  (.getEpochSecond (Instant/now)))
+  (cookies/parse (get headers "cookie")))
 
 (defn login-deadline
   "When a login made now ends, in epoch seconds."
   [settings]
-  (+ (now-seconds) (* 3600 (long (:auth-ttl-hours settings)))))
+  (+ (tokens/now-seconds) (signin/login-seconds settings)))
 
 (defn- deadline
   [claims]
@@ -74,15 +72,15 @@
   [claims]
   (let [until
         (deadline claims)]
-    (when (and until (< (now-seconds) until))
+    (when (and until (< (tokens/now-seconds) until))
       claims)))
 
 (defn- session-cookie
   [settings identity session-id until]
-  (auth/set-cookie settings
-                   (auth/session-cookie settings)
-                   (auth/session-token settings identity session-id until)
-                   auth/session-ttl-seconds))
+  (cookies/set-cookie settings
+                      (cookies/session-cookie settings)
+                      (tokens/session-token settings identity session-id until)
+                      tokens/session-ttl-seconds))
 
 (defn- decode
   "URL-decoded text, or nil when it is not valid percent-encoding."
@@ -109,7 +107,7 @@
   [uri]
   (let [[_ query]
         (split-uri uri)]
-    (some (fn [[k _ v]] (when (= auth/handoff-param k) v)) (query-pairs query))))
+    (some (fn [[k _ v]] (when (= tokens/handoff-param k) v)) (query-pairs query))))
 
 (defn without-handoff
   [uri]
@@ -117,7 +115,7 @@
         (split-uri uri)
 
         kept
-        (keep (fn [[k raw _]] (when (not= auth/handoff-param k) raw)) (query-pairs query))]
+        (keep (fn [[k raw _]] (when (not= tokens/handoff-param k) raw)) (query-pairs query))]
     (if (seq kept)
       (str path "?" (string/join "&" kept))
       path)))
@@ -135,8 +133,8 @@
 
 (defn- refresh-due?
   [{:keys [expires-at]}]
-  (< (- (or expires-at 0) (now-seconds))
-     (quot auth/session-ttl-seconds 2)))
+  (< (- (or expires-at 0) (tokens/now-seconds))
+     (quot tokens/session-ttl-seconds 2)))
 
 (defn authorize
   "The session a request to a session host may reach, as
@@ -158,7 +156,7 @@
 
       handoff
       (let [identity
-            (auth/read-handoff settings handoff (str (:id session)))]
+            (tokens/read-handoff settings handoff (str (:id session)))]
         (if (and identity (access/can-open? system session identity))
           [:respond (assoc-in (redirect 302 (str (links/session-url settings (:id session)) (without-handoff uri)))
                               [:headers "Set-Cookie"]
@@ -167,14 +165,14 @@
 
       :else
       (let [claims
-            (current (auth/read-session-token settings
-                                              (get (cookies-of request) (auth/session-cookie settings))
-                                              (str (:id session))))]
+            (current (tokens/read-session-token settings
+                                                (get (cookies-of request) (cookies/session-cookie settings))
+                                                (str (:id session))))]
         (cond
           (nil? claims)
           [:respond (redirect 302 (links/entry-url settings session))]
 
-          (not (may-open? system session (auth/identity-of settings claims)))
+          (not (may-open? system session (tokens/identity-of claims)))
           [:respond (redirect 302 (links/manager-page settings session))]
 
           :else
@@ -209,7 +207,7 @@
         (re-matches entry-pattern path)
 
         identity
-        (auth/resolve-identity settings (cookies-of request) (get headers "authorization"))
+        (:identity (listener/caller settings (cookies-of request) (get headers "authorization")))
 
         session
         (when identity
@@ -222,7 +220,7 @@
       (redirect 303 (str "/login?next=" (URLEncoder/encode ^String path StandardCharsets/UTF_8)))
 
       (and conversation (not (re-matches conversation-pattern conversation)))
-      (server/error 422 "Invalid conversation")
+      (edge-http/error 422 "Invalid conversation")
 
       (or (nil? session)
           (not= sub (:sub session))
@@ -235,7 +233,7 @@
       :else
       (redirect 303 (str (links/session-url settings (:id session))
                          (links/open-path session conversation)
-                         "?" auth/handoff-param "=" (auth/handoff-token settings identity (str (:id session))))))))
+                         "?" tokens/handoff-param "=" (tokens/handoff-token settings identity (str (:id session))))))))
 
 (defn forward-auth
   "Traefik's question about a request to a session host. Only the forwarded
@@ -261,7 +259,7 @@
         {:status 200
          :headers (cond-> {"Authorization" (opencode/basic-auth (links/secret-key settings (:id result)))}
                     (refresh-due? claims) (assoc "Set-Cookie" (session-cookie settings
-                                                                              (auth/identity-of settings claims)
+                                                                              (tokens/identity-of claims)
                                                                               (:id result)
                                                                               (deadline claims))))}))))
 

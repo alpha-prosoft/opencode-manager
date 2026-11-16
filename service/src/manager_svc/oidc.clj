@@ -9,8 +9,8 @@
          checks state against the cookie, exchanges the code at the token
          endpoint, verifies the ID token (signature from the JWKS, issuer,
          audience = client id, nonce, expiry), merges the claims of the
-         configured sources and runs them through the claims parser; the
-         edge then issues the login cookie as in login mode
+         configured sources; the edge signs the person in with them
+         (manager-svc.signin) and sets the login cookie as in login mode
 
    The endpoints come from the discovery document, MANAGER_OIDC_DISCOVERY_URL
    or <MANAGER_OIDC_ISSUER>/.well-known/openid-configuration; its issuer must
@@ -23,11 +23,12 @@
    A refused login leaves its message in the same cookie for the login page."
   (:require [clojure.string :as string]
             [clojure.tools.logging :as log]
-            [manager-svc.auth :as auth]
             [manager-svc.config :as config]
+            [manager-svc.cookies :as cookies]
             [manager-svc.hash :as hash]
             [manager-svc.http :as http]
-            [manager-svc.idp :as idp])
+            [manager-svc.idp :as idp]
+            [manager-svc.tokens :as tokens])
   (:import [com.auth0.jwt JWT]
            [com.auth0.jwt.algorithms Algorithm]
            [com.auth0.jwt.exceptions JWTVerificationException]
@@ -50,13 +51,13 @@
 
 (defn state-cookie
   [settings]
-  (auth/host-cookie settings "oc_oidc"))
+  (cookies/host-cookie settings "oc_oidc"))
 
 (defn hint-cookie
   "Holds the ID token of the login, sent back to the provider as
    id_token_hint at logout so it ends the session without asking."
   [settings]
-  (auth/host-cookie settings "oc_oidc_hint"))
+  (cookies/host-cookie settings "oc_oidc_hint"))
 
 (defn sources
   "The claims sources of MANAGER_OIDC_CLAIMS_SOURCE, in merge order."
@@ -175,23 +176,23 @@
                   :nonce nonce
                   :code_challenge (code-challenge verifier)
                   :code_challenge_method "S256"})
-     :state-token (auth/sign settings state-audience state-ttl-seconds
-                             {:state state
-                              :nonce nonce
-                              :verifier verifier
-                              :next (safe-next settings next)})}))
+     :state-token (tokens/sign settings state-audience state-ttl-seconds
+                               {:state state
+                                :nonce nonce
+                                :verifier verifier
+                                :next (safe-next settings next)})}))
 
 (defn error-token
   "What the state cookie holds after a refused login: the message and where
    the person was going."
   [settings message next]
-  (auth/sign settings state-audience error-ttl-seconds {:error message :next (safe-next settings next)}))
+  (tokens/sign settings state-audience error-ttl-seconds {:error message :next (safe-next settings next)}))
 
 (defn read-state
   "The claims of a state cookie: {:state :nonce :verifier :next} of a login
    under way or {:error :next} of a refused one; nil when invalid."
   [settings token]
-  (auth/read-token settings token state-audience))
+  (tokens/read-token settings token state-audience))
 
 (defn- form-encode
   [value]
@@ -267,7 +268,7 @@
             nonce (.withClaim "nonce" ^String nonce))
 
           claims
-          (auth/claims->map (.verify (.build verifier) ^String token))]
+          (tokens/claims->map (.verify (.build verifier) ^String token))]
       (when (and audience (:azp claims) (not= audience (:azp claims)))
         (throw (refusal (str "the " what " was issued to another client"))))
       (dissoc claims :expires-at))

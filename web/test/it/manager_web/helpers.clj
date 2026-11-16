@@ -33,7 +33,7 @@
    tenant and team admins), the LLM connection copilot,
    the MCP server bitbucket; tenant globex with tenant admin gina; operator
    oscar; erin, who is not in demo and whose payments harness exporter
-   needs a credential nobody added; carol, in acme but in no team; hank, a
+   needs a credential nobody added; carol, a member of payments only; hank, a
    member of globex. People in two teams: bob (member of demo and payments), dave
    (admin of payments, member of ops) and ivy of globex (member of research, admin
    of lab); henry is only in ops. acme requires PAGERDUTY_TOKEN (tenant.json,
@@ -48,11 +48,13 @@
    :other-tenant-admin "gina"
    :operator "oscar"
    :outsider "erin"
-   :teamless "carol"
+   :outside-team "carol"
+   :outside-team-member-of "payments"
    :other-tenant-member "hank"
    :two-teams-member "bob"
    :two-teams-admin "dave"
    :other-team-member "henry"
+   :other-team-member-of "ops"
    :other-tenant-two-teams "ivy"
    :other-team "research"
    :register-onboarding (or (System/getenv "MANAGER_IT_TENANT_ONBOARDING") "file:///repos/globex-onboarding")
@@ -331,14 +333,15 @@
   (wait-visible login-els/page 30000))
 
 (defn fork!
-  "Forks the open session, from the banner when it offers the fork, else from
-   the actions, and confirms; waits for the copy's page."
-  [session-id]
+  "Forks the open session into team-id, from the banner when it offers the
+   fork, else from the actions; waits for the copy's page."
+  [session-id team-id]
   (let [before
         (current-path)]
     (click (wait-any session-els/fork-to-continue (component-els/session-action :fork session-id)))
-    (wait-visible component-els/confirm-dialog)
-    (click component-els/confirm-accept)
+    (wait-visible component-els/fork-dialog)
+    (select-option component-els/fork-dialog-team (component-els/fork-dialog-team-option team-id))
+    (click component-els/fork-dialog-submit)
     (wait-path-change before)))
 
 (defn start-workflow

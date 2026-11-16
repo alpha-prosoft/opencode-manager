@@ -5,8 +5,8 @@
   (:require [clojure.java.io :as io]
             [clojure.test :refer [deftest is testing]]
             [jsonista.core :as json]
-            [manager-svc.auth :as auth]
             [manager-svc.idp :as idp]
+            [manager-svc.jwt :as jwt]
             [manager-svc.oidc :as oidc]
             [manager-svc.reload :as reload]
             [manager-svc.test-support :as support])
@@ -158,7 +158,7 @@
 
 (defn- subject
   [settings token]
-  (:sub (auth/read-external settings token)))
+  (:sub (jwt/provider-claims settings token)))
 
 (defmacro with-clock
   "Runs body with reload/now-ms reading the atom clock (milliseconds)."
@@ -171,7 +171,7 @@
     (let [settings
           (jwt-settings {:jwt-discovery-url (:discovery-url provider)})]
       (is
-       (nil? (auth/check-settings! settings)))
+       (nil? (jwt/check-settings! settings)))
       (is
        (= "alice"
           (subject settings (token k1 "k1" :issuer (:issuer provider)))))
@@ -419,11 +419,11 @@
   (let [settings
         (jwt-settings {:jwt-issuer "https://idp.example" :jwt-jwks-url "https://idp.example/certs"})]
     (is
-     (nil? (auth/check-settings! (assoc settings :jwt-jwks-default-algorithm "RS512"))))
+     (nil? (jwt/check-settings! (assoc settings :jwt-jwks-default-algorithm "RS512"))))
     (doseq [algorithm ["none" "HS256" "PS256" "rs256"]]
       (is
        (thrown-with-msg? clojure.lang.ExceptionInfo #"MANAGER_JWT_JWKS_DEFAULT_ALGORITHM .* is not supported"
-                         (auth/check-settings! (assoc settings :jwt-jwks-default-algorithm algorithm)))
+                         (jwt/check-settings! (assoc settings :jwt-jwks-default-algorithm algorithm)))
        algorithm))
     (is
      (thrown-with-msg? clojure.lang.ExceptionInfo #"MANAGER_OIDC_JWKS_DEFAULT_ALGORITHM none is not supported"
@@ -439,11 +439,11 @@
           (jwt-settings {:jwt-discovery-url (:discovery-url provider)})]
       (is
        (= {:discovery {:status :reloaded} :keys {:status :reloaded}}
-          (auth/reload-keys! settings)))
+          (idp/reload-keys! settings)))
       (swap! (:state provider) assoc :status 500)
       (is
        (= :failed
-          (get-in (auth/reload-keys! settings) [:keys :status])))
+          (get-in (idp/reload-keys! settings) [:keys :status])))
       (is
        (= "alice"
           (subject settings (token k1 "k1" :issuer (:issuer provider))))))))

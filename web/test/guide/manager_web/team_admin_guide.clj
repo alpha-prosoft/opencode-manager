@@ -207,7 +207,7 @@
   (h/click component-els/run-dialog-cancel)
   (h/wait-hidden component-els/run-dialog)
   (p! (str "People outside the team who can see a team session can't work in it; they fork it and continue in "
-           "their own copy. Sessions started by schedules and triggers are team sessions too.")))
+           "their own copy, in a team of their own. Sessions started by schedules and triggers are team sessions too.")))
 
 (defn- project-tab!
   [tab]

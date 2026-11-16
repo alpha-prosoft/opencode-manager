@@ -18,3 +18,10 @@
 (defn platform-user?
   [username]
   (= platform-user username))
+
+(defn person-name?
+  "A username a person may have."
+  [username]
+  (boolean (and (string? username)
+                (re-matches username-pattern username)
+                (not (platform-user? username)))))

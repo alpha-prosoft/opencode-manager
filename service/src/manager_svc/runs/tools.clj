@@ -7,7 +7,7 @@
    route is served on the sandbox listener only."
   (:require [clojure.tools.logging :as log]
             [manager-svc.client :as client]
-            [manager-svc.edge.server :as server]
+            [manager-svc.edge.http :as edge-http]
             [manager-svc.http :as http]
             [manager-svc.platform.api :as platform]
             [manager-svc.runs.edd :as edd]
@@ -159,7 +159,7 @@
 (defn- parsed
   [request]
   (let [text
-        (server/body-text request)]
+        (edge-http/body-text request)]
     (try
       (http/read-json text)
       (catch Exception _

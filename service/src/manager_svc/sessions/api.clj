@@ -5,14 +5,15 @@
    :created-at :last-activity-at :stopped-at :locked-by :locked-at
    :forked-from}."
   (:require [lambda.uuid :as uuid]
-            [manager-svc.auth :as auth]
             [manager-svc.sessions.access :as access]
+            [manager-svc.sessions.aggregate :as aggregate]
             [manager-svc.sessions.backend :as backend]
             [manager-svc.sessions.links :as links]
             [manager-svc.sessions.live :as live]
             [manager-svc.sessions.records :as records]
             [manager-svc.sessions.storage :as storage]
-            [manager-svc.sessions.views :as views]))
+            [manager-svc.sessions.views :as views]
+            [manager-svc.signing :as signing]))
 
 (defn get-session
   "The session aggregate with its :secret-key and :sandbox config (without
@@ -32,6 +33,12 @@
   "True for a session a platform run started: it works with team credentials."
   [session]
   (access/platform-owned? session))
+
+(defn workflow-team
+  "The team whose workflow the session runs: its own, unless it is a fork
+   that landed in another team."
+  [session]
+  (aggregate/workflow-team session))
 
 (defn can-view?
   "caller: a [:meta :user] map or an edge identity."
@@ -171,7 +178,7 @@
    locked session are refused."
   [system key purposes]
   (when-let [session-id
-             (auth/derived-key-owner (:settings system) key purposes)]
+             (signing/derived-key-owner (:settings system) key purposes)]
     (when-let [session
                (get-session system session-id)]
       (when-not (or (:stopped-at session) (:locked-at session))

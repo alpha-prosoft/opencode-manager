@@ -6,7 +6,7 @@
    then the Cookie header is removed, so the sandbox never sees a cookie."
   (:require [clojure.java.io :as io]
             [clojure.string :as string]
-            [manager-svc.auth :as auth]
+            [manager-svc.cookies :as cookies]
             [manager-svc.sessions.backend :as backend]
             [manager-svc.sessions.kube :as kube]
             [yaml.core :as yaml])
@@ -26,7 +26,7 @@
   [settings]
   {"address" (str (:manager-service-url settings) forward-auth-path)
    "authResponseHeaders" forward-auth-headers
-   "addAuthCookiesToResponse" [(auth/session-cookie settings)]})
+   "addAuthCookiesToResponse" [(cookies/session-cookie settings)]})
 
 (def strip-cookie-config
   {"headers" {"customRequestHeaders" {"Cookie" ""}}})

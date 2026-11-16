@@ -20,7 +20,7 @@ There are two kinds of credential on this page:
 - **Required ones**, marked **Required**. Your tenant or one of your teams has decided that this tool must act as you, never through a shared account.
 
 !!! warning "Required credentials block everything until you add them"
-    While you lack a required credential, the platform holds you on this page. **Do this later** is disabled, every other page sends you back here, and the only ways out are to add the credential or to sign out. The service also refuses to start a run, a team session or a fork in the team that requires it.
+    While you lack a required credential, the platform holds you on this page. **Do this later** is disabled, every other page sends you back here, and the only ways out are to add the credential or to sign out. The service also refuses to start a run or a team session in the team that requires it, and to fork into it.
 
     The reason is accountability: with a required credential, everything the agent does in that tool is done under your name with your permissions, and a shared account would hide who did it. A team's or the tenant's value never satisfies the requirement.
 
@@ -70,7 +70,7 @@ For interactive work, start a **Workspace** workflow with **Start session** inst
 
 **Share.** A session is shared with **Only me**, your team, or everyone in the tenant. You change this in the **Shared with** section of the session's page.
 
-**Fork.** Anyone who can see a session can fork it. The platform copies the workspace and every conversation into a new session that stays in the same team, is shared with **Only me** (you), and runs with your credentials. Fork when:
+**Fork.** Anyone who can see a session can fork it. The dialog asks which of your teams the copy belongs to; the session's team is chosen for you when you are in it. The platform copies the workspace and every conversation into a new session in that team, shared with **Only me** (you), that runs with your credentials: your own where set, else that team's, else the tenant's. A team that is not granted what the session uses (its model, its tools) can't take the fork, and the dialog says what is missing. Fork when:
 
 - the session belongs to someone else and uses their personal credentials;
 - it is a team session and you are not in that team;

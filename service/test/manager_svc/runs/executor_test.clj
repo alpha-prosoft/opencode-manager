@@ -2,7 +2,7 @@
   (:require [clojure.string :as string]
             [clojure.test :refer [deftest is testing]]
             [edd.test.fixture.dal :as mock]
-            [manager-svc.auth :as auth]
+            [manager-svc.signing :as signing]
             [manager-svc.runs.ci :as ci]
             [manager-svc.runs.executor :as executor]
             [manager-svc.runs.fixtures :as f]
@@ -121,7 +121,7 @@
                       [(:project run) (:project session)])))
                 (is
                  (= {:url "http://manager:8001/mcp/"
-                     :headers {:X-Platform-Key (auth/derived-key (:settings system) "mcp" session-id)}}
+                     :headers {:X-Platform-Key (signing/derived-key (:settings system) "mcp" session-id)}}
                     (select-keys (get-in config [:mcp :platform]) [:url :headers])))
                 (is
                  (= "http://manager:8001/llm/v1"

@@ -2,11 +2,11 @@
   "Hosts, URLs and keys of a session. A session lives on its own subdomain
    <id>.<domain>. Its OpenCode server password and the keys its sandbox
    presents to the platform's gateways are derived from the id
-   (manager-svc.auth/derived-key), one per purpose."
+   (manager-svc.signing/derived-key), one per purpose."
   (:require [clojure.string :as string]
-            [manager-svc.auth :as auth]
             [manager-svc.config :as config]
-            [manager-svc.opencode :as opencode])
+            [manager-svc.opencode :as opencode]
+            [manager-svc.signing :as signing])
   (:import [java.net URLEncoder]
            [java.nio.charset StandardCharsets]
            [java.util UUID]))
@@ -67,4 +67,4 @@
 (defn secret-key
   "The session's OpenCode server password."
   [settings session-id]
-  (auth/derived-key settings password-purpose session-id))
+  (signing/derived-key settings password-purpose session-id))

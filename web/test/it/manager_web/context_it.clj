@@ -1,7 +1,7 @@
 (ns manager-web.context-it
   "Where am I: the tenant chip and the sidebar team switcher with the role in
    each team, the team kept in the URL, the start dialog's team, credentials
-   and sharing, scope markers, narrow screens and people without a team."
+   and sharing, scope markers and narrow screens."
   (:require [clojure.string :as string]
             [clojure.test :refer [deftest is]]
             [manager-web.admin.elements :as admin-els]
@@ -134,23 +134,6 @@
             (is
              (= "tenant"
                 (h/attribute admin-els/scope "data-scope")))))
-
-    (step "Someone without a team learns why and sees what the tenant shares"
-          (fn []
-            (h/logout)
-            (h/login (:teamless h/fixture))
-            (is
-             (true?
-              (.isVisible (h/wait-visible component-els/team-context-none))))
-            (is
-             (true?
-              (.isVisible (h/wait-visible home-els/no-teams))))
-            (is
-             (true?
-              (.isVisible (h/wait-visible home-els/shared-section))))
-            (is
-             (false?
-              (h/visible? home-els/start-section)))))
 
     (step "An operator outside any tenant lands on Tenants, marked as platform-wide"
           (fn []

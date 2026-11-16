@@ -33,6 +33,7 @@
             [edd.subs :as edd-subs]
             [manager-web.api :as api]
             [manager-web.components.confirm :as confirm]
+            [manager-web.components.fork-dialog :as fork-dialog]
             [manager-web.components.layout :as layout]
             [manager-web.components.team-context :as team-context]
             [manager-web.data :as data]
@@ -274,6 +275,7 @@
        content]]
      [error-snackbar]
      [confirm/dialog]
+     [fork-dialog/dialog]
      (when (:tenant @(rf/subscribe [::session/me]))
        [:<>
         [search/shortcut-listener]

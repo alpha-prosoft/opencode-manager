@@ -90,6 +90,8 @@ Other refusals:
 |---|---|---|
 | *This session is being deleted* (409) | **Start** during a delete. | — |
 | *This session was not started from a workflow, so it can't be forked* | Nothing to take its sandbox from. | — |
+| *You are not in team … Fork into one of your own teams* (403) | The fork was sent for a team the sign-in doesn't name. | Choose one of your teams in the fork dialog. |
+| *Team … can't run this session: …* (422) | The team chosen for the fork is not granted the model, MCP server or credential the session's harness uses. | Fork into another of your teams, or ask the tenant admin to grant it (`tenant.json`, the team's `team.json`). |
 | *Only the owner or a team admin can change this session* | Renaming, sharing, stopping or deleting someone else's session. | Ask the owner or a team admin. |
 | *Only the owner can lock a session* | Admins can't lock other people's sessions. | — |
 | *The session is already locked* (409) | Locking twice. | — |

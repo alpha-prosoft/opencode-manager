@@ -103,6 +103,12 @@
      :retry-ms (* 1000 (setting settings mode :jwks-refresh-retry-seconds))
      :default-algorithm (setting settings mode :jwks-default-algorithm)}))
 
+(defn publishes-keys?
+  "True when the provider's keys come from a JWKS or a discovery document,
+   rather than a shared secret."
+  [{:keys [jwks-url jwks-file discovery-url]}]
+  (some? (or jwks-url jwks-file discovery-url)))
+
 (defn- checked-document
   [{:keys [issuer issuer-setting required]} previous document]
   (let [named
@@ -280,3 +286,13 @@
   (cond-> {}
     discovery-url (assoc :discovery (outcome #(reload/reload-now! (discovery-cell provider))))
     true (assoc :keys (outcome #(reload/reload-now! (keyset-cell provider))))))
+
+(defn reload-keys!
+  "reload-now! for the provider of the auth mode; nil in login mode and
+   with a shared secret."
+  [{:keys [auth-mode] :as settings}]
+  (when (contains? #{"jwt" "oidc"} auth-mode)
+    (let [known
+          (provider settings (keyword auth-mode))]
+      (when (publishes-keys? known)
+        (reload-now! known)))))

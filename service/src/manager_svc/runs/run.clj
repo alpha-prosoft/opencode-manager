@@ -17,6 +17,7 @@
             [manager-svc.credentials.api :as credentials]
             [manager-svc.directory :as directory]
             [manager-svc.errors :as errors]
+            [manager-svc.names :as names]
             [manager-svc.platform.api :as platform]
             [manager-svc.roles :as roles]
             [manager-svc.runs.definitions :as definitions]
@@ -108,7 +109,7 @@
    continuing the run of :person, which then acts for that person."
   [{:keys [person created-by] :as attrs}]
   (let [person
-        (when (auth/person-name? person) person)]
+        (when (names/person-name? person) person)]
     (merge {:trigger {:type "manual"}}
            (dissoc attrs :person)
            {:created-by (or person created-by auth/platform-user)

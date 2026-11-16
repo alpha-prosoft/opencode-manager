@@ -4,12 +4,13 @@
   (:require [clojure.string :as string]
             [clojure.test :refer [deftest is testing]]
             [jsonista.core :as json]
-            [manager-svc.auth :as auth]
-            [manager-svc.edge.api :as edge-api]
-            [manager-svc.edge.server :as server]
+            [manager-svc.edge.listener :as listener]
+            [manager-svc.edge.login :as login]
             [manager-svc.http :as http]
             [manager-svc.oidc :as oidc]
-            [manager-svc.test-support :as support])
+            [manager-svc.signin :as signin]
+            [manager-svc.test-support :as support]
+            [manager-svc.tokens :as tokens])
   (:import [com.auth0.jwt JWT]
            [com.auth0.jwt.algorithms Algorithm]
            [com.sun.net.httpserver HttpExchange HttpHandler HttpServer]
@@ -209,7 +210,7 @@
          :headers {}
          :cookies (or cookies {})
          :body (ByteArrayInputStream. (.getBytes (str body) StandardCharsets/UTF_8))}]
-    ((:handler (server/route edge-api/routes request)) {:settings settings} request)))
+    (listener/answer {:settings settings} {:routes login/routes} request)))
 
 (defn- set-cookies
   [response]
@@ -337,7 +338,7 @@
            :teams {"demo" :admin "payments" :member}
            :tenant-admin true
            :operator false}
-          (auth/person settings (cookie response "oc_auth"))))
+          (tokens/person settings (cookie response "oc_auth"))))
       (testing "the state cookie is used up"
         (is
          (= ""
@@ -359,7 +360,7 @@
           (last @(:requests provider))]
       (is
        (= "alice"
-          (:sub (auth/person settings (cookie response "oc_auth")))))
+          (:sub (tokens/person settings (cookie response "oc_auth")))))
       (is
        (= [nil "manager"]
           [(:basic token-request) (:client_id token-request)]))
@@ -379,7 +380,7 @@
                         :oidc-discovery-url (str (:issuer provider) "/.well-known/openid-configuration"))]
       (is
        (= "alice"
-          (:sub (auth/person settings (cookie (log-in provider settings alice-claims) "oc_auth")))))
+          (:sub (tokens/person settings (cookie (log-in provider settings alice-claims) "oc_auth")))))
       (testing "the ID token's issuer is the document's"
         (reset! (:tweaks provider) {:id-token {"iss" "https://evil.example"}})
         (is
@@ -496,7 +497,7 @@
           (log-in provider settings {"sub" "x-1" "uid" "zoe" "org" "globex" "memberships" ["research:admin" "lab:member"]})]
       (is
        (= {:sub "zoe" :tenant "globex" :teams {"lab" :member "research" :admin}}
-          (select-keys (auth/person settings (cookie response "oc_auth")) [:sub :tenant :teams]))))))
+          (select-keys (tokens/person settings (cookie response "oc_auth")) [:sub :tenant :teams]))))))
 
 (deftest claims-can-come-from-userinfo-or-the-access-token
   (with-provider [provider]
@@ -508,7 +509,7 @@
               (settings-for provider :oidc-claims-source "id_token,userinfo")]
           (is
            (= {"demo" :member}
-              (:teams (auth/person settings (cookie (log-in provider settings id-only) "oc_auth")))))))
+              (:teams (tokens/person settings (cookie (log-in provider settings id-only) "oc_auth")))))))
       (testing "userinfo of someone else is refused"
         (reset! (:userinfo provider) {"sub" "u-mallory" "groups" ["/acme/demo/admin"]})
         (let [settings
@@ -526,7 +527,7 @@
               (settings-for provider :oidc-claims-source "access_token")]
           (is
            (true?
-            (:tenant-admin (auth/person settings (cookie (log-in provider settings id-only) "oc_auth"))))))))))
+            (:tenant-admin (tokens/person settings (cookie (log-in provider settings id-only) "oc_auth"))))))))))
 
 (deftest a-provider-that-is-down-or-answers-for-another-issuer-sends-people-back-with-a-reason
   (with-provider [provider :discovered-issuer "https://evil.example/realms/test"]
@@ -661,4 +662,4 @@
          (= "direct"
             (oidc/client-secret {:oidc-client-secret "direct" :oidc-client-secret-file (.getPath file)})))))
     (is
-     (nil? (auth/check-settings! (merge support/settings settings))))))
+     (nil? (signin/check-settings! (merge support/settings settings))))))

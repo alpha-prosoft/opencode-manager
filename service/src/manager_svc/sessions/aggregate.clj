@@ -21,6 +21,13 @@
   (and (= :session (:kind aggregate))
        (nil? (:deleted-at aggregate))))
 
+(defn workflow-team
+  "The team whose workflow the session runs: its own, unless it is a fork
+   that landed in another team."
+  [session]
+  (or (get-in session [:labels :workflow-team])
+      (:team-id session)))
+
 (defn- created
   [aggregate {:keys [attrs]}]
   (merge aggregate (into {} (remove (comp nil? val)) attrs) {:kind :session}))

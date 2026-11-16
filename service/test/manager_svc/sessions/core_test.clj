@@ -3,7 +3,6 @@
             [edd.core :as edd]
             [edd.test.fixture.dal :as mock]
             [manager-svc.directory :as directory]
-            [manager-svc.platform.api :as platform]
             [manager-svc.sessions.aggregate :as aggregate]
             [manager-svc.sessions.api :as sessions]
             [manager-svc.sessions.fixtures :as fixtures]
@@ -215,9 +214,10 @@
             (refusal #(fixtures/command! as {:cmd-id :start-session :id id})))
 
           fork
-          (fn [username]
+          (fn [username team-id]
             (refusal #(fixtures/command! (fixtures/as ctx username)
-                                         {:cmd-id :fork-session :id (random-uuid) :attrs {:source-id session-id}})))]
+                                         {:cmd-id :fork-session :id (random-uuid)
+                                          :attrs {:source-id session-id :team-id team-id}})))]
       (fixtures/with-domains ctx
         (binding [fixtures/*team* {:id "alpha" :budget {:max-running-sessions 1}}]
           (fixtures/create-session! system ctx {:id session-id :owner "bob" :visibility :tenant})
@@ -230,10 +230,13 @@
             (is
              (nil? (:pending (:session (mock/query (support/as-platform ctx)
                                                    {:query-id :get-session-record :session-id other-session-id}))))))
-          (testing "nor forks one, whether of the team or not"
+          (testing "nor forks one into the team"
             (is
-             (= [limit-reached limit-reached]
-                [(fork "carol") (fork "mallory")])))
+             (= limit-reached
+                (fork "carol" "alpha"))))
+          (testing "a fork counts in the team it lands in, not in the source's"
+            (is
+             (nil? (fork "dave" "beta"))))
           (testing "the running session itself does not count against its own start"
             (is
              (nil? (start (fixtures/as ctx "bob") session-id))))
@@ -243,7 +246,7 @@
           (testing "once the running one stopped there is room again"
             (fixtures/set-status! system session-id :stopped)
             (is
-             (nil? (fork "carol")))))))))
+             (nil? (fork "carol" "alpha")))))))))
 
 (deftest blocked-starts
   (mock/with-mock-dal
@@ -292,6 +295,16 @@
          (= 409
             (failure #(fixtures/command! bob {:cmd-id :start-session :id session-id}))))))))
 
+(defn- fork!
+  "Forks session-id as username into team-id; the refusal, or nil."
+  [ctx username id team-id]
+  (refusal #(fixtures/command! (fixtures/as ctx username)
+                               {:cmd-id :fork-session :id id :attrs {:source-id session-id :team-id team-id}})))
+
+(defn- session-of
+  [ctx id]
+  (:session (mock/query (support/as-platform ctx) {:query-id :get-session-record :session-id id})))
+
 (deftest forking
   (mock/with-mock-dal
     (let [system
@@ -303,7 +316,7 @@
         (fixtures/create-session! system ctx {:id session-id :owner "bob" :visibility :tenant :project "app"
                                               :labels {:workflow "fix" :conversation "ses_abcdefgh12" :activity "fix"}})
         (fixtures/command! (fixtures/as ctx "carol")
-                           {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id}})
+                           {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id :team-id "alpha"}})
         (is
          (= {:sub "carol"
              :name "Fix the bug (fork)"
@@ -315,67 +328,145 @@
              :project "app"
              :fork-pending true
              :pending :start
-             :labels {:workflow "fix" :conversation "ses_abcdefgh12"}}
-            (select-keys (:session (mock/query (support/as-platform ctx) {:query-id :get-session-record :session-id fork-id}))
+             :labels {:workflow "fix" :workflow-team "alpha" :conversation "ses_abcdefgh12"}}
+            (select-keys (session-of ctx fork-id)
                          [:sub :name :visibility :tenant :team-id :activity :forked-from :project :fork-pending :pending
                           :labels])))
         (testing "a fork needs an id of its own"
           (is
            (= {:id ["missing required key"]}
               (get-in (try
-                        (fixtures/command! (fixtures/as ctx "carol") {:cmd-id :fork-session :attrs {:source-id session-id}})
+                        (fixtures/command! (fixtures/as ctx "carol")
+                                           {:cmd-id :fork-session :attrs {:source-id session-id :team-id "alpha"}})
                         (catch clojure.lang.ExceptionInfo e
                           (ex-data e)))
                       [:error]))))
-        (testing "people of the tenant outside the team fork into the same team"
-          (let [mallory-fork
-                (random-uuid)]
-            (fixtures/command! (fixtures/as ctx "mallory")
-                               {:cmd-id :fork-session :id mallory-fork :attrs {:source-id session-id}})
-            (is
-             (= {:sub "mallory" :tenant "acme" :team-id "alpha"}
-                (select-keys (:session (mock/query (support/as-platform ctx) {:query-id :get-session-record :session-id mallory-fork}))
-                             [:sub :tenant :team-id])))))
+        (testing "and the team it lands in"
+          (is
+           (= {:attrs {:team-id ["missing required key"]}}
+              (get-in (try
+                        (fixtures/command! (fixtures/as ctx "carol")
+                                           {:cmd-id :fork-session :id (random-uuid) :attrs {:source-id session-id}})
+                        (catch clojure.lang.ExceptionInfo e
+                          (ex-data e)))
+                      [:error]))))
         (testing "people of another tenant can't"
           (is
            (= 404
-              (failure #(fixtures/command! (fixtures/as ctx "hank")
-                                           {:cmd-id :fork-session :id (random-uuid) :attrs {:source-id session-id}})))))))))
+              (:status (fork! ctx "hank" (random-uuid) "alpha")))))))))
 
-(deftest forking-needs-the-credentials-the-team-requires-of-the-person
+(deftest a-fork-lands-in-the-team-the-person-picks
+  (mock/with-mock-dal
+    (let [system
+          (fixtures/system)
+
+          ctx
+          (fixtures/ctx system)
+
+          second-fork
+          (random-uuid)]
+      (fixtures/with-domains ctx
+        (fixtures/create-session! system ctx {:id session-id :owner "bob" :visibility :tenant :project "app"})
+        (testing "someone of another team forks into their own"
+          (is
+           (nil? (fork! ctx "dave" fork-id "beta")))
+          (is
+           (= {:sub "dave" :tenant "acme" :team-id "beta" :visibility :private :forked-from session-id
+               :labels {:workflow "fix" :workflow-team "alpha"}}
+              (select-keys (session-of ctx fork-id)
+                           [:sub :tenant :team-id :visibility :forked-from :project :labels]))
+           "without the source's project: project ids are of one team"))
+        (testing "the fork is listed with the picked team and the person, not with the source's team"
+          (is
+           (= [#{fork-id} #{fork-id} #{session-id}]
+              [(set (map :id (directory/rows ctx "/team/acme/beta" :sessions)))
+               (set (map :id (directory/rows ctx "/user/dave" :sessions)))
+               (set (map :id (directory/rows ctx "/team/acme/alpha" :sessions)))])))
+        (testing "a fork of the fork still runs the workflow of the team it came from"
+          (fixtures/command! (fixtures/as ctx "dave") {:cmd-id :update-session :id fork-id :attrs {:visibility :tenant}})
+          (is
+           (nil? (refusal #(fixtures/command! (fixtures/as ctx "erin")
+                                              {:cmd-id :fork-session :id second-fork
+                                               :attrs {:source-id fork-id :team-id "beta"}}))))
+          (is
+           (= {:team-id "beta" :labels {:workflow "fix" :workflow-team "alpha"}}
+              (select-keys (session-of ctx second-fork) [:team-id :labels]))))
+        (testing "nobody forks into a team their claims don't name"
+          (is
+           (= [{:status 403 :message "You are not in team alpha. Fork into one of your own teams."}
+               {:status 403 :message "You are not in team alpha. Fork into one of your own teams."}
+               {:status 403 :message "You are not in team alpha. Fork into one of your own teams."}]
+              [(fork! ctx "dave" (random-uuid) "alpha")
+               (fork! ctx "mallory" (random-uuid) "alpha")
+               (fork! ctx "root" (random-uuid) "alpha")])
+           "someone of another team, someone without a team, a tenant admin who isn't a member"))))))
+
+(deftest a-fork-needs-what-the-picked-team-is-granted
+  (mock/with-mock-dal
+    (let [system
+          (fixtures/system)
+
+          asked
+          (atom nil)
+
+          ctx
+          (edd/reg-query (fixtures/ctx system) :get-fork-grants
+                         (fn [_ {:keys [team-id] :as query}]
+                           (reset! asked (dissoc query :query-id))
+                           (case team-id
+                             "alpha" {:team-id team-id :team-name "Alpha" :known true :missing []}
+                             "beta" {:team-id team-id :team-name "Beta" :known true
+                                     :missing ["team beta may not use llm connection main"
+                                               "MCP server jira is not in the team's team.json mcp_servers"]}
+                             {:team-id team-id :known false :missing []}))
+                         :auth {:role [:non-interactive]})]
+      (fixtures/with-domains ctx
+        (fixtures/create-session! system ctx {:id session-id :owner "bob" :visibility :tenant})
+        (is
+         (= {:status 422
+             :message (str "Team Beta can't run this session: team beta may not use llm connection main; "
+                           "MCP server jira is not in the team's team.json mcp_servers. "
+                           "Fork into another of your teams, or ask your tenant admin to grant it.")}
+            (fork! ctx "erin" fork-id "beta")))
+        (is
+         (= {:tenant "acme" :team-id "beta" :workflow-team-id "alpha" :workflow-id "fix"}
+            @asked))
+        (is
+         (nil? (session-of ctx fork-id)))
+        (testing "a team that is granted it forks"
+          (is
+           (nil? (fork! ctx "erin" fork-id "alpha"))))
+        (testing "a team the tenant doesn't have is not found"
+          (is
+           (= {:status 404 :message "Team not found"}
+              (refusal #(fixtures/command! (support/as-user ctx "frank" {:teams {"gone" :member}})
+                                           {:cmd-id :fork-session :id (random-uuid)
+                                            :attrs {:source-id session-id :team-id "gone"}})))))))))
+
+(deftest forking-needs-the-credentials-the-picked-team-requires-of-the-person
   (mock/with-mock-dal
     (let [system
           (fixtures/system)
 
           ctx
           (edd/reg-query (fixtures/ctx system) :get-missing-required-credentials
-                         (fn [_ {:keys [team-id user]}]
+                         (fn [_ {:keys [team-id]}]
                            {:team-id team-id
                             :team-name "Alpha"
-                            :missing (if (= "carol" user) [{:id "JIRA_TOKEN" :name "Jira"}] [])})
-                         :auth {:role [:non-interactive]})
-
-          fork!
-          (fn [username id]
-            (try
-              (fixtures/command! (fixtures/as ctx username) {:cmd-id :fork-session :id id :attrs {:source-id session-id}})
-              nil
-              (catch clojure.lang.ExceptionInfo e
-                {:status (:status (ex-data e)) :message (ex-message e)})))]
+                            :missing (if (= "alpha" team-id) [{:id "JIRA_TOKEN" :name "Jira"}] [])})
+                         :auth {:role [:non-interactive]})]
       (fixtures/with-domains ctx
-        (with-redefs [platform/teams-of (fn [_ caller]
-                                          (set (filter #{"alpha"} (map name (keys (:teams caller))))))]
-          (fixtures/create-session! system ctx {:id session-id :owner "bob" :visibility :tenant
-                                                :labels {:workflow "fix" :activity "fix"}})
+        (fixtures/create-session! system ctx {:id session-id :owner "bob" :visibility :tenant
+                                              :labels {:workflow "fix" :activity "fix"}})
+        (is
+         (= {:status 422
+             :message "Team Alpha requires your own Jira credential. Add it under Accounts, then start again; team and tenant values don't count."}
+            (fork! ctx "erin" fork-id "alpha")))
+        (is
+         (nil? (session-of ctx fork-id)))
+        (testing "another team of theirs asks only what it requires itself"
           (is
-           (= {:status 422
-               :message "Team Alpha requires your own Jira credential. Add it under Accounts, then start again; team and tenant values don't count."}
-              (fork! "carol" fork-id)))
-          (is
-           (nil? (:session (mock/query (support/as-platform ctx) {:query-id :get-session-record :session-id fork-id}))))
-          (testing "people outside the team fork without its requirements, which they couldn't meet"
-            (is
-             (nil? (fork! "mallory" (random-uuid))))))))))
+           (nil? (fork! ctx "erin" (random-uuid) "beta"))))))))
 
 (deftest forking-needs-a-workflow
   (mock/with-mock-dal
@@ -389,7 +480,7 @@
         (is
          (= 422
             (failure #(fixtures/command! (fixtures/as ctx "carol")
-                                         {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id}}))))))))
+                                         {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id :team-id "alpha"}}))))))))
 
 (deftest stopping-idle-sessions
   (mock/with-mock-dal
@@ -579,7 +670,7 @@
            (= "Renamed"
               (:name (first (filter #(= own (:id %)) (mock/query (fixtures/as ctx "bob") {:query-id :list-sessions})))))))
         (testing "a fork is listed for the person who forked"
-          (fixtures/command! (fixtures/as ctx "bob") {:cmd-id :fork-session :id fork-id :attrs {:source-id team-shared}})
+          (fixtures/command! (fixtures/as ctx "bob") {:cmd-id :fork-session :id fork-id :attrs {:source-id team-shared :team-id "alpha"}})
           (is
            (contains? (listed "bob") fork-id))
           (is

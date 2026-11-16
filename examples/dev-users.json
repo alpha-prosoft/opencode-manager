@@ -34,7 +34,9 @@
     "email": "carol@acme.test",
     "name": "Carol",
     "tenant": "acme",
-    "groups": [],
+    "groups": [
+      "/acme/payments"
+    ],
     "realm_access": {
       "roles": []
     }

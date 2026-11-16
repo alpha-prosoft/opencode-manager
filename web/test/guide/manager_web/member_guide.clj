@@ -717,10 +717,12 @@
   []
   (chapter! "Forking a session you can't work in"
             (str "A **fork** is your own private copy of a session: its files and conversations up to that "
-                 "moment, in your name, in the same team. Use it to continue from somebody else's work, from a "
+                 "moment, in your name, in a team of yours. Use it to continue from somebody else's work, from a "
                  "team session or from a locked one."))
   (steps! "Open the session (from **Sessions**, a run, or the search)."
           "Select **Fork** in its actions, or **Fork to continue** in the banner."
+          (str "Choose the **Team** the copy belongs to. The session's team is chosen for you when you are in it; "
+               "the copy works with your own credentials, then that team's, then the tenant's.")
           "Confirm with **Fork session**. Your copy opens; it is private until you share it."
           "Work in the copy with **Open**.")
   (when-let [session
@@ -753,17 +755,19 @@
               :marks [{:target session-els/locked :label "Read-only from now on" :side :top :color :red :distance 60}
                       {:target session-els/fork-to-continue :label "Makes your own copy" :side :top :color :green :distance 30}]})
     (h/click session-els/fork-to-continue)
-    (h/wait-visible component-els/confirm-dialog)
+    (h/wait-visible component-els/fork-dialog)
     (s/settle)
     (figure! "m28-fork-confirm"
-             "The fork is private and yours; the original stays as it is."
+             "The fork is private and yours, in the team you choose; the original stays as it is."
              {:dialog true
               :pad [24 24 0 24]
-              :marks [{:target component-els/confirm-accept :label "Creates your copy" :side :right :color :green}]})
-    (h/click component-els/confirm-keep)
-    (h/wait-hidden component-els/confirm-dialog)
-    (p! (str "A fork counts as one of the team's running sessions, and it needs the credentials the team "
-             "requires of you, like anything else you start."))))
+              :marks [{:target component-els/fork-dialog-team :label "Where your copy lives" :side :left :color :blue}
+                      {:target component-els/fork-dialog-submit :label "Creates your copy" :side :right :color :green}]})
+    (h/click component-els/fork-dialog-cancel)
+    (h/wait-hidden component-els/fork-dialog)
+    (p! (str "A fork counts as one of the running sessions of the team you choose, and it needs the credentials "
+             "that team requires of you, like anything else you start. A team that is not granted what the "
+             "session uses (its model, its tools) can't take the fork; the dialog says what is missing."))))
 
 (defn- lists
   []

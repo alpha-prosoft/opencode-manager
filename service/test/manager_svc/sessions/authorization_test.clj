@@ -58,7 +58,7 @@
     (testing "a team member cannot fork a private session they cannot see"
       (is
        (= 404
-          (command ctx "carol" {:cmd-id :fork-session :id (random-uuid) :attrs {:source-id session-id}}))))))
+          (command ctx "carol" {:cmd-id :fork-session :id (random-uuid) :attrs {:source-id session-id :team-id "alpha"}}))))))
 
 (deftest owners-team-admins-and-tenant-admins-manage-a-session
   (doseq [manager ["bob" "alice" "root"]]
@@ -90,7 +90,7 @@
       (testing "others continue in a fork with their own credentials"
         (is
          (= :ok
-            (command ctx "carol" {:cmd-id :fork-session :id (random-uuid) :attrs {:source-id session-id}})))))))
+            (command ctx "carol" {:cmd-id :fork-session :id (random-uuid) :attrs {:source-id session-id :team-id "alpha"}})))))))
 
 (deftest sessions-of-platform-runs-are-worked-in-by-their-team-only
   (with-session [ctx {:owner "platform" :visibility :tenant}]
@@ -104,16 +104,22 @@
           {:status (query ctx "mallory" {:query-id :get-session :session-id session-id})
            :open-blocked (:open-blocked (mock/query (fixtures/as ctx "mallory")
                                                     {:query-id :get-session :session-id session-id}))})))
-    (testing "and continue in their own fork, which stays in the team"
+    (testing "and continue in a fork of their own, in a team of theirs"
       (let [fork-id
             (random-uuid)]
         (is
          (= :ok
-            (command ctx "mallory" {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id}})))
+            (command ctx "dave" {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id :team-id "beta"}})))
         (is
-         (= {:sub "mallory" :tenant "acme" :team-id "alpha" :visibility :private :forked-from session-id}
-            (select-keys (mock/query (fixtures/as ctx "mallory") {:query-id :get-session :session-id fork-id})
-                         [:sub :tenant :team-id :visibility :forked-from])))))))
+         (= {:sub "dave" :tenant "acme" :team-id "beta" :visibility :private :forked-from session-id}
+            (select-keys (mock/query (fixtures/as ctx "dave") {:query-id :get-session :session-id fork-id})
+                         [:sub :tenant :team-id :visibility :forked-from])))))
+    (testing "never in the session's team, which they are not in"
+      (is
+       (= {"dave" 403 "mallory" 403}
+          (into {} (for [username ["dave" "mallory"]]
+                     [username (command ctx username {:cmd-id :fork-session :id (random-uuid)
+                                                      :attrs {:source-id session-id :team-id "alpha"}})])))))))
 
 (deftest a-locked-session-can-still-be-forked
   (with-session [ctx {:owner "bob" :visibility :team}]
@@ -121,7 +127,7 @@
     (is
      (= {:start-session 409 :fork-session :ok}
         {:start-session (command ctx "carol" {:cmd-id :start-session :id session-id})
-         :fork-session (command ctx "carol" {:cmd-id :fork-session :id (random-uuid) :attrs {:source-id session-id}})}))))
+         :fork-session (command ctx "carol" {:cmd-id :fork-session :id (random-uuid) :attrs {:source-id session-id :team-id "alpha"}})}))))
 
 (deftest the-platform-may-start-a-session-but-not-a-locked-one
   (with-session [ctx {:owner "bob" :visibility :private}]
@@ -152,18 +158,18 @@
                      :delete-session (command ctx username {:cmd-id :delete-session :id session-id})
                      :lock-session (command ctx username {:cmd-id :lock-session :id session-id})
                      :fork-session (command ctx username {:cmd-id :fork-session :id (random-uuid)
-                                                          :attrs {:source-id session-id}})}])))))
+                                                          :attrs {:source-id session-id :team-id "alpha"}})}])))))
 
-(deftest anyone-in-the-tenant-forks-a-session-shared-with-the-tenant
+(deftest anyone-in-the-tenant-forks-a-session-shared-with-the-tenant-into-a-team-of-theirs
   (with-session [ctx {:owner "bob" :visibility :tenant}]
     (let [fork-id
           (random-uuid)]
       (is
        (= :ok
-          (command ctx "mallory" {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id}})))
+          (command ctx "dave" {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id :team-id "beta"}})))
       (is
-       (= {:sub "mallory" :tenant "acme" :team-id "alpha" :visibility :private}
-          (select-keys (mock/query (fixtures/as ctx "mallory") {:query-id :get-session :session-id fork-id})
+       (= {:sub "dave" :tenant "acme" :team-id "beta" :visibility :private}
+          (select-keys (mock/query (fixtures/as ctx "dave") {:query-id :get-session :session-id fork-id})
                        [:sub :tenant :team-id :visibility])))
       (testing "the owner of the source does not see the private fork"
         (is

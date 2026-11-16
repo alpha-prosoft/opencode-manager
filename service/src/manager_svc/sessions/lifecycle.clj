@@ -27,17 +27,16 @@
 
 (defn prepare-fork!
   "Copies the source's files into the fork and writes the fork's own sandbox
-   (its keys are derived from the fork's id), built from the source's workflow."
+   (its keys are derived from the fork's id): the source's workflow as a
+   session of the fork's team."
   [system {:keys [id forked-from] :as fork}]
+  (when-not (records/one system forked-from)
+    (throw (ex-info (str "The forked session " forked-from " no longer exists") {:session-id id})))
   (let [settings
         (:settings system)
 
-        source
-        (or (records/one system forked-from)
-            (throw (ex-info (str "The forked session " forked-from " no longer exists") {:session-id id})))
-
         sandbox
-        (or (runs/fork-sandbox system source fork)
+        (or (runs/fork-sandbox system fork)
             (throw (ex-info "The workflow of the forked session is missing or invalid" {:session-id id})))]
     (storage/prepare! settings id)
     (storage/copy-session! settings forked-from id)

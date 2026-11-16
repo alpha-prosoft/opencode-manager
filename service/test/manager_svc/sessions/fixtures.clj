@@ -86,9 +86,18 @@
                    {:team-id team-id :missing []})
                  :auth {:role [:non-interactive]}))
 
+(defn- with-every-grant
+  "The runs domain's :get-fork-grants (a dependency of :fork-session): every
+   team may run every workflow unless a test registers its own."
+  [ctx]
+  (edd/reg-query ctx :get-fork-grants
+                 (fn [_ {:keys [team-id]}]
+                   {:team-id team-id :team-name team-id :known true :missing []})
+                 :auth {:role [:non-interactive]}))
+
 (defn ctx
   [system]
-  (security/register (without-required-credentials (core/register (support/ctx system)))))
+  (security/register (with-every-grant (without-required-credentials (core/register (support/ctx system))))))
 
 (def sandbox
   {:image "opencode:test"
@@ -106,11 +115,14 @@
 
 (def people
   "What the tokens of test people carry. Team alpha of acme: alice admin,
-   bob and carol members; mallory is in acme without a team; root is acme's
-   tenant admin. gina and hank are of globex, which also has a team alpha."
+   bob and carol members; dave is a member of its team beta, erin of both;
+   mallory is in acme without a team; root is acme's tenant admin. gina and
+   hank are of globex, which also has a team alpha."
   {"alice" {:teams {"alpha" :admin}}
    "bob" {:teams {"alpha" :member}}
    "carol" {:teams {"alpha" :member}}
+   "dave" {:teams {"beta" :member}}
+   "erin" {:teams {"alpha" :member "beta" :member}}
    "mallory" {}
    "root" {:tenant-admin true}
    "gina" {:tenant "globex" :tenant-admin true :teams {"alpha" :admin}}
