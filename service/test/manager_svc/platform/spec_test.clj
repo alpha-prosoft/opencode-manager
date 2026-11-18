@@ -57,7 +57,7 @@
      (= [{:id "copilot" :models ["claude-sonnet-5.5" "claude-opus-5.5" "gemini-3.5-flash"]}]
         (spec/team-llm-connections tenant "demo" value)))
     (is
-     (= ["bitbucket" "jenkins"]
+     (= ["bitbucket" "jenkins" "whoami" "whoami-account"]
         (spec/team-mcp-servers tenant "demo" value)))
     (testing "no team.json is an empty configuration"
       (is
@@ -93,12 +93,12 @@
         team-errors
         (fn [team-id required]
           (:errors (spec/parse-team-config tenant team-id {:required_credentials required})))]
-    (testing "the examples require PagerDuty of ops (tenant.json) and Jira of ops' members (its team.json)"
+    (testing "the examples require PagerDuty of ops (tenant.json), Jira and the whoami token of ops' members (its team.json)"
       (is
        (= {:id "PAGERDUTY_TOKEN" :required true :provided-by [:user] :teams ["ops"]}
           (select-keys (spec/credential tenant "PAGERDUTY_TOKEN") [:id :required :provided-by :teams])))
       (is
-       (= {:value ["JIRA_TOKEN"] :errors []}
+       (= {:value ["JIRA_TOKEN" "WHOAMI_TOKEN"] :errors []}
           (update (spec/parse-team-config tenant "ops" (slurp "../examples/tenants/acme/teams/ops/.platform/team.json"))
                   :value :required-credentials))))
     (testing "credentials are optional unless marked"

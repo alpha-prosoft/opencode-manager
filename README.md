@@ -138,7 +138,7 @@ web/         manager-web: pages, theme, unit tests, Playwright tests, the guide'
 charts/      Helm chart
 deploy/      Keycloak realm, Gerrit and Jenkins setup, Traefik routes, placeholder secrets of the documentation stack
 examples/    tenants acme and globex with their onboarding and team repositories, dev users, the demo service
-images/      the session image, the example MCP servers and the scripted LLM of the documentation stack
+images/      the session image, the example MCP servers (Bitbucket, Jenkins and the mock whoami) and the scripted LLM of the documentation stack
 schemas/     JSON Schemas for tenant.json, team.json and the definition files
 docs/        the documentation site (MkDocs)
 scripts/     seed-local-repos.sh, wait-for-stack.sh, stack-llm.sh, soak.sh, check-docs.py
@@ -163,7 +163,7 @@ scripts/     seed-local-repos.sh, wait-for-stack.sh, stack-llm.sh, soak.sh, chec
 |---|---|
 | Backend unit tests | `cd service && clojure -M:test:unit` |
 | UI unit tests | `cd web && clojure -M:shadow-cljs compile test` |
-| API end to end (real LLM) | `cd service && MANAGER_URL=http://localhost:8080 clojure -M:e2e` (includes the Gerrit and Jenkins checks when they are up; `-M:e2e-ci` runs only those) |
+| API end to end (real LLM) | `cd service && MANAGER_URL=http://localhost:8080 clojure -M:e2e` (includes the Gerrit and Jenkins checks when they are up; `-M:e2e-ci` runs only those, `-M:e2e-credentials` only the credential hierarchy, which needs no LLM) |
 | UI end to end (Playwright) | `cd web && MANAGER_URL=http://localhost:8080 clojure -M:it` (in oidc mode the tests sign in through Keycloak) |
 | Soak | `scripts/soak.sh [iterations] [pause-seconds]`: runs both end-to-end suites repeatedly against a running stack and records durations, results, the manager's errors and whether a failure went away on a retry |
 | UI development | `cd web && npm install && npm run fonts && clojure -M:shadow-cljs watch app` (see [AGENTS.md](AGENTS.md) for running the service beside it) |

@@ -157,9 +157,10 @@
              (false?
               (h/visible? (admin-els/team-link (:team h/fixture)))))
             (open-admin-tab :mcp)
+            (h/wait-visible (admin-els/mcp-server (:other-tenant-mcp-server h/fixture)))
             (is
-             (true?
-              (.isVisible (h/wait-visible admin-els/mcp-empty))))
+             (false?
+              (h/visible? (admin-els/mcp-server (:tenant-only-mcp-server h/fixture)))))
             (open-admin-tab :usage)
             (h/wait-any admin-els/team-usage-table admin-els/usage-empty)
             (is

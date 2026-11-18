@@ -674,17 +674,28 @@
          (= #{"research" "lab"}
             (api/teams-of system (support/person "gina" {:tenant "globex" :tenant-admin true}))))
         (is
-         (= {"workspace" true "scheduled-workspace" true}
+         (= {"workspace" true "scheduled-workspace" true "whoami-workspace" true}
             (into {} (map (juxt :id :valid)) (api/definitions system "acme" "ops" :workflows))))
         (is
-         (= {:agents 3 :harnesses 4 :workflows 9}
+         (= {:agents 3 :harnesses 5 :workflows 10}
             (frequencies-by-kind (api/definitions system "acme" "demo"))))
         (is
          (= #{"github-review" "implement-gerrit"}
             (set (keep #(when-not (:valid %) (:id %)) (mapcat #(api/definitions system "acme" %) ["demo" "payments" "ops"]))))
          "only the workflow needing a credential the tenant never granted, and the one pushing to Gerrit over http without MANAGER_HTTP_GIT_HOSTS, are invalid")
         (is
-         (every? :valid (api/definitions system "globex" "research")))
+         (every? :valid (mapcat #(api/definitions system "globex" %) ["research" "lab"])))
+        (is
+         (= {"demo" ["whoami" "whoami-account"] "payments" ["whoami" "whoami-account"] "ops" ["whoami"]}
+            (into {}
+                  (for [team-id ["demo" "payments" "ops"]]
+                    [team-id (get-in (api/definition system "acme" team-id :harnesses "whoami-tools") [:spec :mcp])])))
+         "every team has a harness with the whoami mock, which shows whose credential a call used")
+        (is
+         (= {"research" ["whoami"] "lab" ["whoami" "whoami-key"]}
+            (into {}
+                  (for [team-id ["research" "lab"]]
+                    [team-id (get-in (api/definition system "globex" team-id :harnesses "whoami-tools") [:spec :mcp])]))))
         (is
          (= "file:///repos/demo-service"
             (get-in (api/definition system "acme" "demo" :workflows "review-branch") [:spec :options :repository :url])))
@@ -718,6 +729,13 @@
             (mapv :id (api/teams system "globex"))))
         (is
          (nil? (api/credential system "globex" "BITBUCKET_TOKEN")))
+        (is
+         (= [[:tenant :team :user] [:tenant :team :user]]
+            (mapv #(:provided-by (api/credential system % "WHOAMI_TOKEN")) ["acme" "globex"]))
+         "both declare WHOAMI_TOKEN, each its own")
+        (is
+         (= [nil [:user]]
+            (mapv #(:provided-by (api/credential system % "WHOAMI_KEY")) ["acme" "globex"])))
         (is
          (= [:tenant :team :user]
             (:provided-by (api/credential system "acme" "BITBUCKET_TOKEN"))))))))

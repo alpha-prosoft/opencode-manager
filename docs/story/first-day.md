@@ -24,7 +24,7 @@ There are two kinds of credential on this page:
 
     The reason is accountability: with a required credential, everything the agent does in that tool is done under your name with your permissions, and a shared account would hide who did it. A team's or the tenant's value never satisfies the requirement.
 
-A requirement applies to you only for teams your account is actually a member of. In the example, `henry` is in Operations, where the tenant requires PagerDuty and the team requires Jira; `bob` is not in Operations and is asked for neither.
+A requirement applies to you only for teams your account is actually a member of. In the example, `henry` is in Operations, where the tenant requires PagerDuty and the team requires Jira and the *Who am I* token (any value starting with `whoami-`, such as `whoami-user-henry`); `bob` is not in Operations and none of them is required of him.
 
 Your values are encrypted, never shown again (only a short hint), and never sent into a sandbox. **Accounts** shows, per credential, which value applies in each of your teams, for example "Demo team: team value · Payments: tenant value".
 

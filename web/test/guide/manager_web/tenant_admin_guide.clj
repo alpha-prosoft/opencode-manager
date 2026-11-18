@@ -216,7 +216,7 @@
                 "agents may call.")
            {:ctx admin-els/mcp-list
             :pad [90 24 24 24]
-            :marks [{:target (admin-els/mcp-server (:mcp-server h/fixture)) :label "A tool server and its credential" :side :bottom :color :blue :distance 16}]})
+            :marks [{:target (admin-els/mcp-server "bitbucket") :label "A tool server and its credential" :side :bottom :color :blue :distance 16}]})
   (admin-tab! :jobs)
   (h/wait-visible admin-els/schedules-table)
   (figure! "tn11-background-jobs"

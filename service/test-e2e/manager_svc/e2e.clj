@@ -5,10 +5,11 @@
      cd service && MANAGER_URL=http://localhost:8080 clojure -M:e2e
 
    Runs use the real LLM. The code review reviews the e2e-review branch of
-   demo-service; local/secrets/BITBUCKET_TOKEN enables the credential and MCP
-   gateway checks."
-  (:require [clojure.java.io :as io]
-            [clojure.java.shell :as shell]
+   demo-service. Which credential the MCP gateway uses for whom is the
+   subject of manager-svc.e2e-credentials, which this pass runs as a section;
+   its mock MCP server whoami (images/mcp-whoami) stands in for every outside
+   service, so no check needs a real token."
+  (:require [clojure.java.shell :as shell]
             [clojure.string :as string]
             [jsonista.core :as jsonista]
             [lambda.util :as util]
@@ -47,9 +48,6 @@
   (when session-id
     (swap! started-sessions conj [person session-id]))
   session-id)
-
-(def token-file
-  (io/file ".." "local" "secrets" "BITBUCKET_TOKEN"))
 
 (defn check
   ([check-name ok]
@@ -102,7 +100,7 @@
          (when (pos? (.getPort uri)) (str ":" (.getPort uri)))
          "/")))
 
-(defn- http-client
+(defn http-client
   "An HTTP client with its own cookie jar (the session hosts and the manager
    share the cookie name, like a browser that sends it to both)."
   []
@@ -126,7 +124,7 @@
       (swap! cookies dissoc k)
       (swap! cookies assoc k v))))
 
-(defn- send!
+(defn send!
   [{:keys [http cookies]} method url {:keys [body headers]}]
   (let [with-cookies
         (cond-> (merge {"Content-Type" "application/json" "X-Requested-With" "e2e"} headers)
@@ -157,6 +155,11 @@
       (util/to-edn text)
       (catch Exception _
         text))))
+
+(defn anonymous
+  "Someone who never logged in."
+  []
+  {:client (http-client)})
 
 (def auth-mode
   "The server's MANAGER_AUTH_MODE as /api/auth/config tells it."
@@ -264,7 +267,7 @@
   [payload]
   (merge {:request-id (UUID/randomUUID) :interaction-id (UUID/randomUUID)} payload))
 
-(defn- outcome
+(defn outcome
   "{:ok result} or {:error {:status :message}} of an edd response."
   [{:keys [status data body]}]
   (let [failure
@@ -296,17 +299,54 @@
   [response]
   (str (get-in response [:error :message])))
 
-(defn- wait-until
-  [timeout-ms f]
-  (let [deadline
-        (+ (System/currentTimeMillis) timeout-ms)]
-    (loop []
-      (let [value
-            (f)]
-        (cond
-          value value
-          (> (System/currentTimeMillis) deadline) nil
-          :else (do (Thread/sleep 3000) (recur)))))))
+(defn- credential-path
+  [scope credential-id]
+  (str (cond
+         (= :user scope) "/api/credentials/"
+         (= :tenant scope) "/api/admin/credentials/"
+         :else (str "/api/teams/" (second scope) "/credentials/"))
+       credential-id))
+
+(defn put-credential
+  "Saves value ({:secret :username}) of a credential through the edge, as
+   person's own (:user), the tenant's (:tenant) or a team's ([:team id])."
+  [person scope credential-id value]
+  (outcome (request person "PUT" (credential-path scope credential-id) value)))
+
+(defn delete-credential
+  "Removes the value of a credential that scope holds, as person."
+  [person scope credential-id]
+  (command person (cond
+                    (= :user scope) {:cmd-id :delete-my-credential :attrs {:credential-id credential-id}}
+                    (= :tenant scope) {:cmd-id :delete-tenant-credential :attrs {:credential-id credential-id}}
+                    :else {:cmd-id :delete-team-credential :attrs {:team-id (second scope) :credential-id credential-id}})))
+
+(defn my-credential
+  "What :get-my-credentials says of one credential."
+  [person credential-id]
+  (some #(when (= credential-id (:id %)) %) (:credentials (result person {:query-id :get-my-credentials}))))
+
+(defn credential-state-in
+  "How a credential resolves for person in one of their teams: :own, :team,
+   :tenant or :missing."
+  [person credential-id team-id]
+  (some #(when (= team-id (:team-id %)) (keyword (:state %))) (:teams (my-credential person credential-id))))
+
+(defn wait-until
+  "(f) once it is truthy, asked every interval-ms (3 s unless given); nil
+   after timeout-ms."
+  ([timeout-ms f]
+   (wait-until timeout-ms 3000 f))
+  ([timeout-ms interval-ms f]
+   (let [deadline
+         (+ (System/currentTimeMillis) timeout-ms)]
+     (loop []
+       (let [value
+             (f)]
+         (cond
+           value value
+           (> (System/currentTimeMillis) deadline) nil
+           :else (do (Thread/sleep (long interval-ms)) (recur))))))))
 
 (defn start-run
   ([person team-id workflow-id inputs]
@@ -334,6 +374,20 @@
                        (when (contains? #{:completed :failed :cancelled} (:status found))
                          found)))
         {:status :timeout :id run-id})))
+
+(defn session-of
+  [person session-id]
+  (query person {:query-id :get-session :session-id session-id}))
+
+(defn stop-session!
+  [person session-id]
+  (when session-id
+    (command person {:cmd-id :stop-session :id session-id})))
+
+(defn delete-session!
+  [person session-id]
+  (when session-id
+    (command person {:cmd-id :delete-session :id session-id})))
 
 (defn sh
   [& args]
@@ -638,17 +692,77 @@
                    (and (pos? (or (:comments plan) 0)) (= 0 posted))
                    (select-keys outcome [:plan :posted]))))))))
 
-(defn- tools-call
-  [session-id key tool]
-  (in-sandbox session-id
-              (str "wget -q -S -O- --header 'X-Platform-Key: " key "' --header 'Content-Type: application/json' "
-                   "--header 'Accept: application/json, text/event-stream' "
-                   "--post-data '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"" tool "\",\"arguments\":{}}}' "
-                   "http://manager:8001/mcp-gw/bitbucket 2>&1; true")))
+(def bobs-whoami-token
+  "bob's own value of WHOAMI_TOKEN: made up, as the whoami mock accepts them
+   (images/mcp-whoami)."
+  "whoami-user-bob")
 
-(defn credentials-and-tools
-  [{:keys [alice bob carol erin]}]
-  (section "Credentials, MCP gateway, fork and lock")
+(defn- skills-and-tool-servers
+  "A workspace whose harness has a skill and an MCP server: the skill is
+   read-only and the server out of the sandbox's reach."
+  [bob run]
+  (let [session-id
+        (:session-id run)]
+    (when (check "a workspace with MCP tools and a skill launches" (= :completed (:status run)) (or (:error run) (:status run)))
+      (let [output
+            (in-sandbox session-id "wget -q -T 5 -O- http://mcp-bitbucket:8000/ >/dev/null 2>&1 && echo reachable || echo blocked")]
+        (check "sandboxes cannot reach MCP servers directly" (string/includes? output "blocked") output))
+      (let [output
+            (in-sandbox session-id "echo x >> /etc/opencode/opencode/skills/pr-triage/SKILL.md 2>/dev/null && echo writable || echo denied")]
+        (check "skills are mounted read-only" (string/includes? output "denied") output))
+      (delete-session! bob session-id))))
+
+(defn- fork-and-lock
+  "bob's session works with his own credential: others may look at it and
+   fork it, only he locks it."
+  [{:keys [alice bob carol]} session-id]
+  (let [seen
+        (result alice {:query-id :get-session :session-id session-id})]
+    (check "others cannot work in a session that uses personal credentials" (= :personal (:open-blocked seen)) (:open-blocked seen)))
+  (check "they cannot start it either" (= 409 (error-status (command alice {:cmd-id :start-session :id session-id}))))
+  (let [fork-id
+        (UUID/randomUUID)
+
+        forked
+        (command alice {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id :team-id "demo"}})
+
+        fork
+        (result alice {:query-id :get-session :session-id fork-id})]
+    (track-session! alice fork-id)
+    (check "they can fork it into their own private copy"
+           (and (:ok forked) (= "alice" (:sub fork)) (= :private (:visibility fork)))
+           (or (:error forked) fork))
+    (check "the fork starts with its own keys"
+           (wait-until 180000 #(= :running (:status (result alice {:query-id :get-session :session-id fork-id}))))
+           (:status (result alice {:query-id :get-session :session-id fork-id})))
+    (let [fork-config
+          (sandbox-config fork-id)]
+      (check "the fork's sandbox keys are derived for the fork"
+             (string/starts-with? (str (get-in fork-config [:provider :platform :options :apiKey])) (str fork-id))
+             (get-in fork-config [:provider :platform :options :apiKey])))
+    (command alice {:cmd-id :stop-session :id fork-id}))
+  (check "people who can't see it cannot fork it"
+         (= 404 (error-status (command carol {:cmd-id :fork-session :id (UUID/randomUUID)
+                                              :attrs {:source-id session-id :team-id "payments"}}))))
+  (check "only the owner can lock it" (= 403 (error-status (command alice {:cmd-id :lock-session :id session-id}))))
+  (let [locked
+        (command bob {:cmd-id :lock-session :id session-id})]
+    (check "the owner can lock it"
+           (and (:ok locked) (= "bob" (:locked-by (result bob {:query-id :get-session :session-id session-id}))))
+           locked))
+  (check "nobody can start a locked session" (= 409 (error-status (command bob {:cmd-id :start-session :id session-id}))))
+  (let [fork-id
+        (track-session! bob (UUID/randomUUID))]
+    (check "a locked session can still be forked"
+           (:ok (command bob {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id :team-id "demo"}})))
+    (command bob {:cmd-id :delete-session :id fork-id})))
+
+(defn credentials-and-sessions
+  "What people are offered at login, and a session that works with its
+   owner's own credential. Which credential the MCP gateway uses for whom is
+   the subject of manager-svc.e2e-credentials."
+  [{:keys [alice bob erin] :as people}]
+  (section "Personal credentials, skills, fork and lock")
   (let [mine
         (result erin {:query-id :get-my-credentials})
 
@@ -661,108 +775,25 @@
                 (keyword? (get-in states ["NEXUS_TOKEN" :state]))
                 (not (some #{"NEXUS_TOKEN"} (:pending mine))))
            [(get states "NEXUS_TOKEN") (:pending mine)]))
-  (check "people can't set their own value of a credential only admins provide"
-         (#{403 422} (error-status (outcome (request erin "PUT" "/api/credentials/NEXUS_TOKEN" {:secret "x"})))))
-  (let [response
-        (outcome (request bob "PUT" "/api/credentials/BITBUCKET_TOKEN" {:secret "definitely-not-a-valid-token"}))]
-    (check "invalid credentials are rejected before saving"
-           (and (= 422 (error-status response)) (string/includes? (error-message response) "Not saved"))
-           response))
-  (check "only admins set platform values"
-         (= 403 (error-status (outcome (request carol "PUT" "/api/admin/credentials/BITBUCKET_TOKEN" {:secret "x"})))))
-  (if-not (.isFile token-file)
-    (check "Bitbucket token available for the tool checks (local/secrets/BITBUCKET_TOKEN)" false)
-    (let [token
-          (string/trim (slurp token-file))
+  (let [saved
+        (put-credential bob :user "WHOAMI_TOKEN" {:secret bobs-whoami-token})]
+    (try
+      (check "a person saves their own value of a checked credential" (:ok saved) saved)
+      (check "credential values are never returned by the API"
+             (not (string/includes? (pr-str [(result alice {:query-id :list-admin-credentials})
+                                             (result bob {:query-id :get-my-credentials})])
+                                    bobs-whoami-token)))
+      (let [with-skill
+            (start-run bob "demo" "bitbucket-workspace" {:title "e2e skills"})
 
-          saved
-          (outcome (request bob "PUT" "/api/credentials/BITBUCKET_TOKEN" {:secret token}))]
-      (try
-        (check "a valid personal credential is checked and saved" (:ok saved) saved)
-        (check "credential values are never returned by the API"
-               (not (string/includes? (pr-str (result alice {:query-id :list-admin-credentials})) token)))
-        (let [run
-              (wait-for-run bob (start-run bob "demo" "bitbucket-workspace" {:title "e2e tools"}))
-
-              session-id
-              (:session-id run)]
-          (when (check "a workspace with MCP tools launches" (= :completed (:status run)) (or (:error run) (:status run)))
-            (let [tools-key
-                  (get-in (sandbox-config session-id) [:mcp :bitbucket :headers :X-Platform-Key])
-
-                  allowed
-                  (tools-call session-id tools-key "whoami")
-
-                  blocked
-                  (tools-call session-id tools-key "delete_repository")
-
-                  forged
-                  (tools-call session-id (str session-id ".forged") "whoami")]
-              (check "the gateway calls allowed tools with the person's credential" (string/includes? allowed "display_name") allowed)
-              (check "the gateway blocks tools outside the allow-list" (string/includes? blocked "not allowed") blocked)
-              (check "the gateway rejects forged keys" (string/includes? forged "401") forged))
-            (let [events
-                  (result bob {:query-id :list-audit-events :session-id session-id :after 0 :limit 1000})
-
-                  sources
-                  (keep #(get-in % [:payload :source]) (filter #(= "mcp" (name (:type %))) events))]
-              (check "MCP calls are audited with whose credential was used" (some #(= "user" (name %)) sources) (vec sources)))
-            (let [output
-                  (in-sandbox session-id "wget -q -T 5 -O- http://mcp-bitbucket:8000/ >/dev/null 2>&1 && echo reachable || echo blocked")]
-              (check "sandboxes cannot reach MCP servers directly" (string/includes? output "blocked") output))
-            (let [output
-                  (in-sandbox session-id "echo x >> /etc/opencode/opencode/skills/pr-triage/SKILL.md 2>/dev/null && echo writable || echo denied")]
-              (check "skills are mounted read-only" (string/includes? output "denied") output))
-            (let [seen
-                  (result alice {:query-id :get-session :session-id session-id})]
-              (check "others cannot work in a session that uses personal credentials" (= :personal (:open-blocked seen)) (:open-blocked seen)))
-            (check "they cannot start it either" (= 409 (error-status (command alice {:cmd-id :start-session :id session-id}))))
-            (let [fork-id
-                  (UUID/randomUUID)
-
-                  forked
-                  (command alice {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id :team-id "demo"}})
-
-                  fork
-                  (result alice {:query-id :get-session :session-id fork-id})]
-              (track-session! alice fork-id)
-              (check "they can fork it into their own private copy"
-                     (and (:ok forked) (= "alice" (:sub fork)) (= :private (:visibility fork)))
-                     (or (:error forked) fork))
-              (check "the fork starts with its own keys"
-                     (wait-until 180000 #(= :running (:status (result alice {:query-id :get-session :session-id fork-id}))))
-                     (:status (result alice {:query-id :get-session :session-id fork-id})))
-              (let [fork-config
-                    (sandbox-config fork-id)]
-                (check "the fork's sandbox keys are derived for the fork"
-                       (string/starts-with? (str (get-in fork-config [:provider :platform :options :apiKey])) (str fork-id))
-                       (get-in fork-config [:provider :platform :options :apiKey])))
-              (command alice {:cmd-id :stop-session :id fork-id}))
-            (check "people who can't see it cannot fork it"
-                   (= 404 (error-status (command carol {:cmd-id :fork-session :id (UUID/randomUUID)
-                                                        :attrs {:source-id session-id :team-id "payments"}}))))
-            (let [refused
-                  (command bob {:cmd-id :fork-session :id (UUID/randomUUID)
-                                :attrs {:source-id session-id :team-id "payments"}})]
-              (check "a team that isn't granted the session's tools can't take the fork, and the refusal names both"
-                     (and (= 422 (error-status refused))
-                          (every? #(string/includes? (error-message refused) %) ["Payments" "bitbucket"]))
-                     refused))
-            (check "only the owner can lock it" (= 403 (error-status (command alice {:cmd-id :lock-session :id session-id}))))
-            (let [locked
-                  (command bob {:cmd-id :lock-session :id session-id})]
-              (check "the owner can lock it"
-                     (and (:ok locked) (= "bob" (:locked-by (result bob {:query-id :get-session :session-id session-id}))))
-                     locked))
-            (check "nobody can start a locked session" (= 409 (error-status (command bob {:cmd-id :start-session :id session-id}))))
-            (let [fork-id
-                  (track-session! bob (UUID/randomUUID))]
-              (check "a locked session can still be forked"
-                     (:ok (command bob {:cmd-id :fork-session :id fork-id :attrs {:source-id session-id :team-id "demo"}})))
-              (command bob {:cmd-id :delete-session :id fork-id}))
-            (command bob {:cmd-id :delete-session :id session-id})))
-        (finally
-          (command bob {:cmd-id :delete-my-credential :attrs {:credential-id "BITBUCKET_TOKEN"}}))))))
+            run
+            (wait-for-run bob (start-run bob "demo" "whoami-workspace" {:title "e2e personal credential"}))]
+        (skills-and-tool-servers bob (wait-for-run bob with-skill))
+        (when (check "a workspace using the person's own credential launches" (= :completed (:status run)) (or (:error run) (:status run)))
+          (fork-and-lock people (:session-id run))
+          (delete-session! bob (:session-id run))))
+      (finally
+        (delete-credential bob :user "WHOAMI_TOKEN")))))
 
 (defn usage-and-metrics
   [{:keys [alice bob oscar]}]
@@ -877,7 +908,7 @@
            (and (>= (count statuses) 30) (empty? reached))
            (if (seq reached) reached statuses))))
 
-(defn- telemetry-key
+(defn telemetry-key
   [session-id]
   (second (re-find #"const KEY = \"([^\"]+)\""
                    (in-sandbox session-id "cat /etc/opencode/opencode/plugins/platform-monitor.js"))))
@@ -971,10 +1002,6 @@
          (= 401 (:status (send! (http-client) "GET" (str base-url "/api/sessions/" session-id "/audit/export") {}))))
   (check "people outside the team can't verify the audit trail"
          (= 404 (error-status (query carol {:query-id :verify-audit :session-id session-id})))))
-
-(defn- session-of
-  [person session-id]
-  (query person {:query-id :get-session :session-id session-id}))
 
 (defn- session-status
   [person session-id]
@@ -1140,18 +1167,18 @@
         valid
         (set (map :id (filter :valid (:definitions team))))]
     (check "a team lists its agents, harnesses and workflows"
-           (every? valid ["engineer" "sandboxed" "workspace" "requirements" "implement-change" "review-branch"])
+           (every? valid ["engineer" "sandboxed" "whoami-tools" "workspace" "whoami-workspace" "requirements" "implement-change" "review-branch"])
            valid))
   (let [harnesses
         (into {} (map (juxt (juxt :team-id :id) identity)) (result bob {:query-id :list-harnesses}))
 
         tools
-        (get harnesses ["demo" "bitbucket-tools"])]
+        (get harnesses ["demo" "whoami-tools"])]
     (check "harnesses say what the sandbox may do"
            (= ["claude-sonnet-5.5" "gemini-3.5-flash"] (:models (get harnesses ["demo" "sandboxed"])))
            (get harnesses ["demo" "sandboxed"]))
     (check "a harness is ready when its credentials are available"
-           (and (true? (:ready tools)) (= ["BITBUCKET_TOKEN"] (mapv :id (:credentials tools))))
+           (and (true? (:ready tools)) (= ["WHOAMI_ACCOUNT" "WHOAMI_TOKEN"] (mapv :id (:credentials tools))))
            tools))
   (check "people outside a team don't see its harnesses"
          (not-any? #(= "demo" (:team-id %)) (result carol {:query-id :list-harnesses})))
@@ -1165,17 +1192,9 @@
   (check "people outside a team don't see its runs"
          (not-any? #(= "demo" (:team-id %)) (result carol {:query-id :list-runs}))))
 
-(defn- credential-state
-  [person credential-id]
-  (first (filter #(= credential-id (:id %)) (:credentials (result person {:query-id :get-my-credentials})))))
-
 (defn- admin-credential
   [person credential-id]
   (first (filter #(= credential-id (:id %)) (result person {:query-id :list-admin-credentials}))))
-
-(defn- put-credential
-  [person scope credential-id body]
-  (outcome (request person "PUT" (str (if (= :tenant scope) "/api/admin/credentials/" "/api/credentials/") credential-id) body)))
 
 (defn- tenant-value
   [row]
@@ -1200,7 +1219,7 @@
         (put-credential erin :user "JIRA_TOKEN" {:secret "e2e-personal-secret" :username "erin@example.com"})
 
         state
-        (credential-state erin "JIRA_TOKEN")]
+        (my-credential erin "JIRA_TOKEN")]
     (check "a personal credential without a check is saved" (:ok saved) saved)
     (check "it shows as the person's own with a hint, never the value"
            (and (= :own (keyword (:state state))) (seq (str (:hint state)))
@@ -1209,13 +1228,13 @@
     (check "once set, it is no longer offered at login" (empty? (:pending (result erin {:query-id :get-my-credentials})))))
   (check "a value can be replaced"
          (and (:ok (put-credential erin :user "JIRA_TOKEN" {:secret "e2e-replaced-secret" :username "erin@example.com"}))
-              (= :own (keyword (:state (credential-state erin "JIRA_TOKEN"))))))
+              (= :own (keyword (:state (my-credential erin "JIRA_TOKEN"))))))
   (check "basic credentials need a username"
          (= 422 (error-status (put-credential erin :user "JIRA_TOKEN" {:secret "x"}))))
   (check "the person can remove their value"
          (and (:ok (command erin {:cmd-id :delete-my-credential :attrs {:credential-id "JIRA_TOKEN"}}))
-              (= :missing (keyword (:state (credential-state erin "JIRA_TOKEN")))))
-         (credential-state erin "JIRA_TOKEN"))
+              (= :missing (keyword (:state (my-credential erin "JIRA_TOKEN")))))
+         (my-credential erin "JIRA_TOKEN"))
   (check "people can't set credentials the platform doesn't declare"
          (= 404 (error-status (put-credential erin :user "COPILOT_TOKEN" {:secret "x"}))))
   (when-let [platform-only
@@ -1225,31 +1244,20 @@
            (= 403 (error-status (put-credential erin :user (:id platform-only) {:secret "x" :username "x"})))))
   (check "tenant admins can't set a personal-only credential for everyone"
          (= 422 (error-status (put-credential alice :tenant "JIRA_TOKEN" {:secret "x" :username "y"}))))
-  (let [response
-        (put-credential alice :tenant "BITBUCKET_TOKEN" {:secret "definitely-not-a-valid-token"})]
-    (check "invalid tenant values are rejected before saving"
-           (and (= 422 (error-status response)) (string/includes? (error-message response) "Not saved"))
-           response))
   (check "non-admins can't clear tenant values"
-         (= 403 (error-status (command erin {:cmd-id :delete-tenant-credential :attrs {:credential-id "BITBUCKET_TOKEN"}}))))
-  (when (.isFile token-file)
-    (let [saved
-          (put-credential alice :tenant "BITBUCKET_TOKEN" {:secret (string/trim (slurp token-file))})
+         (= 403 (error-status (delete-credential erin :tenant "WHOAMI_TOKEN"))))
+  (let [saved
+        (put-credential alice :tenant "WHOAMI_TOKEN" {:secret "whoami-tenant-acme"})
 
-          row
-          (admin-credential alice "BITBUCKET_TOKEN")]
-      (check "tenant admins set a tenant value once it passes its check"
-             (and (:ok saved) (= :admin (tenant-value row)) (seq (str (:hint row))))
-             (or (:error saved) row))
-      (check "clearing it falls back to the secret file"
-             (and (:ok (command alice {:cmd-id :delete-tenant-credential :attrs {:credential-id "BITBUCKET_TOKEN"}}))
-                  (= :file (tenant-value (admin-credential alice "BITBUCKET_TOKEN"))))
-             (admin-credential alice "BITBUCKET_TOKEN")))))
-
-(defn- stop-session!
-  [person session-id]
-  (when session-id
-    (command person {:cmd-id :stop-session :id session-id})))
+        row
+        (admin-credential alice "WHOAMI_TOKEN")]
+    (check "the admin list says a tenant admin set the tenant's value, with a hint"
+           (and (:ok saved) (= :admin (tenant-value row)) (seq (str (:hint row))))
+           (or (:error saved) row))
+    (check "clearing it falls back to the operator's secret"
+           (and (:ok (delete-credential alice :tenant "WHOAMI_TOKEN"))
+                (= :file (tenant-value (admin-credential alice "WHOAMI_TOKEN"))))
+           (admin-credential alice "WHOAMI_TOKEN"))))
 
 (defn- running-in
   [person team-id]
@@ -1263,11 +1271,6 @@
   (doseq [session (running-in admin team-id)]
     (stop-session! admin (:id session)))
   (wait-until 120000 #(empty? (running-in admin team-id))))
-
-(defn- delete-session!
-  [person session-id]
-  (when session-id
-    (command person {:cmd-id :delete-session :id session-id})))
 
 (defn- team-roles
   [person query-id]
@@ -1298,14 +1301,6 @@
                     ["team" {:query-id :get-team :team-id team-id}]
                     ["team credentials" {:query-id :list-team-credentials :team-id team-id}]]]
     (check (str label " can't read its " what " by id") (#{403 404} (error-status (query person q))))))
-
-(defn- credential-state-in
-  "How a credential resolves for person in one of their teams: :own, :team,
-   :tenant or :missing."
-  [person credential-id team-id]
-  (let [credential
-        (some #(when (= credential-id (:id %)) %) (:credentials (result person {:query-id :get-my-credentials})))]
-    (some #(when (= team-id (:team-id %)) (keyword (:state %))) (:teams credential))))
 
 (defn several-teams-and-sharing
   "People in several teams (bob: demo and payments; dave: admin of payments,
@@ -1388,7 +1383,7 @@
         (check "the fork is not visible to the source's owner"
                (not (sees-session? bob fork-id)))
         (let [saved
-              (outcome (request alice "PUT" "/api/teams/demo/credentials/NEXUS_TOKEN" {:secret "e2e-demo-nexus"}))]
+              (put-credential alice [:team "demo"] "NEXUS_TOKEN" {:secret "e2e-demo-nexus"})]
           (try
             (check "a value of the source's team serves work in that team"
                    (and (:ok saved) (= :team (credential-state-in bob "NEXUS_TOKEN" "demo")))
@@ -1397,7 +1392,7 @@
                    (not= :team (credential-state-in erin "NEXUS_TOKEN" (:team-id fork)))
                    (credential-state-in erin "NEXUS_TOKEN" (:team-id fork)))
             (finally
-              (command alice {:cmd-id :delete-team-credential :attrs {:team-id "demo" :credential-id "NEXUS_TOKEN"}}))))
+              (delete-credential alice [:team "demo"] "NEXUS_TOKEN"))))
         (command erin {:cmd-id :delete-session :id fork-id}))
       (by-id-refused "another tenant" ivy {:run-id (:id demo-run) :session-id demo-session :team-id "demo"})
       (check "another tenant doesn't list a session shared with acme"
@@ -1468,15 +1463,21 @@
           (delete-session! erin session-id))
         (wait-until 120000 #(empty? (running-in alice "payments")))))))
 
-(defn- remove-required!
-  [person]
-  (doseq [credential-id ["JIRA_TOKEN" "PAGERDUTY_TOKEN"]]
-    (command person {:cmd-id :delete-my-credential :attrs {:credential-id credential-id}})))
+(def required-in-ops
+  "What working in ops requires of a person: PagerDuty by acme's tenant.json,
+   Jira and the whoami token by the team's team.json."
+  ["JIRA_TOKEN" "PAGERDUTY_TOKEN" "WHOAMI_TOKEN"])
 
-(defn- add-required!
+(defn remove-required!
+  [person]
+  (doseq [credential-id required-in-ops]
+    (delete-credential person :user credential-id)))
+
+(defn add-required!
   [{:keys [username] :as person}]
   [(put-credential person :user "JIRA_TOKEN" {:secret (str "e2e-" username "-jira") :username (str username "@example.com")})
-   (put-credential person :user "PAGERDUTY_TOKEN" {:secret (str "e2e-" username "-pagerduty")})])
+   (put-credential person :user "PAGERDUTY_TOKEN" {:secret (str "e2e-" username "-pagerduty")})
+   (put-credential person :user "WHOAMI_TOKEN" {:secret (str "whoami-user-" username)})])
 
 (defn- refused-for-credentials?
   [response & names]
@@ -1516,7 +1517,7 @@
             (command dave {:cmd-id :start-run :id (UUID/randomUUID)
                            :attrs {:team-id "ops" :workflow-id "workspace" :inputs {:title "e2e required"}}})]
         (check "the same holds for a member who administers another team"
-               (refused-for-credentials? refused "Jira" "PagerDuty")
+               (refused-for-credentials? refused "Jira" "PagerDuty" "Who am I")
                refused))
       (room-in-team! alice "payments")
       (let [[fork-id forked]
@@ -1532,8 +1533,8 @@
 
 (defn required-credentials
   "acme requires PagerDuty of everyone in ops (tenant.json) and ops requires
-   Jira of its members (its team.json): henry must add his own before work in
-   ops starts; team and tenant values don't count."
+   Jira and the whoami token of its members (its team.json): henry must add
+   his own before work in ops starts; team and tenant values don't count."
   [{:keys [alice bob henry] :as people}]
   (section "Required credentials")
   (remove-required! henry)
@@ -1545,32 +1546,35 @@
     (check "required credentials say who requires them"
            (and (= {:tenant true :teams []} (get-in states ["PAGERDUTY_TOKEN" :required-by]))
                 (= {:tenant false :teams ["ops"]} (get-in states ["JIRA_TOKEN" :required-by]))
-                (every? #(true? (get-in states [% :required])) ["JIRA_TOKEN" "PAGERDUTY_TOKEN"]))
-           (mapv #(select-keys (get states %) [:id :required :required-by]) ["JIRA_TOKEN" "PAGERDUTY_TOKEN"]))
+                (= {:tenant false :teams ["ops"]} (get-in states ["WHOAMI_TOKEN" :required-by]))
+                (every? #(true? (get-in states [% :required])) required-in-ops))
+           (mapv #(select-keys (get states %) [:id :required :required-by]) required-in-ops))
     (check "the missing ones lead what setup offers"
-           (and (= #{"JIRA_TOKEN" "PAGERDUTY_TOKEN"} (set (:missing-required mine)))
-                (= #{"JIRA_TOKEN" "PAGERDUTY_TOKEN"} (set (take 2 (:pending mine)))))
+           (and (= (set required-in-ops) (set (:missing-required mine)))
+                (= (set required-in-ops) (set (take 3 (:pending mine)))))
            (select-keys mine [:missing-required :pending])))
-  (command henry {:cmd-id :mark-credentials-seen :attrs {:credentials ["JIRA_TOKEN" "PAGERDUTY_TOKEN"]}})
+  (command henry {:cmd-id :mark-credentials-seen :attrs {:credentials required-in-ops}})
   (let [seen
         (result henry {:query-id :get-my-credentials})]
     (check "having seen them doesn't make them optional"
-           (and (= #{"JIRA_TOKEN" "PAGERDUTY_TOKEN"} (set (take 2 (:pending seen))))
-                (= #{"JIRA_TOKEN" "PAGERDUTY_TOKEN"} (set (:missing-required seen))))
+           (and (= (set required-in-ops) (set (take 3 (:pending seen))))
+                (= (set required-in-ops) (set (:missing-required seen))))
            (select-keys seen [:missing-required :pending])))
   (check "they are required only of the teams' people, not of a tenant admin outside ops"
-         (not-any? #{"JIRA_TOKEN" "PAGERDUTY_TOKEN"} (:missing-required (result alice {:query-id :get-my-credentials}))))
+         (not-any? (set required-in-ops) (:missing-required (result alice {:query-id :get-my-credentials}))))
   (let [refused
         (command henry {:cmd-id :start-run :id (UUID/randomUUID)
                         :attrs {:team-id "ops" :workflow-id "workspace" :inputs {:title "e2e required"}}})]
     (check "work in ops doesn't start without them, and says which and where"
            (and (= 422 (error-status refused))
-                (every? #(string/includes? (error-message refused) %) ["Team Operations" "Jira" "PagerDuty" "Accounts"]))
+                (every? #(string/includes? (error-message refused) %) ["Team Operations" "Jira" "PagerDuty" "Who am I" "Accounts"]))
            refused))
   (let [required
         (result henry {:query-id :list-required-credentials :team-id "ops"})]
     (check "the team's settings list what it requires and where that comes from"
-           (= {"JIRA_TOKEN" {:tenant false :team true} "PAGERDUTY_TOKEN" {:tenant true :team false}}
+           (= {"JIRA_TOKEN" {:tenant false :team true}
+               "PAGERDUTY_TOKEN" {:tenant true :team false}
+               "WHOAMI_TOKEN" {:tenant false :team true}}
               (into {} (map (juxt :id :required-by)) required))
            required))
   (check "people outside the team don't read its requirements"
@@ -1689,12 +1693,12 @@
   (section "Administration actions")
   (check "admins can ask the reaper to stop idle sessions" (:ok (command alice {:cmd-id :stop-idle-sessions})))
   (check "non-admins can't" (= 403 (error-status (command bob {:cmd-id :stop-idle-sessions}))))
-  (let [bitbucket
-        (first (filter #(= "bitbucket" (:id %)) (result alice {:query-id :list-mcp-servers})))]
+  (let [whoami
+        (first (filter #(= "whoami" (:id %)) (result alice {:query-id :list-mcp-servers})))]
     (check "admins see MCP servers: reachable, credential set, used by which harnesses"
-           (and (true? (:reachable bitbucket)) (true? (:credential-ready bitbucket))
-                (some #(string/includes? % "bitbucket-tools") (:harnesses bitbucket)))
-           bitbucket))
+           (and (true? (:reachable whoami)) (true? (:credential-ready whoami))
+                (some #(string/includes? % "whoami-tools") (:harnesses whoami)))
+           whoami))
   (check "admins see the scheduled workflows"
          (some #(string/includes? (str (:id %)) "scheduled-workspace") (result alice {:query-id :list-schedules})))
   (doseq [[label q] [["MCP servers" {:query-id :list-mcp-servers}]
@@ -1751,9 +1755,11 @@
           (result gina {:query-id :get-admin-overview})]
       (check "a tenant admin's overview counts only their tenant" (= 2 (:teams overview)) overview))
     (check "a tenant admin sees only their tenant's credentials"
-           (not-any? #(#{"BITBUCKET_TOKEN" "JIRA_TOKEN"} (:id %)) (result gina {:query-id :list-admin-credentials})))
+           (= #{"WHOAMI_TOKEN" "WHOAMI_KEY"}
+              (set (map :id (filter :declared (result gina {:query-id :list-admin-credentials})))))
+           (map :id (result gina {:query-id :list-admin-credentials})))
     (check "a tenant admin sees only their tenant's MCP servers"
-           (not-any? #(= "bitbucket" (:id %)) (result gina {:query-id :list-mcp-servers})))
+           (= #{"whoami" "whoami-key"} (set (map :id (result gina {:query-id :list-mcp-servers})))))
     (check "a tenant admin sees only their tenant's schedules"
            (not-any? acme-team? (result gina {:query-id :list-schedules})))
     (check "a tenant admin sees only their tenant's usage"
@@ -1867,15 +1873,11 @@
   [person team-id credential-id]
   (first (filter #(= credential-id (:id %)) (result person {:query-id :list-team-credentials :team-id team-id}))))
 
-(defn- put-team-credential
-  [person team-id credential-id body]
-  (outcome (request person "PUT" (str "/api/teams/" team-id "/credentials/" credential-id) body)))
-
 (defn team-credentials
   [{:keys [alice bob dave]}]
   (section "Team credentials")
   (check "team admins see the credentials their team may provide"
-         (some? (team-credential alice "demo" "BITBUCKET_TOKEN")))
+         (some? (team-credential alice "demo" "WHOAMI_TOKEN")))
   (let [listed
         (result bob {:query-id :list-team-credentials :team-id "demo"})]
     (check "team members see which team credentials are set, without hints"
@@ -1885,30 +1887,27 @@
   (check "people outside the team can't list its credentials"
          (= 403 (error-status (query dave {:query-id :list-team-credentials :team-id "demo"}))))
   (check "admins of another team can't set them"
-         (= 403 (error-status (put-team-credential dave "demo" "BITBUCKET_TOKEN" {:secret "x"}))))
+         (= 403 (error-status (put-credential dave [:team "demo"] "WHOAMI_TOKEN" {:secret "whoami-team-demo"}))))
   (check "credentials a team may not provide are refused"
-         (#{403 422} (error-status (put-team-credential alice "demo" "JIRA_TOKEN" {:secret "x" :username "y"}))))
-  (let [response
-        (put-team-credential alice "demo" "BITBUCKET_TOKEN" {:secret "definitely-not-a-valid-token"})]
-    (check "invalid team values are rejected before saving"
-           (and (= 422 (error-status response)) (string/includes? (error-message response) "Not saved"))
-           response))
-  (when (.isFile token-file)
-    (let [token
-          (string/trim (slurp token-file))
+         (#{403 422} (error-status (put-credential alice [:team "demo"] "JIRA_TOKEN" {:secret "x" :username "y"}))))
+  (let [token
+        "whoami-team-demo"
 
-          saved
-          (put-team-credential alice "demo" "BITBUCKET_TOKEN" {:secret token})
+        saved
+        (put-credential alice [:team "demo"] "WHOAMI_TOKEN" {:secret token})
 
-          row
-          (team-credential alice "demo" "BITBUCKET_TOKEN")]
-      (check "team admins set a team value once it passes its check"
-             (and (:ok saved) (seq (str (get-in row [:value :hint]))))
-             (or (:error saved) row))
-      (check "team values are never returned by the API"
-             (not (string/includes? (pr-str (result alice {:query-id :list-team-credentials :team-id "demo"})) token)))
-      (check "team admins can clear the team value"
-             (:ok (command alice {:cmd-id :delete-team-credential :attrs {:team-id "demo" :credential-id "BITBUCKET_TOKEN"}}))))))
+        row
+        (team-credential alice "demo" "WHOAMI_TOKEN")]
+    (check "team admins see the team's value as a hint"
+           (and (:ok saved) (seq (str (get-in row [:value :hint]))))
+           (or (:error saved) row))
+    (check "members see that it is set"
+           (true? (:set (team-credential bob "demo" "WHOAMI_TOKEN")))
+           (team-credential bob "demo" "WHOAMI_TOKEN"))
+    (check "team values are never returned by the API"
+           (not (string/includes? (pr-str (result alice {:query-id :list-team-credentials :team-id "demo"})) token)))
+    (check "team admins can clear the team value"
+           (:ok (delete-credential alice [:team "demo"] "WHOAMI_TOKEN")))))
 
 (defn team-sessions
   [{:keys [alice bob carol]}]
@@ -2091,7 +2090,7 @@
   (doseq [team-id ["lab" "research"]]
     (room-in-team! gina team-id)))
 
-(defn- quietly
+(defn quietly
   [f]
   (try
     (f)
@@ -2115,14 +2114,14 @@
 (defn- restore-credentials!
   "Removes the credential values the pass set for people, the demo team and the tenant."
   [{:keys [alice bob erin henry]}]
-  (doseq [[person cmd] [[bob {:cmd-id :delete-my-credential :attrs {:credential-id "BITBUCKET_TOKEN"}}]
-                        [erin {:cmd-id :delete-my-credential :attrs {:credential-id "JIRA_TOKEN"}}]
-                        [henry {:cmd-id :delete-my-credential :attrs {:credential-id "JIRA_TOKEN"}}]
-                        [henry {:cmd-id :delete-my-credential :attrs {:credential-id "PAGERDUTY_TOKEN"}}]
-                        [alice {:cmd-id :delete-team-credential :attrs {:team-id "demo" :credential-id "BITBUCKET_TOKEN"}}]
-                        [alice {:cmd-id :delete-tenant-credential :attrs {:credential-id "BITBUCKET_TOKEN"}}]]
+  (doseq [[person scope credential-id] (concat [[bob :user "WHOAMI_TOKEN"]
+                                                [erin :user "JIRA_TOKEN"]
+                                                [alice [:team "demo"] "WHOAMI_TOKEN"]
+                                                [alice :tenant "WHOAMI_TOKEN"]]
+                                               (for [credential-id required-in-ops]
+                                                 [henry :user credential-id]))
           :when person]
-    (quietly #(command person cmd))))
+    (quietly #(delete-credential person scope credential-id))))
 
 (defn summary!
   "Prints how the checks went; the exit code."
@@ -2138,7 +2137,7 @@
     (if (seq failed) 1 0)))
 
 (def usernames
-  ["alice" "bob" "carol" "dave" "erin" "henry" "gina" "hank" "ivy" "oscar"])
+  ["alice" "bob" "carol" "dave" "erin" "frank" "henry" "gina" "hank" "ivy" "oscar"])
 
 (defn- pass
   [{:keys [alice bob] :as people}]
@@ -2182,7 +2181,8 @@
         (in "Conversations and audit trail" conversations-and-audit workspace-session)
         (in "Session management" session-management workspace-session))
       (in "Results" result-runs [["analysis" analysis :document] ["implement" implement :implementation] ["review" review :review]]))
-    (in "Credentials, MCP gateway, fork and lock" credentials-and-tools)
+    (in "Personal credentials, skills, fork and lock" credentials-and-sessions)
+    (in "Credential hierarchy" (requiring-resolve 'manager-svc.e2e-credentials/credential-hierarchy))
     (in "Credential management" credential-management)
     (in "Team credentials" team-credentials)
     (in "Team-scoped sessions" team-sessions)

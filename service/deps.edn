@@ -17,6 +17,9 @@
            :e2e {:extra-paths ["test-e2e"]
                  :jvm-opts ["-Dclojure.tools.logging.factory=lambda.logging-local/slf4j-local-factory"]
                  :main-opts ["-m" "manager-svc.e2e"]}
+           :e2e-credentials {:extra-paths ["test-e2e"]
+                             :jvm-opts ["-Dclojure.tools.logging.factory=lambda.logging-local/slf4j-local-factory"]
+                             :main-opts ["-m" "manager-svc.e2e-credentials"]}
            :e2e-ci {:extra-paths ["test-e2e"]
                     :jvm-opts ["-Dclojure.tools.logging.factory=lambda.logging-local/slf4j-local-factory"]
                     :main-opts ["-m" "manager-svc.e2e-ci"]}

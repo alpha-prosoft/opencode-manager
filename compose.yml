@@ -85,6 +85,11 @@ services:
       # Login mode only: the claims each test username logs in with.
       MANAGER_DEV_USERS_FILE: /config/dev-users.json
       MANAGER_REAP_INTERVAL_SECONDS: ${MANAGER_REAP_INTERVAL_SECONDS:-300}
+      # The operator's values of the example tenants' WHOAMI_TOKEN and WHOAMI_ACCOUNT credentials: made up,
+      # accepted only by mcp-whoami. Tenant admins, teams and people can still set their own.
+      PLATFORM_SECRET_WHOAMI_TOKEN: whoami-operator
+      PLATFORM_SECRET_WHOAMI_ACCOUNT: whoami-operator-secret
+      PLATFORM_SECRET_WHOAMI_ACCOUNT_USERNAME: whoami-operator
     env_file:
       - path: ./local/manager.env
         required: false
@@ -119,6 +124,15 @@ services:
     read_only: true
     environment:
       JENKINS_URL: ${JENKINS_URL:-}
+    networks: [opencode-net]
+    restart: unless-stopped
+
+  # A mock (images/mcp-whoami): says back which credential the gateway called it with. On opencode-net only,
+  # like the other MCP servers: the manager reaches it, sandboxes do not.
+  mcp-whoami:
+    image: opencode-platform/mcp-whoami:dev
+    build: ./images/mcp-whoami
+    read_only: true
     networks: [opencode-net]
     restart: unless-stopped
 

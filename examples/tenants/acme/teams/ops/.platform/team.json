@@ -9,8 +9,11 @@
       "id": "copilot"
     }
   ],
-  "mcp_servers": [],
+  "mcp_servers": [
+    "whoami"
+  ],
   "required_credentials": [
-    "JIRA_TOKEN"
+    "JIRA_TOKEN",
+    "WHOAMI_TOKEN"
   ]
 }

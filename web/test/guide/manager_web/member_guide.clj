@@ -811,7 +811,7 @@
   (h/wait-visible harnesses-els/grid)
   (s/settle)
   (let [[ready-team ready-harness]
-        (:ready-harness h/fixture)]
+        ["demo" "bitbucket-tools"]]
     (figure! "m31-harnesses"
              (str "A harness on the **Harnesses** page: network access, model, skills, the tool server it may "
                   "call and the account that is used. The chip reads **Ready for you in …** when every "

@@ -243,43 +243,39 @@
         (h/delete-sessions! (:member h/fixture) [@fork-id @session-id])))))
 
 (deftest personal-credential-session-it
-  (let [secret
-        (h/read-secret checked-credential)]
-    (with-ui [_page]
-      (try
-        (step "A member adds their own token and starts a workspace whose tools use it"
-              (fn []
-                (is
-                 (some? secret))
-                (h/login (:member h/fixture))
-                (h/goto "/accounts")
-                (h/click (accounts-els/edit checked-credential))
-                (h/wait-visible component-els/credential-dialog)
-                (h/fill component-els/credential-secret (str secret))
-                (h/click component-els/credential-submit)
-                (h/wait-hidden component-els/credential-dialog 60000)
-                (h/goto (str "/teams/" (:team h/fixture)))
-                (h/start-workflow (:team h/fixture) (:workflow h/fixture) {:title "Personal credential UI test"})
-                (h/wait-visible run-els/session-link h/session-timeout-ms)
-                (h/click run-els/session-link)
-                (h/wait-visible els/page)
-                (reset! personal-session-id (h/path-id))))
+  (with-ui [_page]
+    (try
+      (step "A member adds their own token and starts a workspace whose tools use it"
+            (fn []
+              (h/login (:member h/fixture))
+              (h/goto "/accounts")
+              (h/click (accounts-els/edit checked-credential))
+              (h/wait-visible component-els/credential-dialog)
+              (h/fill component-els/credential-secret (:own-value h/fixture))
+              (h/click component-els/credential-submit)
+              (h/wait-hidden component-els/credential-dialog 60000)
+              (h/goto (str "/teams/" (:team h/fixture)))
+              (h/start-workflow (:team h/fixture) (:workflow h/fixture) {:title "Personal credential UI test"})
+              (h/wait-visible run-els/session-link h/session-timeout-ms)
+              (h/click run-els/session-link)
+              (h/wait-visible els/page)
+              (reset! personal-session-id (h/path-id))))
 
-        (step "A team admin sees it, learns it works with the owner's credentials and may only fork it"
-              (fn []
-                (h/logout)
-                (h/login (:tenant-admin h/fixture))
-                (goto-session @personal-session-id)
-                (is
-                 (= "personal"
-                    (h/attribute els/blocked "data-reason")))
-                (is
-                 (false?
-                  (h/visible? (component-els/session-action :open @personal-session-id))))
-                (is
-                 (true?
-                  (h/visible? els/fork-to-continue)))))
-        (finally
-          (h/clean-up! (:member h/fixture)
-                       [[:delete-session @personal-session-id]
-                        [:delete-my-credential nil (str "{\"credential-id\":\"" checked-credential "\"}")]]))))))
+      (step "A team admin sees it, learns it works with the owner's credentials and may only fork it"
+            (fn []
+              (h/logout)
+              (h/login (:tenant-admin h/fixture))
+              (goto-session @personal-session-id)
+              (is
+               (= "personal"
+                  (h/attribute els/blocked "data-reason")))
+              (is
+               (false?
+                (h/visible? (component-els/session-action :open @personal-session-id))))
+              (is
+               (true?
+                (h/visible? els/fork-to-continue)))))
+      (finally
+        (h/clean-up! (:member h/fixture)
+                     [[:delete-session @personal-session-id]
+                      [:delete-my-credential nil (str "{\"credential-id\":\"" checked-credential "\"}")]])))))

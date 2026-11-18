@@ -8,5 +8,8 @@
     {
       "id": "copilot"
     }
+  ],
+  "mcp_servers": [
+    "whoami"
   ]
 }

@@ -23,6 +23,7 @@ cd web && clojure -M:shadow-cljs compile test   # UI unit tests (node, jsdom whe
 cd web && clojure -M:it                     # Playwright tests against MANAGER_URL (default http://localhost:18000)
 cd service && MANAGER_URL=http://localhost:8080 clojure -M:e2e   # end-to-end against the compose stack (real LLM)
 cd service && MANAGER_URL=http://localhost:8080 clojure -M:e2e-ci   # only the Gerrit/Jenkins flows (compose.ci.yml)
+cd service && MANAGER_URL=http://localhost:8080 clojure -M:e2e-credentials   # only the credential hierarchy (no LLM, about 90 s)
 ```
 
 The UI is served with a strict Content-Security-Policy (`manager-svc.edge.static/default-csp`). A shadow-cljs
@@ -512,7 +513,18 @@ message.
   running compose stack through the API, Traefik and `docker exec` probes. `e2e_ci.clj` (alias `:e2e-ci`, and
   part of `:e2e` when Gerrit and Jenkins answer) covers the Gerrit review and Jenkins build flows against
   `compose.yml` + `compose.ci.yml`. `e2e_webhooks.clj` (part of `:e2e`) calls `/hooks/...` with every auth type and
-  follows a webhook-started analysis run.
+  follows a webhook-started analysis run. `e2e_credentials.clj` (alias `:e2e-credentials`, and part of `:e2e`) is
+  the specification of the credential hierarchy: it starts a whoami workspace in every team of both tenants (a
+  person's, a team session, one a webhook starts; nobody is prompted, so it costs no tokens), stores values a
+  level at a time and calls a tool from inside each sandbox through the MCP gateway to see whose value arrives.
+  Its tables say who gets which value (`resolution`), who may set what (`who-may-set`) and what the gateway
+  refuses (`refusals`); add a rule as a row there. It also covers kinds and headers, forks, the check on save, the
+  audit trail, required credentials, the gateway key and a server that is down.
+- The mock MCP server `whoami` (`images/mcp-whoami`, in compose.yml and both example tenants) answers with the
+  credential it was called with and accepts only made-up values starting with `whoami-` (`whoami-tenant-acme`,
+  `whoami-team-demo`, `whoami-user-bob`; compose.yml gives every tenant the operator's `whoami-operator`). Tests
+  that need a checked credential or an MCP tool use it: no test needs a real token, a file in `local/secrets`
+  other than the LLM's, or a service outside the compose stack.
 - UI unit tests: `web/test/unit/manager_web/**/*_test.cljs`, run on node by the shadow-cljs `:test` build
   (`clojure -M:shadow-cljs compile test`). Test event functions and subs as plain functions; where a DOM is
   needed (sanitizing Markdown) use `jsdom` (`(.-window (JSDOM. ""))`).

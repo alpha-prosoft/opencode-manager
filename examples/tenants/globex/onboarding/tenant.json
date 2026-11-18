@@ -26,8 +26,75 @@
       }
     }
   ],
-  "credentials": [],
-  "mcp_servers": [],
+  "credentials": [
+    {
+      "id": "WHOAMI_TOKEN",
+      "name": "Who am I",
+      "description": "A made-up token for the whoami tools, which show which account the platform calls tools as.",
+      "kind": "token",
+      "hosts": [
+        "mcp-whoami"
+      ],
+      "provided_by": [
+        "tenant",
+        "team",
+        "user"
+      ],
+      "help": "Any value that starts with whoami- is accepted, for example whoami-user-<your name>. Without your own, your team's or the tenant's is used; the local stack gives the operator's whoami-operator to every tenant.",
+      "test": {
+        "url": "http://mcp-whoami:8000/check"
+      }
+    },
+    {
+      "id": "WHOAMI_KEY",
+      "name": "Who am I API key",
+      "description": "Your own made-up API key for the lab team's whoami tools, sent in the X-Api-Key header. Each person uses their own.",
+      "kind": "token",
+      "hosts": [
+        "mcp-whoami"
+      ],
+      "provided_by": [
+        "user"
+      ],
+      "teams": [
+        "lab"
+      ],
+      "help": "Any value that starts with whoami-, for example whoami-key-<your name>.",
+      "test": {
+        "mcp_tool": "whoami"
+      }
+    }
+  ],
+  "mcp_servers": [
+    {
+      "id": "whoami",
+      "name": "Who am I",
+      "description": "Shows which account the platform calls tools as: yours, your team's or the tenant's.",
+      "url": "http://mcp-whoami:8000/",
+      "credential": "WHOAMI_TOKEN",
+      "tools": [
+        "whoami",
+        "echo"
+      ]
+    },
+    {
+      "id": "whoami-key",
+      "name": "Who am I (API key)",
+      "description": "The same tools, called with each person's own API key in a custom header.",
+      "url": "http://mcp-whoami:8000/",
+      "credential": "WHOAMI_KEY",
+      "auth": {
+        "header": "X-Api-Key",
+        "scheme": "raw"
+      },
+      "tools": [
+        "whoami"
+      ],
+      "teams": [
+        "lab"
+      ]
+    }
+  ],
   "teams": [
     {
       "id": "research",

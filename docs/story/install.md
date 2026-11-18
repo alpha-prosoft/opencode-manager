@@ -71,6 +71,7 @@ TENANTS='[{"name":"acme","onboarding":"file:///repos/acme-onboarding"}]'
 | `postgres` | The manager's database. All platform state is stored here. |
 | `traefik` | The HTTP router in front of the manager and of every session. |
 | `mcp-bitbucket`, `mcp-jenkins` | Two small read-only MCP servers used by the examples. They hold no credentials. |
+| `mcp-whoami` | A mock MCP server of the examples: its `whoami` tool shows which account the platform calls tools as. It accepts only made-up values starting with `whoami-` and calls nothing. |
 | one container per running session | Created by the manager when a session starts. |
 
 | URL | What |

@@ -14,6 +14,8 @@
     }
   ],
   "mcp_servers": [
-    "jira"
+    "jira",
+    "whoami",
+    "whoami-account"
   ]
 }

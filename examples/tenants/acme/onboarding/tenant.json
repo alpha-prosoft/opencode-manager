@@ -126,6 +126,45 @@
         "ops"
       ],
       "help": "Create a user API key in PagerDuty \u2192 My Profile \u2192 User Settings \u2192 API Access."
+    },
+    {
+      "id": "WHOAMI_TOKEN",
+      "name": "Who am I",
+      "description": "A made-up token for the whoami tools, which show which account the platform calls tools as.",
+      "kind": "token",
+      "hosts": [
+        "mcp-whoami"
+      ],
+      "provided_by": [
+        "tenant",
+        "team",
+        "user"
+      ],
+      "help": "Any value that starts with whoami- is accepted, for example whoami-user-<your name>. Without your own, your team's or the tenant's is used; the local stack gives the operator's whoami-operator to every tenant.",
+      "test": {
+        "url": "http://mcp-whoami:8000/check"
+      }
+    },
+    {
+      "id": "WHOAMI_ACCOUNT",
+      "name": "Who am I account",
+      "description": "A made-up username and secret for the whoami tools, shared by a team or the whole tenant. Only tenant and team admins set it.",
+      "kind": "basic",
+      "hosts": [
+        "mcp-whoami"
+      ],
+      "provided_by": [
+        "tenant",
+        "team"
+      ],
+      "teams": [
+        "demo",
+        "payments"
+      ],
+      "help": "Username and secret both start with whoami-, for example whoami-team-<team> and whoami-<anything>. The local stack gives the operator's whoami-operator account to the tenant.",
+      "test": {
+        "url": "http://mcp-whoami:8000/check"
+      }
     }
   ],
   "mcp_servers": [
@@ -169,6 +208,34 @@
         "scheme": "basic"
       },
       "teams": [
+        "payments"
+      ]
+    },
+    {
+      "id": "whoami",
+      "name": "Who am I",
+      "description": "Shows which account the platform calls tools as: yours, your team's or the tenant's.",
+      "url": "http://mcp-whoami:8000/",
+      "credential": "WHOAMI_TOKEN",
+      "tools": [
+        "whoami",
+        "echo"
+      ]
+    },
+    {
+      "id": "whoami-account",
+      "name": "Who am I (shared account)",
+      "description": "The same tools, called with the username and secret of a team's or the tenant's shared account.",
+      "url": "http://mcp-whoami:8000/",
+      "credential": "WHOAMI_ACCOUNT",
+      "auth": {
+        "scheme": "basic"
+      },
+      "tools": [
+        "whoami"
+      ],
+      "teams": [
+        "demo",
         "payments"
       ]
     }

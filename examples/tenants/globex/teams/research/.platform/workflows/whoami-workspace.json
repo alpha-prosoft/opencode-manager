@@ -1,0 +1,7 @@
+{
+  "name": "Who am I workspace",
+  "description": "Interactive workspace with the whoami tools: ask the agent who it is to see which account its tool calls run as.",
+  "activity": "session",
+  "agent": "researcher",
+  "harness": "whoami-tools"
+}

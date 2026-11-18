@@ -107,7 +107,7 @@ What a person who lacks a required credential experiences:
 
 **Connect your accounts** lists required credentials first. **Team settings** and **Admin → Credentials** show which credentials are required and whether `tenant.json` or `team.json` requires them.
 
-In the example tenant, PagerDuty is required by the tenant of everyone in Operations, and Operations requires Jira of its members.
+In the example tenant, PagerDuty is required by the tenant of everyone in Operations, and Operations requires Jira and the *Who am I* token of its members.
 
 ## What people see
 

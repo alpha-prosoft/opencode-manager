@@ -19,6 +19,9 @@ PAUSE="${2:-1800}"
 OUT="${SOAK_OUT:-/tmp/manager-soak-$(date +%Y%m%d-%H%M%S)}"
 MANAGER="${SOAK_MANAGER:-opencode-manager-manager-1}"
 export MANAGER_URL="${MANAGER_URL:-http://localhost:8080}"
+# What the credential checks of the e2e suite make the manager log on purpose: a check on save while the mock
+# MCP server is stopped, and Gerrit refusing a made-up password.
+PROVOKED='Not saved\. Could not reach mcp-whoami|/a/changes/.* failed with HTTP 401'
 
 mkdir -p "$OUT"
 SUMMARY="$OUT/summary.tsv"
@@ -68,6 +71,7 @@ service_errors() {
   docker logs --since "$since" "$MANAGER" 2>&1 \
     | grep -E 'Exception|ERROR' \
     | grep -vE ':status 4[0-9][0-9]|^\s+at |\[\{:type |^\s*VALUES |^\s*Detail: ' \
+    | grep -vE "$PROVOKED" \
     | sed -E 's/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/<id>/g; s/^[0-9T:.,Z -]+//' \
     | cut -c1-200 | sort | uniq -c | sort -rn > "$file"
   local restarts

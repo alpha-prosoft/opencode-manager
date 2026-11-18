@@ -26,19 +26,21 @@
    the example onboarding repositories published by scripts/seed-local-repos.sh)
    and of its dev users file (MANAGER_DEV_USERS_FILE) in test login mode:
    tenant acme with tenant admin and demo team admin alice, member bob of team
-   demo with the valid workflows bitbucket-workspace, requirements (analysis)
+   demo with the valid workflows whoami-workspace, requirements (analysis)
    and workspace (session), the personal credential JIRA_TOKEN (kind basic,
-   provided by each user, no test request), BITBUCKET_TOKEN (checked against
-   its service, tenant value from a secret file), NEXUS_TOKEN (provided only by
-   tenant and team admins), the LLM connection copilot,
-   the MCP server bitbucket; tenant globex with tenant admin gina; operator
+   provided by each user, no test request), WHOAMI_TOKEN (checked by the mock
+   MCP server whoami of images/mcp-whoami, which accepts made-up values
+   starting with whoami-; the operator's value comes with compose.yml),
+   NEXUS_TOKEN (provided only by tenant and team admins), the LLM connection
+   copilot, the MCP servers whoami and, in acme only, bitbucket; tenant globex
+   with tenant admin gina and its own MCP server whoami-key; operator
    oscar; erin, who is not in demo and whose payments harness exporter
    needs a credential nobody added; carol, a member of payments only; hank, a
    member of globex. People in two teams: bob (member of demo and payments), dave
    (admin of payments, member of ops) and ivy of globex (member of research, admin
    of lab); henry is only in ops. acme requires PAGERDUTY_TOKEN (tenant.json,
-   teams ops) and ops requires JIRA_TOKEN (its team.json) of each person in ops,
-   so dave and henry must add their own. An operator registers tenants from the onboarding
+   teams ops) and ops requires JIRA_TOKEN and WHOAMI_TOKEN (its team.json) of each
+   person in ops, so dave and henry must add their own. An operator registers tenants from the onboarding
    repository MANAGER_IT_TENANT_ONBOARDING (default the compose path of
    globex's)."
   {:tenant-admin "alice"
@@ -59,11 +61,14 @@
    :other-team "research"
    :register-onboarding (or (System/getenv "MANAGER_IT_TENANT_ONBOARDING") "file:///repos/globex-onboarding")
    :team "demo"
-   :workflow "bitbucket-workspace"
+   :workflow "whoami-workspace"
    :analysis-workflow "requirements"
    :session-workflow "workspace"
    :personal-credential "JIRA_TOKEN"
-   :checked-credential "BITBUCKET_TOKEN"
+   :checked-credential "WHOAMI_TOKEN"
+   :own-value "whoami-user-bob"
+   :team-value "whoami-team-demo"
+   :tenant-value "whoami-tenant-acme"
    :admin-only-credential "NEXUS_TOKEN"
    :required-member "henry"
    :required-team "ops"
@@ -71,8 +76,10 @@
    :tenant-required-credential "PAGERDUTY_TOKEN"
    :team-required-credential "JIRA_TOKEN"
    :connection "copilot"
-   :mcp-server "bitbucket"
-   :ready-harness ["demo" "bitbucket-tools"]
+   :mcp-server "whoami"
+   :tenant-only-mcp-server "bitbucket"
+   :other-tenant-mcp-server "whoami-key"
+   :ready-harness ["demo" "whoami-tools"]
    :unready-harness ["payments" "exporter"]
    :activity "implement"})
 
@@ -82,13 +89,10 @@
 (def session-timeout-ms
   (* 5 60 1000))
 
-(defn read-secret
-  "A value from local/secrets, nil when the file is missing."
-  [secret-name]
-  (let [file
-        (java.io.File. (str "../local/secrets/" secret-name))]
-    (when (.isFile file)
-      (string/trim (slurp file)))))
+(def required-value
+  "What setup saves for a credential a team requires: the checked WHOAMI_TOKEN
+   takes values starting with whoami-, the unchecked ones anything."
+  "whoami-user-it")
 
 (def default-timeout-ms
   15000)
@@ -290,14 +294,14 @@
            (= "" (.inputValue (locator component-els/credential-secret))))))
 
 (defn add-required-in-setup
-  "Saves a placeholder value for each required step setup won't let the
-   person leave for later."
+  "Saves required-value for each required step setup won't let the person
+   leave for later."
   []
   (loop [steps 0]
     (when (and (< steps 10) (visible? setup-els/later) (not (enabled? setup-els/later)))
       (when (visible? component-els/credential-username)
         (fill component-els/credential-username "it-user@example.com"))
-      (fill component-els/credential-secret "it-required-value")
+      (fill component-els/credential-secret required-value)
       (click component-els/credential-submit)
       (wait-until "the step to be saved" default-timeout-ms 200 step-saved?)
       (recur (inc steps)))))

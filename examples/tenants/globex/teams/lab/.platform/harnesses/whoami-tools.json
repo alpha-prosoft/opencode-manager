@@ -1,0 +1,21 @@
+{
+  "description": "No internet. The whoami tools through the platform gateway, called with your own value, your team's or the tenant's.",
+  "image": "opencode-platform/opencode-dev:1.19.5",
+  "llm": {
+    "connection": "copilot",
+    "models": [
+      "claude-sonnet-5.5",
+      "gemini-3.5-flash"
+    ]
+  },
+  "network": "none",
+  "permissions": {
+    "bash": "allow",
+    "edit": "allow"
+  },
+  "mcp": [
+    "whoami",
+    "whoami-key"
+  ],
+  "idle_minutes": 15
+}

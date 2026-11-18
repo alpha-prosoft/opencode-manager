@@ -118,6 +118,23 @@ jobs:
           labels: ${{ steps.mcp-jenkins-meta.outputs.labels }}
           cache-from: type=gha,scope=mcp-jenkins
           cache-to: type=gha,mode=max,scope=mcp-jenkins
+      - id: mcp-whoami-meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE }}-mcp-whoami
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=sha
+      - uses: docker/build-push-action@v7
+        with:
+          context: images/mcp-whoami
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.mcp-whoami-meta.outputs.tags }}
+          labels: ${{ steps.mcp-whoami-meta.outputs.labels }}
+          cache-from: type=gha,scope=mcp-whoami
+          cache-to: type=gha,mode=max,scope=mcp-whoami
       - uses: actions/upload-artifact@v7
         if: github.event_name == 'pull_request'
         with:

@@ -12,7 +12,9 @@
   ],
   "mcp_servers": [
     "bitbucket",
-    "jenkins"
+    "jenkins",
+    "whoami",
+    "whoami-account"
   ],
   "projects": [
     {

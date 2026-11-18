@@ -88,7 +88,7 @@ A project is a source repository the team works on, with its CI job. Declaring i
 "required_credentials": ["JIRA_TOKEN"]
 ```
 
-Each listed credential must be one the tenant declares with `user` in `provided_by` and grants to your team. Every member must then add their **own** value: a team or tenant value doesn't count. Until they do, the platform holds them on the **Connect your accounts** page and refuses to start work in the team. Use this for tools that must act as the person, never for convenience. The example Operations team requires Jira this way.
+Each listed credential must be one the tenant declares with `user` in `provided_by` and grants to your team. Every member must then add their **own** value: a team or tenant value doesn't count. Until they do, the platform holds them on the **Connect your accounts** page and refuses to start work in the team. Use this for tools that must act as the person, never for convenience. The example Operations team requires Jira and the *Who am I* token this way.
 
 ## An agent
 

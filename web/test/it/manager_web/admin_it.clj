@@ -114,27 +114,21 @@
       (step "A valid tenant credential is saved and can be cleared again"
             (fn []
               (let [credential-id
-                    (:checked-credential h/fixture)
-
-                    secret
-                    (h/read-secret credential-id)]
+                    (:checked-credential h/fixture)]
+                (reset! tenant-value-set true)
+                (h/click (els/set-credential credential-id))
+                (h/wait-visible component-els/credential-dialog)
+                (h/fill component-els/credential-secret (:tenant-value h/fixture))
+                (h/click component-els/credential-submit)
+                (h/wait-hidden component-els/credential-dialog 60000)
+                (h/click (els/clear-credential credential-id))
+                (h/wait-visible component-els/confirm-dialog)
+                (h/click component-els/confirm-accept)
+                (h/wait-hidden (els/clear-credential credential-id))
+                (reset! tenant-value-set false)
                 (is
-                 (some? secret))
-                (when secret
-                  (reset! tenant-value-set true)
-                  (h/click (els/set-credential credential-id))
-                  (h/wait-visible component-els/credential-dialog)
-                  (h/fill component-els/credential-secret secret)
-                  (h/click component-els/credential-submit)
-                  (h/wait-hidden component-els/credential-dialog 60000)
-                  (h/click (els/clear-credential credential-id))
-                  (h/wait-visible component-els/confirm-dialog)
-                  (h/click component-els/confirm-accept)
-                  (h/wait-hidden (els/clear-credential credential-id))
-                  (reset! tenant-value-set false)
-                  (is
-                   (false?
-                    (h/visible? (els/clear-credential credential-id))))))))
+                 (false?
+                  (h/visible? (els/clear-credential credential-id)))))))
 
       (step "A team links to its page"
             (fn []
